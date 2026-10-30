@@ -25,7 +25,7 @@ def complete(contract, head="a" * 40, tree="b" * 40, target="aarch64-apple-darwi
 
     fixtures = []
     for layout in contract.LAYOUTS:
-        for profile in contract.INPUTS:
+        for profile in contract.OUTPUTS:
             rate = 44100 if "44100" in layout else 48000 if "48000" in layout else None
             fixtures.append({"id": f"{layout}:{contract.profile_id(profile)}", "graph": copy.deepcopy(graph),
                              "source_graph_sha256": "f" * 64, "verification": native(profile[0]),

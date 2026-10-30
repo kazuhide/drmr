@@ -69,7 +69,7 @@ def source_seeds(root, clip, runner, support):
             shutil.copytree(streams / audio, destination / "audio")
             playlist = destination / "master.m3u8"
             playlist.write_text('#EXTM3U\n#EXT-X-VERSION:6\n'
-                                '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="default-audio-group",NAME="Main",LANGUAGE="en",DEFAULT=NO,AUTOSELECT=YES,URI="audio/media.m3u8"\n'
+                                '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="default-audio-group",NAME="stream_1",LANGUAGE="en",DEFAULT=NO,AUTOSELECT=YES,URI="audio/media.m3u8"\n'
                                 '#EXT-X-STREAM-INF:BANDWIDTH=1000000,RESOLUTION=320x180,AUDIO="default-audio-group"\nvideo/media.m3u8\n',
                                 encoding="utf-8")
         else:

@@ -80,9 +80,9 @@ class ReleaseMatrix(unittest.TestCase):
                 self.validate(value)
 
     def test_unshared_selection_metadata_cannot_qualify(self):
-        for field, wrong in (("hls_audio_group", "audio"), ("hls_audio_autoselect", False)):
+        for field, wrong in (("group", "audio"), ("name", "Main"), ("autoselect", False)):
             value = roundtrip_reports.complete(CONTRACT)
-            value["fixture_metadata"][field] = wrong
+            value["fixture_metadata"]["layouts"]["video-aac44100"]["audio_rendition"][field] = wrong
             with self.subTest(field=field), self.assertRaises(CONTRACT.Failure):
                 self.validate(value)
 

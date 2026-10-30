@@ -213,8 +213,11 @@ attributes have no MP4 equivalent; this test does not claim to preserve them in
 MP4 files. Language labels use the documented semantic mapping, such as `en` to
 the MP4 code `eng`.
 The joint HLS source uses the shared mapping's `default-audio-group`, audio name
-`Main`, language `en`, `DEFAULT=NO` and `AUTOSELECT=YES`. These fixture values are
-recorded in the report. A round trip through DASH does not promise to restore
+`stream_1`, language `en`, `DEFAULT=NO` and `AUTOSELECT=YES`. This follows the
+common materializer's video-first, audio-second track order. Audio-only seeds
+use a media playlist without rendition names or selection attributes; the test
+does not invent those attributes. These per-layout fixture values are bound in
+the report and matrix identity. A round trip through DASH does not promise to restore
 arbitrary original HLS selection groups or player selection attributes; see
 [metadata preservation](media-processing.md#multiple-qualities-and-audio-declarations).
 

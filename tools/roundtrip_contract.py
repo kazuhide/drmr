@@ -22,15 +22,17 @@ OUTPUTS = tuple((container, protection) for container in ("mp4", "dash", "hls-fm
                 for protection in (("clear", "hls-aes128", "hls-sample-aes") if container == "hls-ts"
                                    else ("clear", "cenc", "cbcs", "hls-aes128") if container == "hls-fmp4"
                                    else ("clear", "cenc", "cbcs")))
-INPUTS = OUTPUTS
 CLIP_SHA256 = "a0ef6d20f2319c57af35d9c3165e46b669c67b951268cf882dbfff14b5b26e71"
 LIMITS = ("Native complete-sample, metadata, clock and playback-range comparisons on the attributed ten-second clip; "
           "two-second segments, H.264, AAC 44.1/48 kHz including a partial final presented AAC frame. "
           "Automatic processing and default SegmentTemplate DASH addressing; canonical shared container metadata. "
           "No default decoding, DRM license acquisition, device playback, GUI, signature or build-origin certification.")
-FIXTURE_METADATA = {"hls_audio_group": "default-audio-group", "hls_audio_name": "Main", "hls_audio_language": "en",
-                    "hls_audio_default": False, "hls_audio_autoselect": True,
-                    "mp4_metadata_scope": "common-representable-values-and-semantic-language"}
+FIXTURE_METADATA = {
+    "mp4_metadata_scope": "common-representable-values-and-semantic-language",
+    "layouts": {layout: {"audio_rendition": {
+        "group": "default-audio-group", "name": "stream_1", "language": "en", "default": False, "autoselect": True,
+    } if layout.startswith("video-") else None} for layout in LAYOUTS},
+}
 LAYOUT_CONDITION = "joint-dash-hls-to-mp4-not-qualified"
 REVERSE_CONDITION = "reverse-joint-dash-hls-to-mp4-not-qualified"
 
@@ -72,7 +74,7 @@ def cases():
     result = []
     for layout in LAYOUTS:
         row = ("hls-ts-audio" if layout.startswith("aac") else "hls-ts-video")
-        for source in INPUTS:
+        for source in OUTPUTS:
             recipe_source = row if source[0] == "hls-ts" else source[0]
             for target in OUTPUTS:
                 output = "hls" if target[0] == "hls-fmp4" else target[0]
@@ -95,7 +97,8 @@ def counts(records):
 
 
 def matrix_digest():
-    return sha(canonical({"examples": EXAMPLES.routes(), "inputs": EXAMPLES.INPUTS, "cases": cases()}))
+    return sha(canonical({"examples": EXAMPLES.routes(), "inputs": EXAMPLES.INPUTS,
+                          "fixture_metadata": FIXTURE_METADATA, "cases": cases()}))
 
 
 def exact(value, keys, code="roundtrip-schema-invalid"):
@@ -164,11 +167,12 @@ def validate(report, head, tree, target, version, archive_hash, binary_hash):
             and report["native_ordinary_user"] is True and report["required_depth"] == "native"
             and report["decode_evidence"] == "not-checked" and report["license_playback_verified"] is False
             and report["fixture_metadata"] == FIXTURE_METADATA
-            and all(type(report["fixture_metadata"][name]) is bool for name in ("hls_audio_default", "hls_audio_autoselect"))
+            and all(type(report["fixture_metadata"]["layouts"][layout]["audio_rendition"][name]) is bool
+                    for layout in LAYOUTS if joint(layout) for name in ("default", "autoselect"))
             and report["owned_workspace_cleanup"] == "confirmed" and report["limits"] == LIMITS,
             "roundtrip-binding-invalid")
     fixtures = report["fixture_profiles"]
-    expected_fixtures = {f"{layout}:{profile_id(profile)}" for layout in LAYOUTS for profile in INPUTS}
+    expected_fixtures = {f"{layout}:{profile_id(profile)}" for layout in LAYOUTS for profile in OUTPUTS}
     require(isinstance(fixtures, list) and len(fixtures) == len(expected_fixtures), "roundtrip-fixtures-incomplete")
     seen = set()
     for fixture in fixtures:
@@ -204,7 +208,9 @@ def validate(report, head, tree, target, version, archive_hash, binary_hash):
     require(all(type(report["counts"][name]) is int for name in ("expected", "complete", "failed", "not_checked", "not_qualified"))
             and isinstance(report["counts"]["kinds"], dict)
             and all(type(value) is int for value in report["counts"]["kinds"].values()), "roundtrip-counts-invalid")
-    require(report["counts"] == {"expected": len(expected), "complete": 803, "failed": 0,
-                                 "not_checked": 0, "not_qualified": 42, "kinds": counts(expected)},
+    expected_counts = counts(expected)
+    require(report["counts"] == {"expected": len(expected), "complete": expected_counts["roundtrip"] + expected_counts["forward-only"],
+                                 "failed": 0, "not_checked": 0, "not_qualified": expected_counts["layout-condition"],
+                                 "kinds": expected_counts},
             "roundtrip-counts-invalid")
     return report
