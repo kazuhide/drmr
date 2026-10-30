@@ -494,7 +494,7 @@ fn explicit_signaling_rejects_unknown_profiles_and_existing_metadata() {
     assert!(drmr_core::native::open_private_read(&keys).is_ok());
     let output = root.join("refused");
     for (target, format) in [
-        ("cenc", "dash"),
+        ("cenc", "hls"),
         ("clear", "dash"),
         ("cbcs", "hls"),
         ("cbcs", "mp4"),

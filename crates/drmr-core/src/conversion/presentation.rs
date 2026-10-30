@@ -499,6 +499,7 @@ impl Converter {
                     request
                         .output_key
                         .ok_or(ConversionError("output-key-required"))?,
+                    request.target,
                 )
             })
             .transpose()?;
@@ -511,6 +512,7 @@ impl Converter {
                     request
                         .output_key
                         .ok_or(ConversionError("output-key-required"))?,
+                    request.target,
                 )
             })
             .transpose()?;

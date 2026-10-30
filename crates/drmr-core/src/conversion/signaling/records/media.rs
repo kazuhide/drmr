@@ -187,7 +187,7 @@ mod tests {
         .unwrap();
         let objects = super::super::OutputSignaling::playready("https://example.invalid/license")
             .unwrap()
-            .objects(&key)
+            .objects(&key, TargetProtection::Cbcs)
             .unwrap();
         let selected = MultiObjects::legacy_playready(objects);
         let record = &selected.playready.as_ref().unwrap().bytes;
@@ -229,7 +229,7 @@ mod tests {
         .unwrap();
         let objects = super::super::OutputSignaling::playready("https://example.invalid/license")
             .unwrap()
-            .objects(&key)
+            .objects(&key, TargetProtection::Cbcs)
             .unwrap();
         let selected = MultiObjects::legacy_playready(objects);
         std::fs::OpenOptions::new()

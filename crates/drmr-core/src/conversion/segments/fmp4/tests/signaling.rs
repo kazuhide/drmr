@@ -59,13 +59,16 @@ fn whole_resource_aes_signaling_and_source_guards_complete_with_one_cpu_token() 
 
 #[test]
 fn rekeyed_dash_replaces_provider_records_using_the_generated_output_key() {
+    for source in [TargetProtection::Cenc, TargetProtection::Cbcs] {
+        for target in [TargetProtection::Cenc, TargetProtection::Cbcs] {
+            rekeyed_dash(source, target);
+        }
+    }
+}
+
+fn rekeyed_dash(source_protection: TargetProtection, target: TargetProtection) {
     let fixture = fixture(48_000);
-    let input = manifest_fixture(
-        &fixture,
-        TargetProtection::Cbcs,
-        OutputFormat::Dash,
-        "source",
-    );
+    let input = manifest_fixture(&fixture, source_protection, OutputFormat::Dash, "source");
     let keys = InputKeys::new(vec![
         crate::conversion::ContentKey::from_hex(SOURCE_ID, SOURCE_KEY).unwrap(),
     ])
@@ -90,7 +93,7 @@ fn rekeyed_dash_replaces_provider_records_using_the_generated_output_key() {
             input: &input,
             output: &output,
             format: OutputFormat::Dash,
-            target: TargetProtection::Cbcs,
+            target,
             input_keys: &keys,
             hls_input_keys: &hls,
             output_key: Some(&key),
@@ -104,19 +107,13 @@ fn rekeyed_dash_replaces_provider_records_using_the_generated_output_key() {
     let frozen =
         crate::conversion::FrozenSource::capture(&result, &converter.backend.stop).unwrap();
     converter
-        .verify_segment_signaling(
-            &frozen,
-            OutputFormat::Dash,
-            TargetProtection::Cbcs,
-            Some(&key),
-            None,
-            None,
-        )
+        .verify_segment_signaling(&frozen, OutputFormat::Dash, target, Some(&key), None, None)
         .unwrap();
     let text = std::fs::read_to_string(&result).unwrap();
     assert_eq!(text.matches("<ContentProtection").count(), 6);
     for ordinal in 0..2 {
-        let bytes = std::fs::read(output.join(format!("track-{ordinal:04}/init.mp4"))).unwrap();
+        let initialization = output.join(format!("track-{ordinal:04}/init.mp4"));
+        let bytes = std::fs::read(&initialization).unwrap();
         let nodes = crate::mp4::parse_boxes(&bytes).unwrap();
         let boxes = crate::mp4::walk(&nodes);
         let pssh = boxes
@@ -140,6 +137,20 @@ fn rekeyed_dash_replaces_provider_records_using_the_generated_output_key() {
             let tenc = crate::mp4::Tenc::parse(node.header.payload(&bytes)).unwrap();
             assert_eq!(hex::encode(tenc.default_kid), OUTPUT_ID);
         }
+        let scheme = boxes.iter().find(|node| node.kind() == *b"schm").unwrap();
+        assert_eq!(
+            scheme.header.payload(&bytes).get(4..8),
+            Some(target.as_str().as_bytes())
+        );
+        reject_init_scheme(
+            &converter,
+            &result,
+            &initialization,
+            &bytes,
+            scheme.header.offset + scheme.header.header_size + 4,
+            target,
+            &key,
+        );
     }
     let logs = serde_json::to_string(&events.records()).unwrap();
     let report = serde_json::to_string(&report).unwrap();
@@ -148,6 +159,37 @@ fn rekeyed_dash_replaces_provider_records_using_the_generated_output_key() {
         assert!(!report.contains(sensitive));
     }
     assert_no_tools(&events);
+}
+
+fn reject_init_scheme(
+    converter: &Converter,
+    result: &std::path::Path,
+    initialization: &std::path::Path,
+    bytes: &[u8],
+    offset: usize,
+    target: TargetProtection,
+    key: &OutputKey,
+) {
+    let mut changed = bytes.to_vec();
+    changed[offset..offset + 4].copy_from_slice(if target == TargetProtection::Cenc {
+        b"cbcs"
+    } else {
+        b"cenc"
+    });
+    std::fs::write(initialization, changed).unwrap();
+    let fresh = crate::conversion::FrozenSource::capture(result, &converter.backend.stop).unwrap();
+    assert_eq!(
+        converter.verify_segment_signaling(
+            &fresh,
+            OutputFormat::Dash,
+            target,
+            Some(key),
+            None,
+            None
+        ),
+        Err(ConversionError("output-signaling-verification-failed"))
+    );
+    std::fs::write(initialization, bytes).unwrap();
 }
 
 #[test]

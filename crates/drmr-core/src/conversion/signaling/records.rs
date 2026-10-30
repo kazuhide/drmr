@@ -71,11 +71,12 @@ impl OutputSignaling {
     pub(in crate::conversion) fn segment_records(
         &self,
         key: &OutputKey,
+        target: TargetProtection,
     ) -> Result<SegmentRecords, ConversionError> {
         let objects = if self.is_multi() {
-            self.multi_objects(key)?
+            self.multi_objects(key, target)?
         } else {
-            MultiObjects::legacy_playready(self.objects(key)?)
+            MultiObjects::legacy_playready(self.objects(key, target)?)
         };
         let kid = key.0.id_hex();
         let uuid = format!(
@@ -87,7 +88,8 @@ impl OutputSignaling {
             &kid[20..]
         );
         let mut content_protection = Zeroizing::new(format!(
-            "<ContentProtection schemeIdUri=\"{COMMON}\" value=\"cbcs\" cenc:default_KID=\"{uuid}\"/>"
+            "<ContentProtection schemeIdUri=\"{COMMON}\" value=\"{}\" cenc:default_KID=\"{uuid}\"/>",
+            target.as_str()
         ));
         let mut initialization = Zeroizing::new(Vec::new());
         if let Some(widevine) = &objects.widevine {
@@ -107,6 +109,7 @@ impl OutputSignaling {
 }
 
 pub(in crate::conversion) struct MultiObjects {
+    target: TargetProtection,
     playready: Option<Objects>,
     widevine: Option<Zeroizing<Vec<u8>>>,
     widevine_hex: Option<Zeroizing<String>>,
@@ -116,13 +119,15 @@ impl OutputSignaling {
     pub(in crate::conversion) fn multi_objects(
         &self,
         key: &OutputKey,
+        target: TargetProtection,
     ) -> Result<MultiObjects, ConversionError> {
+        self.validate_profile(OutputFormat::Dash, target)?;
         let multi = self.multi.as_ref().ok_or(super::INVALID)?;
         let playready = (!self.license_url.is_empty())
-            .then(|| OutputSignaling::playready(&self.license_url)?.objects(key))
+            .then(|| OutputSignaling::playready(&self.license_url)?.objects(key, target))
             .transpose()?;
         if let Some(widevine) = &multi.widevine {
-            super::multi::validate_widevine(widevine, Some(&key.0.id_hex()))?;
+            super::multi::validate_widevine(widevine, Some(&key.0.id_hex()), Some(target))?;
         }
         let widevine_hex = multi
             .widevine
@@ -136,16 +141,33 @@ impl OutputSignaling {
             hex.push_str(&playready.hex);
         }
         Ok(MultiObjects {
+            target,
             playready,
             widevine: multi.widevine.clone(),
             widevine_hex,
             hex,
         })
     }
+
+    /// Key-file parsing can bind identifiers before a command chooses its target scheme.
+    pub(in crate::conversion) fn validate_output_key(
+        &self,
+        key: &OutputKey,
+    ) -> Result<(), ConversionError> {
+        if let Some(widevine) = self
+            .multi
+            .as_ref()
+            .and_then(|multi| multi.widevine.as_ref())
+        {
+            super::multi::validate_widevine(widevine, Some(&key.0.id_hex()), None)?;
+        }
+        Ok(())
+    }
 }
 impl MultiObjects {
     pub(super) fn legacy_playready(playready: Objects) -> Self {
         Self {
+            target: playready.target,
             hex: playready.hex.clone(),
             playready: Some(playready),
             widevine: None,
@@ -195,7 +217,7 @@ impl MultiObjects {
                 return Err(MISMATCH);
             }
         }
-        init_key(&data, key)
+        init_key(&data, key, self.target)
     }
     fn protection(
         &self,
@@ -222,7 +244,7 @@ impl MultiObjects {
             .iter()
             .find(|node| node.attribute("schemeIdUri") == Some(COMMON))
             .ok_or(MISMATCH)?;
-        if common.attribute("value") != Some("cbcs")
+        if common.attribute("value") != Some(self.target.as_str())
             || common
                 .attribute((CENC, "default_KID"))
                 .is_none_or(|value| value.replace('-', "").to_ascii_lowercase() != expected_kid)
@@ -374,7 +396,7 @@ fn exact_text(node: roxmltree::Node<'_, '_>, expected: &str) -> Result<(), Conve
 fn resource(root: &Path, uri: &str) -> Result<PathBuf, ConversionError> {
     super::super::hls::local_resource(root, uri).map_err(|_| MISMATCH)
 }
-fn init_key(data: &[u8], key: &OutputKey) -> Result<(), ConversionError> {
+fn init_key(data: &[u8], key: &OutputKey, target: TargetProtection) -> Result<(), ConversionError> {
     let boxes = mp4::parse_boxes(data).map_err(|_| MISMATCH)?;
     let nodes = mp4::walk(&boxes);
     let tenc: Vec<_> = nodes
@@ -391,7 +413,7 @@ fn init_key(data: &[u8], key: &OutputKey) -> Result<(), ConversionError> {
     let tenc = mp4::Tenc::parse(tenc[0].header.payload(data)).ok_or(MISMATCH)?;
     if tenc.default_is_protected != 1
         || tenc.default_kid != key.0.id
-        || schm[0].header.payload(data).get(4..8) != Some(b"cbcs")
+        || schm[0].header.payload(data).get(4..8) != Some(target.as_str().as_bytes())
     {
         return Err(MISMATCH);
     }
@@ -568,7 +590,7 @@ fn playlist_iv(
                 {
                     return Err(MISMATCH);
                 }
-                init_key(&init, key)?;
+                init_key(&init, key, TargetProtection::Cbcs)?;
                 expected_iv = mp4::tenc_constant_iv_hex(&init)
                     .map_err(|_| MISMATCH)?
                     .map(|iv| Zeroizing::new(iv.expose().to_string()));
@@ -992,7 +1014,9 @@ mod tests {
             OutputSignaling::multi_drm(Some(&hex), Some("https://example.invalid/license"), false)
                 .unwrap();
         let key = OutputKey::from_hex(kid, "101112131415161718191a1b1c1d1e1f").unwrap();
-        let objects = signaling.multi_objects(&key).unwrap();
+        let objects = signaling
+            .multi_objects(&key, TargetProtection::Cbcs)
+            .unwrap();
         let secrets = crate::toolrun::Secrets::with(objects.secrets());
         for value in [
             hex.clone(),

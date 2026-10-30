@@ -53,7 +53,7 @@ fn decode(value: &str) -> Result<Zeroizing<Vec<u8>>, ConversionError> {
             STANDARD.decode(value).map_err(|_| INVALID)?
         },
     );
-    validate_widevine(&bytes, None)?;
+    validate_widevine(&bytes, None, None)?;
     Ok(bytes)
 }
 fn word(data: &[u8], at: usize) -> Result<usize, ConversionError> {
@@ -68,7 +68,14 @@ fn word(data: &[u8], at: usize) -> Result<usize, ConversionError> {
 pub(super) fn validate_widevine(
     data: &[u8],
     expected: Option<&str>,
+    target: Option<TargetProtection>,
 ) -> Result<(), ConversionError> {
+    let expected_scheme = match target {
+        Some(TargetProtection::Cenc) => Some(u64::from(u32::from_be_bytes(*b"cenc"))),
+        Some(TargetProtection::Cbcs) => Some(u64::from(u32::from_be_bytes(*b"cbcs"))),
+        Some(_) => return Err(INVALID),
+        None => None,
+    };
     if !(32..=65_536).contains(&data.len())
         || word(data, 0)? != data.len()
         || data.get(4..8) != Some(b"pssh")
@@ -108,7 +115,12 @@ pub(super) fn validate_widevine(
             0 => {
                 let value = varint(payload, &mut offset)?;
                 if tag >> 3 == 9 {
-                    if scheme || value != u64::from(u32::from_be_bytes(*b"cbcs")) {
+                    if scheme
+                        || ![b"cenc", b"cbcs"]
+                            .iter()
+                            .any(|scheme| value == u64::from(u32::from_be_bytes(**scheme)))
+                        || expected_scheme.is_some_and(|expected| value != expected)
+                    {
                         return Err(INVALID);
                     }
                     scheme = true;
@@ -166,7 +178,7 @@ fn varint(data: &[u8], at: &mut usize) -> Result<u64, ConversionError> {
     Err(INVALID)
 }
 
-pub(super) fn profile(
+pub(in crate::conversion) fn profile(
     systems: &[DrmSystem],
     format: OutputFormat,
     target: TargetProtection,
@@ -175,7 +187,9 @@ pub(super) fn profile(
         return Err(super::UNSUPPORTED);
     }
     let supported = match (format, target) {
-        (OutputFormat::Dash, TargetProtection::Cbcs) => !systems.contains(&DrmSystem::FairPlay),
+        (OutputFormat::Dash, TargetProtection::Cenc | TargetProtection::Cbcs) => {
+            !systems.contains(&DrmSystem::FairPlay)
+        }
         (OutputFormat::Hls, TargetProtection::Cbcs)
         | (OutputFormat::HlsTs, TargetProtection::HlsSampleAes) => systems == [DrmSystem::FairPlay],
         _ => false,
@@ -312,9 +326,9 @@ mod tests {
             crate::playready::build_pssh_box(&crate::playready::WIDEVINE_SYSTEM_ID, &payload)
                 .unwrap();
         assert_eq!(bytes.len(), 65_536);
-        validate_widevine(&bytes, Some(kid)).unwrap();
+        validate_widevine(&bytes, Some(kid), None).unwrap();
         assert_eq!(
-            validate_widevine(&bytes, Some("100102030405060708090a0b0c0d0e0f")),
+            validate_widevine(&bytes, Some("100102030405060708090a0b0c0d0e0f"), None),
             Err(INVALID)
         );
         let signaling =
@@ -325,13 +339,19 @@ mod tests {
             "101112131415161718191a1b1c1d1e1f",
         )
         .unwrap();
-        assert_eq!(signaling.multi_objects(&wrong).err(), Some(INVALID));
+        assert_eq!(
+            signaling
+                .multi_objects(&wrong, TargetProtection::Cbcs)
+                .err(),
+            Some(INVALID)
+        );
     }
     #[test]
     fn drm_profiles_are_explicit_and_do_not_accept_duplicate_or_unordered_systems() {
         use DrmSystem::{FairPlay, PlayReady, Widevine};
         for systems in [vec![Widevine], vec![PlayReady], vec![Widevine, PlayReady]] {
             assert!(profile(&systems, OutputFormat::Dash, TargetProtection::Cbcs).is_ok());
+            assert!(profile(&systems, OutputFormat::Dash, TargetProtection::Cenc).is_ok());
         }
         assert!(profile(&[FairPlay], OutputFormat::Hls, TargetProtection::Cbcs).is_ok());
         assert!(
@@ -357,9 +377,57 @@ mod tests {
             ),
             (vec![Widevine], OutputFormat::Hls, TargetProtection::Cbcs),
             (vec![FairPlay], OutputFormat::HlsTs, TargetProtection::Cbcs),
-            (vec![PlayReady], OutputFormat::Dash, TargetProtection::Cenc),
+            (vec![FairPlay], OutputFormat::Dash, TargetProtection::Cenc),
         ] {
             assert!(profile(&systems, format, target).is_err());
+        }
+    }
+    #[test]
+    fn declared_widevine_scheme_and_every_identifier_are_bound_to_the_output() {
+        let kid = "000102030405060708090a0b0c0d0e0f";
+        let key = crate::conversion::OutputKey::from_hex(kid, "101112131415161718191a1b1c1d1e1f")
+            .unwrap();
+        for (scheme, target, wrong) in [
+            (*b"cenc", TargetProtection::Cenc, TargetProtection::Cbcs),
+            (*b"cbcs", TargetProtection::Cbcs, TargetProtection::Cenc),
+        ] {
+            let mut payload = hex::decode(format!("1210{kid}")).unwrap();
+            payload.push(0x48);
+            let mut value = u32::from_be_bytes(scheme);
+            while value > 127 {
+                payload.push(u8::try_from(value & 127).unwrap() | 128);
+                value >>= 7;
+            }
+            payload.push(u8::try_from(value).unwrap());
+            let bytes =
+                crate::playready::build_pssh_box(&crate::playready::WIDEVINE_SYSTEM_ID, &payload)
+                    .unwrap();
+            let signaling = crate::conversion::OutputSignaling::multi_drm(
+                Some(&hex::encode(&bytes)),
+                Some("https://example.invalid/license"),
+                false,
+            )
+            .unwrap();
+            signaling.validate_output_key(&key).unwrap();
+            signaling.multi_objects(&key, target).unwrap();
+            assert_eq!(signaling.multi_objects(&key, wrong).err(), Some(INVALID));
+            assert_eq!(
+                validate_widevine(
+                    &bytes,
+                    Some("100102030405060708090a0b0c0d0e0f"),
+                    Some(target)
+                ),
+                Err(INVALID)
+            );
+            let mut duplicate = payload.clone();
+            duplicate.extend_from_slice(&payload[18..]);
+            let duplicate =
+                crate::playready::build_pssh_box(&crate::playready::WIDEVINE_SYSTEM_ID, &duplicate)
+                    .unwrap();
+            assert_eq!(
+                validate_widevine(&duplicate, Some(kid), Some(target)),
+                Err(INVALID)
+            );
         }
     }
     #[test]
