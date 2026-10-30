@@ -115,20 +115,7 @@ fn scrub_value(secrets: &Secrets, value: &Value) -> Value {
 }
 
 fn scrub_string(secrets: &Secrets, text: &str) -> String {
-    let scrubbed = secrets.scrub(text);
-    let token = Dumps::DEFAULT.dumps(&Value::String(scrubbed.clone()));
-    let guarded = secrets.scrub(&token);
-    if guarded == token {
-        return scrubbed;
-    }
-    // Scrub the serialized token as well as the original value, covering JSON
-    // escapes without writing a replacement into the surrounding JSON syntax.
-    // A work-budget fallback or a match across quotes discards only this value;
-    // fixed event labels, metrics and the rest of the record remain available.
-    match serde_json::from_str(&guarded) {
-        Ok(Value::String(text)) => text,
-        _ => REDACTED.to_string(),
-    }
+    secrets.scrub_record_string(text)
 }
 
 impl<W: Write + Send> Sink for JsonLinesWriter<W> {

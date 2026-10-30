@@ -1386,3 +1386,81 @@ fn the_json_lines_guard_scrubs_keys_json_escapes_and_numeric_tokens_safely() {
     assert!(!line.contains(escaped));
     assert!(!line.contains("1234567890"));
 }
+
+#[test]
+fn the_json_lines_guard_checks_both_original_representations_before_masking() {
+    let outer = r"\u79d8\u5bc6-provider-sensitive-tail";
+    let inner = "provider-sensitive-tail";
+    let positive = "秘密-provider-sensitive-tail";
+    let negative = "秘密-independent-value";
+    for registered in [[outer, inner], [inner, outer]] {
+        let writer = JsonLinesWriter::new(Vec::new(), Arc::new(Secrets::with(registered)));
+        let record = json!({
+            "event": "tool-output", "returncode": 7, "duration_s": 0.125,
+            "positive": positive, "negative": negative,
+            "array": [positive, negative, format!("quoted: \"{positive}\"\n")],
+            "nested": {positive: negative},
+            "ordinary": format!("before {inner} after"),
+        });
+        let line = writer.line(record.as_object().unwrap());
+        let parsed: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(parsed["event"], "tool-output");
+        assert_eq!(parsed["returncode"], 7);
+        assert_eq!(parsed["duration_s"], 0.125);
+        assert_eq!(parsed["positive"], REDACTED);
+        assert_eq!(parsed["negative"], negative);
+        assert_eq!(parsed["array"][0], REDACTED);
+        assert_eq!(parsed["array"][1], negative);
+        assert_eq!(parsed["array"][2], REDACTED);
+        assert_eq!(parsed["nested"][REDACTED], negative);
+        assert!(!parsed["nested"].as_object().unwrap().contains_key(positive));
+        assert_eq!(parsed["ordinary"], format!("before {REDACTED} after"));
+    }
+}
+
+#[test]
+fn tool_records_check_original_json_before_the_first_raw_replacement() {
+    let outer = r"\u79d8\u5bc6-provider-sensitive-tail";
+    let inner = "provider-sensitive-tail";
+    let positive = "秘密-provider-sensitive-tail";
+    for (registered, extra) in [(outer, inner), (inner, outer)] {
+        let (runner, collector, secrets) = runner();
+        secrets.register([registered]);
+        let completed = runner
+            .run_tool(
+                &response(positive.as_bytes(), positive.as_bytes(), 0, &[positive]),
+                "fixture",
+                &RunOptions {
+                    secrets: &[extra],
+                    ..RunOptions::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(completed.stdout_text(), positive, "parsed data stays real");
+        assert_eq!(completed.stderr_text(), positive);
+        let records = collector.records();
+        assert_eq!(
+            records[0]["argv"].as_array().unwrap().last().unwrap(),
+            REDACTED
+        );
+        assert_eq!(records[1]["stdout"], REDACTED);
+        assert_eq!(records[1]["stderr"], REDACTED);
+        assert_eq!(records[1]["returncode"], 0);
+
+        secrets.register([outer, inner]);
+        let call = runner.note_command(&argv(&["fixture", positive]), "fixture", None);
+        runner.note_result("fixture", Some(7), 0.125, None, positive, Some(call));
+        let records = collector.records();
+        assert_eq!(records[2]["argv"], json!(["fixture", REDACTED]));
+        assert_eq!(records[3]["stderr"], REDACTED);
+        assert_eq!(records[3]["returncode"], 7);
+        let writer = JsonLinesWriter::new(Vec::new(), secrets);
+        for record in &records {
+            let line = writer.line(record);
+            let parsed: Value = serde_json::from_str(&line).unwrap();
+            assert!(parsed.is_object());
+            assert!(!line.contains(r"\u79d8\u5bc6"));
+            assert!(!line.contains(inner));
+        }
+    }
+}

@@ -9,11 +9,66 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runInNewContext } from 'node:vm';
 import { readFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { assets, assetRoute, assetPath, digest, liveMode, allowedRequest } from './source.mjs';
 import * as identity from './source.mjs';
 import { matchesPublication } from './wait-published.mjs';
 import { resource } from './server.mjs';
 import { requireFocus, requireImages, requireLayout, layoutObservation, focusObservation, requireClippedFocusTimeout, partialFocusCandidate, pollFocus, FocusConditionTimeout, FocusObservationDeadline } from './checks.mjs';
+
+test('only landing cases use two parallel workers and every suite deadline remains fixed', () => {
+  // Evaluate configuration objects only: no Playwright runtime, browser or CI launch.
+  const evaluate = (file, landing) => {
+    const fixture = { sourceHead: 'config-fixture', sourceTree: 'config-tree' };
+    const source = readFileSync(new URL('./' + file, import.meta.url), 'utf8')
+      .replace(/^import[^\n]*\n/gm, '').replaceAll('import.meta.url', '"file:///config-fixture.mjs"')
+      .replace('export default defineConfig(', 'result = defineConfig(');
+    let ciCalls = 0;
+    const context = { defineConfig: value => value, landing, result: null,
+      source: () => fixture, liveMode, publicOrigin: identity.publicOrigin, localOrigin: identity.localOrigin,
+      requireCi: value => { assert.equal(value, false); ciCalls++; },
+      process: { env: { GITHUB_SHA: fixture.sourceHead, PW_REPORT_ROOT: '/ci-evidence' }, version: 'node-config-fixture' },
+      createRequire: () => ({ resolve: () => '/fixture/playwright-core/package.json' }),
+      readFileSync: () => JSON.stringify({ packages: {}, browsers: [] }), dirname, join, resolve, URL,
+      locales, matrixRecipeBatches };
+    runInNewContext(source, context, { timeout: 1000 });
+    assert.equal(ciCalls, landing ? 0 : 1);
+    return JSON.parse(JSON.stringify(context.result));
+  };
+  const landing = evaluate('playwright.config.mjs');
+  const guide = evaluate('guide.config.mjs', landing);
+  assert.equal(landing.fullyParallel, true);
+  assert.equal(landing.workers, 2);
+  assert.equal(guide.fullyParallel, false);
+  assert.equal(guide.workers, 1);
+  for (const config of [landing, guide]) {
+    assert.equal(config.timeout, 30_000);
+    assert.equal(config.globalTimeout, 180_000);
+    assert.equal(config.expect.timeout, 5000);
+    assert.equal(config.use.actionTimeout, 5000);
+    assert.equal(config.use.navigationTimeout, 10_000);
+    assert.equal(config.retries, 0);
+  }
+  assert.equal(landing.metadata.browserCases, 23);
+  assert.equal(guide.metadata.browserCases, 12);
+});
+
+test('all independent landing cases retain unique evidence namespaces including both final recipe batches', () => {
+  const names = [];
+  const register = (name, callback) => { names.push(name); assert.equal(typeof callback, 'function'); };
+  register.afterEach = callback => assert.equal(typeof callback, 'function');
+  const source = readFileSync(new URL('./browser.spec.mjs', import.meta.url), 'utf8')
+    .replace(/^import[\s\S]*?;\n/gm, '');
+  runInNewContext(source, { test: register, process: { env: {} }, liveMode,
+    publicOrigin: identity.publicOrigin, localOrigin: identity.localOrigin,
+    locales, english: locales[0], matrixRecipeBatches }, { timeout: 1000 });
+  assert.equal(names.length, 23);
+  assert.equal(new Set(names).size, names.length);
+  for (const language of ['en', 'ja']) {
+    assert.ok(names.includes(`${language}: matrix recipes 61–65 navigate without JavaScript`));
+    assert.equal(names.filter(name => name.startsWith(language + ': matrix recipes ')).length, 5);
+  }
+});
 
 test('only the fixed static payload resolves at either mount', () => {
   assert.equal(resource('/').relative, 'index.html');

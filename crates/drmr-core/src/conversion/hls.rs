@@ -474,6 +474,12 @@ impl Playlist {
                 self.reference.push_str("#EXT-X-KEY:METHOD=NONE\n");
                 copied
             };
+        if cipher.key.is_some() && (map || self.has_map) {
+            // Ciphertext cannot prove the metadata policy. Inspect these exact
+            // Rust-decrypted bytes before clock preparation, probing or packaging.
+            // Every preparation (including shared bundle sources) uses this path.
+            super::signaling::qualified_mp4(&plaintext, &self.stop, map)?;
+        }
         if map {
             self.clock = Some(super::timing::FragmentClock::read(&plaintext)?);
             self.initialization = Some(plaintext.clone());

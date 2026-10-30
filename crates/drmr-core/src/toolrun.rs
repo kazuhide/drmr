@@ -14,7 +14,7 @@
 //! A tool that cannot complete (spawn failure, timeout, capture limit) is a [`ToolError`] naming the tool and
 //! the kind of failure only, never the argv.
 
-use crate::canonical::python_float_repr;
+use crate::canonical::{python_float_repr, write_string};
 use crate::concurrency::Stop;
 use crate::events::{Record, Sink, now_iso, round3};
 use crate::resources::{Claim, Limiter, Permit, Workload, process_limiter};
@@ -334,6 +334,31 @@ impl Secrets {
     pub fn scrub_with_patterns(&self, text: &str, extra: &[Regex]) -> String {
         let registry = self.registry.read().unwrap_or_else(PoisonError::into_inner);
         scrub_combined(&registry.patterns, extra, text)
+    }
+
+    pub(crate) fn scrub_record_string(&self, text: &str) -> String {
+        self.scrub_record_with_patterns(text, &[])
+    }
+
+    fn scrub_record_with_patterns(&self, text: &str, extra: &[Regex]) -> String {
+        let registry = self.registry.read().unwrap_or_else(PoisonError::into_inner);
+        let raw = scrub_combined(&registry.patterns, extra, text);
+        let mut token = String::with_capacity(text.len().saturating_add(2));
+        write_string(&mut token, text);
+        let guarded = scrub_combined(&registry.patterns, extra, &token);
+        if guarded == token {
+            return raw;
+        }
+        // Check BOTH original representations. Serializing an already masked
+        // inner value could destroy an enclosing match in the escaped form.
+        // Preserve ordinary diagnostic context when both independent masks
+        // agree; otherwise discard this value rather than merge byte offsets
+        // across JSON escapes. Use this before the first ToolRunner replacement
+        // as well as in the JSON writer, which cannot recover discarded bytes.
+        match serde_json::from_str(&guarded) {
+            Ok(Value::String(encoded)) if encoded == raw => raw,
+            _ => REDACTED.to_string(),
+        }
     }
 }
 
@@ -1032,7 +1057,9 @@ impl ToolRunner {
             Value::Array(
                 shown
                     .iter()
-                    .map(|token| Value::String(self.secrets.scrub_with_patterns(token, extra)))
+                    .map(|token| {
+                        Value::String(self.secrets.scrub_record_with_patterns(token, extra))
+                    })
                     .collect(),
             ),
         );
@@ -1058,7 +1085,8 @@ impl ToolRunner {
         put(
             &mut record,
             "stderr",
-            self.secrets.scrub_with_patterns(&failure.text, extra),
+            self.secrets
+                .scrub_record_with_patterns(&failure.text, extra),
         );
         put(&mut record, "truncated", false);
         base.apply(&mut record);
@@ -1085,7 +1113,7 @@ impl ToolRunner {
         };
         let (out, out_cut) = if options.log_stdout {
             bounded(
-                &self.secrets.scrub_with_patterns(&stdout_text, extra),
+                &self.secrets.scrub_record_with_patterns(&stdout_text, extra),
                 options.max_output_chars,
             )
         } else {
@@ -1100,7 +1128,7 @@ impl ToolRunner {
             )
         };
         let (err, err_cut) = bounded(
-            &self.secrets.scrub_with_patterns(&stderr_text, extra),
+            &self.secrets.scrub_record_with_patterns(&stderr_text, extra),
             options.max_output_chars,
         );
         let mut record = Record::new();
@@ -1146,7 +1174,7 @@ impl ToolRunner {
             "argv",
             Value::Array(
                 argv.iter()
-                    .map(|token| Value::String(self.secrets.scrub(token)))
+                    .map(|token| Value::String(self.secrets.scrub_record_string(token)))
                     .collect(),
             ),
         );
@@ -1189,7 +1217,11 @@ impl ToolRunner {
         );
         put(&mut record, "duration_s", round3(duration_s));
         put(&mut record, "stdout", "");
-        put(&mut record, "stderr", self.secrets.scrub(stderr));
+        put(
+            &mut record,
+            "stderr",
+            self.secrets.scrub_record_string(stderr),
+        );
         put(&mut record, "truncated", false);
         if let Some(id) = call_id {
             put(&mut record, "call_id", id);

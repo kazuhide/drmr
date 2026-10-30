@@ -9,7 +9,14 @@ native media checks as ordinary conversion. Clear or known-key CENC/CBCS MP4,
 fMP4 HLS and static DASH inputs can be processed with `auto` or `stitch`, including
 qualified progressive MP4 audio playback ranges. Supported TS HLS inputs retain
 their documented key and codec requirements. A separate bounded metadata census
-still refuses unknown opaque boxes and unsupported controls. Recognized static
+still refuses unknown opaque boxes and unsupported controls. Outer AES-128 fMP4
+HLS resources undergo this census on the actual Rust-decrypted initialization
+and media, before optional probing, decoding or packaging. Decryption is reused
+from the existing localization pass. The active encryption declaration applies
+to each following resource; an unused AES-128 declaration does not exempt
+plaintext resources from their metadata checks. With `--decode`, every rendition's
+Rust localization finishes before any rendition starts probing or decoding.
+Recognized static
 ID3 metadata and supported descriptive text tags do not establish timed-track
 support. No license service is contacted.
 

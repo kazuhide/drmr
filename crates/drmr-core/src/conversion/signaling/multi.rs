@@ -314,27 +314,25 @@ fn qualified_source_metadata(
                 let mapped = text
                     .lines()
                     .any(|line| line.trim().starts_with("#EXT-X-MAP:"));
-                let aes = text
-                    .lines()
-                    .filter_map(|line| line.trim().strip_prefix("#EXT-X-KEY:"))
-                    .try_fold(false, |aes, value| {
-                        let attrs = hls::attributes(value)?;
-                        Ok::<_, ConversionError>(aes || attrs.get("METHOD") == Some("AES-128"))
-                    })?;
-                if !mapped || aes {
-                    // Transport has no MP4 metadata. AES-128 ciphertext is checked
-                    // after Rust localization exposes the plaintext initialization.
+                if !mapped {
                     continue;
                 }
+                let mut aes = false;
                 for line in text.lines().map(str::trim) {
                     super::cancelled(stop)?;
-                    if let Some(value) = line.strip_prefix("#EXT-X-MAP:") {
-                        let attrs = hls::attributes(value)?;
-                        let uri = attrs.get("URI").ok_or(super::UNSUPPORTED)?;
-                        super::qualified_mp4(&hls::local_resource(parent, uri)?, stop, true)?;
-                    } else if !line.is_empty() && !line.starts_with('#') {
+                    if let Some(value) = line.strip_prefix("#EXT-X-KEY:") {
+                        aes = hls::attributes(value)?.get("METHOD") == Some("AES-128");
+                    } else if let Some(value) = line.strip_prefix("#EXT-X-MAP:") {
+                        if !aes {
+                            let attrs = hls::attributes(value)?;
+                            let uri = attrs.get("URI").ok_or(super::UNSUPPORTED)?;
+                            super::qualified_mp4(&hls::local_resource(parent, uri)?, stop, true)?;
+                        }
+                    } else if !aes && !line.is_empty() && !line.starts_with('#') {
                         super::qualified_mp4(&hls::local_resource(parent, line)?, stop, false)?;
                     }
+                    // Active AES resources are censused after Rust decryption in
+                    // the shared localizer; a superseded declaration exempts nothing.
                 }
             }
             Ok(())

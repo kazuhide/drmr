@@ -911,7 +911,7 @@ The report has `scope: "manifest-only"` and `media_verified: false`. It reads no
 
 ## Processing units and storage
 
-Select `--processing` on direct `convert` or `plan --save`. `auto` selects a qualified packaging route. `segments` processes supported matching containers at their original segment boundaries. `stitch` joins when needed, then writes MP4 or segments HLS/DASH again at the resolved request. Explicit unsupported modes are refused. The saved choice cannot be overridden by `convert --plan`. fMP4 with two edits for a partial final AAC frame requires `stitch`.
+Select `--processing` on direct `convert` or `plan --save`. `auto` selects a qualified packaging route. `segments` processes supported matching containers at their original segment boundaries. `stitch` joins when needed, then writes MP4 or segments HLS/DASH again at the resolved request. Explicit unsupported modes are refused. The saved choice cannot be overridden by `convert --plan`. Same-container `segments` accepts the qualified two-edit AAC range after checking every frame and clock. Unsupported edits and container changes are refused.
 
 An HLS target-duration declaration is an upper bound, which can differ from the interval requested from Shaka Packager. New plans derive that request from admitted video intervals. For example, a common three-second bound can describe two-second video and approximately 2.005-second audio segments: the plan saves a two-second request and final HLS keeps the three-second bound after checking every output segment. MP4 and DASH inputs use a two-second default when stitching to segmented output. Earlier plan schemas 1–6 retain their fixed requests, including an implicit two seconds; execution does not shorten a saved request.
 

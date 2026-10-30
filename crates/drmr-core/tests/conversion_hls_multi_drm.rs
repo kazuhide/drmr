@@ -1,5 +1,7 @@
 //! Generated HLS DRM records remain independently usable as known-key inputs.
 mod common;
+#[path = "support/hls_multi_drm_aes.rs"]
+mod outer_aes;
 #[path = "support/hls_multi_drm_profiles.rs"]
 mod profiles;
 #[path = "support/hls_multi_drm_renditions.rs"]

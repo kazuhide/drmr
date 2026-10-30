@@ -20,8 +20,9 @@ const report = resolve(process.env.PW_REPORT_ROOT);
 export default defineConfig({
   testDir: '.',
   testMatch: 'browser.spec.mjs',
-  fullyParallel: false,
-  workers: 1,
+  // Each case owns its page/context and testInfo output directory.
+  fullyParallel: true,
+  workers: 2,
   retries: 0,
   forbidOnly: true,
   timeout: 30_000,

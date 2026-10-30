@@ -70,11 +70,7 @@ fn literal_width(pattern: &str) -> Option<usize> {
     let mut width = 0_usize;
     while let Some(character) = characters.next() {
         match character {
-            '\\' => {
-                if characters.next()?.is_alphanumeric() {
-                    return None;
-                }
-            }
+            '\\' if characters.next()?.is_alphanumeric() => return None,
             '.' | '+' | '*' | '?' | '(' | ')' | '|' | '[' | ']' | '{' | '}' | '^' | '$' => {
                 return None;
             }
