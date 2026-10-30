@@ -438,8 +438,10 @@ fn ts_output_plans_separate_the_container_and_sample_encryption_intent() {
         let report = inspection::plan(source.clone(), target, vec![OutputFormat::HlsTs]);
         assert!(report.compatible && report.execution_available);
         let processing = report.processing.unwrap();
-        assert_eq!(processing.candidates.len(), 1);
+        assert_eq!(processing.candidates.len(), 2);
         assert_eq!(processing.candidates[0].route.as_str(), "mpeg-ts-hls-ts");
+        assert_eq!(processing.candidates[1].route.as_str(), "fmp4-hls-ts");
+        assert!(processing.candidates[1].revalidation_required);
         assert!(processing.candidates[0].revalidation_required);
         if target == TargetProtection::HlsSampleAes {
             let description = serde_json::to_value(processing.target).unwrap();
@@ -478,5 +480,9 @@ fn ts_output_plans_separate_the_container_and_sample_encryption_intent() {
         TargetProtection::Clear,
         vec![OutputFormat::HlsTs],
     );
-    assert!(!report.compatible && report.processing.unwrap().candidates.is_empty());
+    assert!(report.compatible && report.execution_available);
+    let candidates = report.processing.unwrap().candidates;
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].route.as_str(), "fmp4-hls-ts");
+    assert!(candidates[0].revalidation_required);
 }

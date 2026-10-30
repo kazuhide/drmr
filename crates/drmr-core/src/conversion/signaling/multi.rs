@@ -220,7 +220,7 @@ impl crate::conversion::Converter {
                 admitted.actual_format,
                 format,
             )?;
-        } else {
+        } else if format != OutputFormat::HlsTs {
             match admitted.input.format {
                 InputFormat::Mp4 => super::clear_mp4(source, &self.backend.stop)?,
                 InputFormat::Hls if admitted.actual_format == OutputFormat::HlsTs => {}
@@ -273,22 +273,20 @@ impl crate::conversion::Converter {
     ) -> Result<(), ConversionError> {
         profile(systems, format, target)?;
         self.backend.check_cancelled()?;
-        if self.processing_mode == crate::conversion::ProcessingMode::Segments {
+        if self.processing_mode == crate::conversion::ProcessingMode::Segments
+            || format == OutputFormat::HlsTs
+        {
             let qualified = self.validate_source(
                 source,
                 crate::conversion::SourceValidationPurpose::Conversion,
             )?;
-            crate::conversion::processing::ProcessingSelection::resolve(
-                crate::conversion::ProcessingMode::Segments,
-                qualified.actual_format,
+            return self.validate_qualified_drm_source(
+                source.input,
+                &qualified,
+                systems,
                 format,
-            )?;
-            if qualified.track_protection.is_empty()
-                || !qualified.eligible_formats.contains(&format)
-            {
-                return Err(super::UNSUPPORTED);
-            }
-            return Ok(());
+                target,
+            );
         }
         let input = crate::inspection::inspect(source.input).map_err(|_| super::UNSUPPORTED)?;
         if input.format == InputFormat::Mp4 {

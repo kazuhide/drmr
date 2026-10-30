@@ -1085,7 +1085,7 @@ impl Converter {
         {
             eligible_formats.push(OutputFormat::Hls);
         }
-        if actual_format == OutputFormat::HlsTs {
+        if actual_format == OutputFormat::HlsTs || ts_output::fragmented_sources(&prepared)? {
             eligible_formats.push(OutputFormat::HlsTs);
         }
         if eligible_formats.contains(&OutputFormat::Mp4)
@@ -1552,7 +1552,14 @@ impl Converter {
             return Ok(proof);
         }
         if b.transport_index.is_some() {
-            return self.verify_transport_pair(a, b);
+            return if a.transport_index.is_some() {
+                self.verify_transport_pair(a, b)
+            } else {
+                self.backend.verify_transport(
+                    raw_audio_view(a, source_keys),
+                    raw_audio_view(b, result_keys),
+                )
+            };
         }
         if let Some(index) = a.transport_index {
             if b.playlist_reference.is_none() && !b.dash_reference {
@@ -2678,9 +2685,6 @@ impl Converter {
             hls_keys: request.hls_input_keys,
         };
         let input_report = self.inspect_input(request.input)?;
-        if request.format == OutputFormat::HlsTs && input_report.format != InputFormat::Hls {
-            return Err(ConversionError("ts-original-evidence-required"));
-        }
         let preparation = self
             .backend
             .scope(super::measurement::Phase::InputPreparation);

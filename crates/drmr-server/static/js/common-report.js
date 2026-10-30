@@ -316,7 +316,7 @@
       }
       if (conversion.processing) {
         var processing = conversion.processing;
-        var routes = ['progressive-mp4', 'fragmented-mp4', 'dash-presentation', 'fmp4-hls-presentation', 'mpeg-ts-hls', 'mpeg-ts-dash', 'mpeg-ts-sample-aes-hls', 'mpeg-ts-hls-ts', 'fmp4-segments', 'mpeg-ts-segments'];
+        var routes = ['progressive-mp4', 'fragmented-mp4', 'dash-presentation', 'fmp4-hls-presentation', 'mpeg-ts-hls', 'mpeg-ts-dash', 'mpeg-ts-sample-aes-hls', 'mpeg-ts-hls-ts', 'fmp4-hls-ts', 'fmp4-segments', 'mpeg-ts-segments'];
         var details = h('dl', { className: 'kv' }, word('dt', 'commonProcessing'), h('dd', null, code(routes.indexOf(processing.route) !== -1 ? processing.route : null)));
         var mode = ['segments', 'stitch'].indexOf(processing.mode) !== -1 && { segments: 'commonProcessingSegments', stitch: 'commonProcessingStitch' }[processing.mode];
         var boundaries = ['preserve', 'resegment', 'not-applicable'].indexOf(processing.boundaries) !== -1 && { preserve: 'commonBoundaryPreserve', resegment: 'commonBoundaryResegment', 'not-applicable': 'commonBoundaryNotApplicable' }[processing.boundaries];

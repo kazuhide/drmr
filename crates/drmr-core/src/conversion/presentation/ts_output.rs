@@ -1,10 +1,26 @@
-//! MPEG-TS output is reachable only with independently confirmed original transport anchors.
+//! MPEG-TS output is independently checked against complete original samples and clocks.
 use super::{
     ConversionError, ConversionReport, ConversionRequest, Converter, InputKeys, Inspection, Path,
     Prepared, TargetProtection, TrackKind, VerificationSource, Zeroizing, copy_private,
     descriptor_path, destination, hls, inspection, kind_order, prepare_presentation, secure_tree,
 };
-use std::io::Write as _;
+use std::{io::Write as _, path::PathBuf};
+
+pub(super) fn fragmented_sources(sources: &[Prepared]) -> Result<bool, ConversionError> {
+    if sources.is_empty()
+        || sources
+            .iter()
+            .any(|source| source.transport_index.is_some())
+    {
+        return Ok(false);
+    }
+    for source in sources {
+        if !super::super::audio::movie(&source.media)?.fragmented {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
 
 fn descriptor(path: &Path) -> Result<String, ConversionError> {
     let value = descriptor_path(path)?;
@@ -78,7 +94,8 @@ impl Converter {
         if self.layout_mode() == crate::conversion::layout::LayoutMode::Normalized {
             sources.sort_by_key(|source| kind_order(source.report.tracks[0].kind));
         }
-        require_transport_sources(&sources)?;
+        let package_inputs = self.transport_package_inputs(&sources, request, work.path())?;
+        let transport = package_inputs.is_none();
         let sample_input = sources.iter().any(|source| source.transport_sample);
         let destination = destination(request.output)?;
         let stage = self.output_stage(&destination)?;
@@ -89,7 +106,7 @@ impl Converter {
         } else {
             stage.path()
         };
-        self.package_transport(&sources, package_root, request)?;
+        self.package_transport(&sources, package_inputs.as_deref(), package_root, request)?;
         super::metadata::finish(
             package_root,
             crate::inspection::OutputFormat::HlsTs,
@@ -158,20 +175,96 @@ impl Converter {
             &stage.path().join("master.m3u8"),
             request.format,
         )?);
+        let input_format = input.format;
         Ok(ConversionReport {
             schema_version: 2,
             input,
             output,
             verification,
-            processing: Some(self.backend.processing(
-                inspection::ProcessingRouteId::MpegTsHlsTs,
-                if sample_input {
-                    inspection::InputPreparation::MpegTsSampleAesDecrypt
-                } else {
-                    inspection::InputPreparation::MpegTsDemux
-                },
+            processing: Some(transport_processing(
+                &self.backend,
+                input_format,
+                transport,
+                sample_input,
             )),
         })
+    }
+    fn transport_package_inputs(
+        &self,
+        sources: &[Prepared],
+        request: &ConversionRequest<'_>,
+        work: &Path,
+    ) -> Result<Option<Vec<PathBuf>>, ConversionError> {
+        if sources
+            .iter()
+            .all(|source| source.transport_index.is_some())
+        {
+            require_transport_sources(sources)?;
+            return Ok(None);
+        }
+        if !fragmented_sources(sources)? {
+            return Err(ConversionError("ts-output-profile-not-supported"));
+        }
+        self.fragmented_transport_inputs(sources, request, work)
+            .map(Some)
+    }
+    fn fragmented_transport_inputs(
+        &self,
+        sources: &[Prepared],
+        request: &ConversionRequest<'_>,
+        work: &Path,
+    ) -> Result<Vec<PathBuf>, ConversionError> {
+        if !self
+            .validate_prepared_sources(sources, request.input_keys)?
+            .passed
+        {
+            return Err(ConversionError("source-media-verification-failed"));
+        }
+        for source in sources {
+            if source.audio_presentation.is_none() {
+                let movie = super::super::native_media::inspect(&source.media, &self.backend.stop)?;
+                let track = movie
+                    .tracks
+                    .get(source.index)
+                    .ok_or(ConversionError("stream-selector-mismatch"))?;
+                if track
+                    .edits
+                    .iter()
+                    .any(|edit| edit.media_time != 0 || edit.duration != 0)
+                {
+                    return Err(ConversionError("ts-output-presentation-not-representable"));
+                }
+            }
+        }
+        let tracks = sources
+            .iter()
+            .map(|source| super::LocalTrack {
+                source: source.media.clone(),
+                index: source.index,
+                kind: source.report.tracks[0].kind,
+            })
+            .collect::<Vec<_>>();
+        let clocks = sources
+            .iter()
+            .map(super::TrackClock::from_prepared)
+            .collect::<Vec<_>>();
+        let directory = work.join("transport-inputs");
+        super::super::files::create_dir(&directory)?;
+        let (_, clears) = self.normalize_tracks(
+            &super::TrackConversionRequest {
+                tracks: &tracks,
+                output: request.output,
+                format: request.format,
+                target: request.target,
+                input_keys: request.input_keys,
+                output_key: None,
+                hls_key_uri: None,
+                hls_output_key: request.hls_output_key,
+            },
+            &directory,
+            Some(&clocks),
+        )?;
+        Ok(clears)
     }
     fn finish_transport_audio(
         &self,
@@ -196,6 +289,7 @@ impl Converter {
     fn package_transport(
         &self,
         sources: &[Prepared],
+        inputs: Option<&[PathBuf]>,
         root: &Path,
         request: &ConversionRequest<'_>,
     ) -> Result<(), ConversionError> {
@@ -212,7 +306,11 @@ impl Converter {
             // 90 kHz frame timestamp and avoids that extra interpolation.
             let exact_audio =
                 super::super::ts::requires_native_audio_mp4(source.transport_native.as_deref());
-            let input = descriptor(if exact_audio {
+            let input = descriptor(if let Some(inputs) = inputs {
+                inputs
+                    .get(ordinal)
+                    .ok_or(ConversionError("presentation-track-count-mismatch"))?
+            } else if exact_audio {
                 &source.media
             } else {
                 source
@@ -221,7 +319,9 @@ impl Converter {
                     .unwrap_or(&source.source)
             })?;
             let output = descriptor(&directory)?;
-            let index = if exact_audio {
+            let index = if inputs.is_some() {
+                0
+            } else if exact_audio {
                 source.index
             } else {
                 source
@@ -392,4 +492,29 @@ pub(super) fn single_audio_variant(root: &Path) -> Result<(), ConversionError> {
         .map_err(|_| ConversionError("output-staging-failed"))?
         .write_all(master.as_bytes())
         .map_err(|_| ConversionError("output-staging-failed"))
+}
+
+fn transport_processing(
+    backend: &super::super::backend::Backend,
+    input: inspection::InputFormat,
+    transport: bool,
+    sample_input: bool,
+) -> inspection::ActualProcessing {
+    let route = if transport {
+        inspection::ProcessingRouteId::MpegTsHlsTs
+    } else {
+        inspection::ProcessingRouteId::Fmp4HlsTs
+    };
+    let preparation = if !transport {
+        match input {
+            inspection::InputFormat::Dash => inspection::InputPreparation::LocalDashResources,
+            inspection::InputFormat::Hls => inspection::InputPreparation::LocalHlsResources,
+            inspection::InputFormat::Mp4 => inspection::InputPreparation::CompleteFile,
+        }
+    } else if sample_input {
+        inspection::InputPreparation::MpegTsSampleAesDecrypt
+    } else {
+        inspection::InputPreparation::MpegTsDemux
+    };
+    backend.processing(route, preparation)
 }

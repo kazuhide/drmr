@@ -1545,6 +1545,7 @@ const FIXED_INSPECTION_TOKENS: &[&str] = &[
     "mpeg-ts-dash",
     "mpeg-ts-hls",
     "mpeg-ts-hls-ts",
+    "fmp4-hls-ts",
     "mpeg-ts-sample-aes-hls",
     "multiple-mp4-movie-boxes",
     "no-supported-processing-route",

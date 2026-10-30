@@ -4,7 +4,7 @@ Encryption protects media samples. DRM signaling tells a player which license sy
 and key identifier to use. The common `convert` command can generate and check both
 the encrypted media and the corresponding DASH or HLS manifests.
 
-The default `auto` and explicit `stitch` routes accept completed video-on-demand **clear HLS with MPEG-TS segments**
+For fragmented-MP4 DRM output, the default `auto` and explicit `stitch` routes accept completed video-on-demand **clear HLS with MPEG-TS segments**
 and the existing qualified **clear MP4** profile: H.264 video with optional AAC
 audio. It does not accept existing DRM records or unknown
 MP4 initialization metadata for replacement. It does not contact a license server.
@@ -30,8 +30,12 @@ mandatory; recognizing an input DRM system alone does not qualify its media.
 encryption pattern inside media samples. HLS `SAMPLE-AES` protects codec samples in MPEG-TS; its signaling is
 different from the fragmented-MP4 representation.
 
-MPEG-TS output requires an admitted MPEG-TS source with original transport timing
-evidence. The qualified clear MP4 profile supports the fragmented-MP4 outputs.
+FairPlay MPEG-TS output also accepts qualified fragmented MP4 HLS, static DASH,
+or a fragmented MP4 file, including encrypted input with supplied keys. It uses
+`stitch` to prepare complete tracks and segment the TS output again. Every final
+encoded frame, supported playback range and timestamp is independently compared
+with the original. MP4 initial-audio edits that TS cannot represent are refused.
+The qualified clear progressive MP4 profile supports the fragmented-MP4 outputs.
 Other conversions remain available without these explicit DRM settings; see the
 [conversion support table](conversion-support.md).
 
@@ -162,6 +166,8 @@ drmr convert ./source/media.m3u8 --to cbcs --format hls \
 }
 ```
 
+The input may be a qualified clear or known-key encrypted TS or fragmented MP4
+presentation. Supply the appropriate `input` key entries for encrypted media.
 The explicit initialization vector (`iv`) is required for this output-key domain.
 It must agree with the value supplied by the FairPlay license service. MPEG-TS
 does not use an MP4 key identifier, so omit `kid`.

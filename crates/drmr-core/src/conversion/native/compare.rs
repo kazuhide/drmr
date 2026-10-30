@@ -278,6 +278,18 @@ impl Backend {
             fragmented_window(&media.media, track)?;
             admitted_controls(&media.media, track)?;
         }
+        if let Some(presentation) = media.audio_presentation {
+            let [track] = media.media.tracks.as_slice() else {
+                return Err(super::super::audio_presentation::MISMATCH);
+            };
+            if presentation
+                .claim()
+                .bind(super::media::audio_evidence(track)?)?
+                != presentation
+            {
+                return Err(super::super::audio_presentation::MISMATCH);
+            }
+        }
         let mut result = report(true, true, true);
         result.scope = VerificationScope::SourceAdmission;
         result.refresh_passed();
@@ -297,7 +309,8 @@ impl Backend {
         }
         let mut metadata = true;
         let mut payload = true;
-        let mut timing = boundaries_equal(source, output);
+        let mut timing = boundaries_equal(source, output)
+            && source.audio_presentation == output.audio_presentation;
         for (first, second) in a.tracks.iter().zip(&b.tracks) {
             let compared = compare_tracks(
                 a,

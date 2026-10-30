@@ -40,6 +40,7 @@ impl Profile {
             "mpeg-ts-dash",
             "mpeg-ts-sample-aes-hls",
             "mpeg-ts-hls-ts",
+            "fmp4-hls-ts",
             "fmp4-segments",
             "mpeg-ts-segments",
         ]
@@ -615,6 +616,7 @@ mod tests {
             ("mpeg-ts-dash", true, true),
             ("mpeg-ts-sample-aes-hls", true, true),
             ("mpeg-ts-hls-ts", true, true),
+            ("fmp4-hls-ts", true, true),
             ("fmp4-segments", false, false),
             ("mpeg-ts-segments", false, true),
         ] {

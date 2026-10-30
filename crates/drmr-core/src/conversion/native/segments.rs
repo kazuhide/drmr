@@ -2,6 +2,7 @@
 use super::media::{Media, Track, accumulator_with_clock};
 use crate::conversion::{
     ConversionError, InputKeys,
+    audio_presentation::{self, AudioClaim, AudioPresentation},
     backend::Backend,
     native_media::{self, SegmentEvidence, SegmentInput, SegmentReceipt},
 };
@@ -15,6 +16,7 @@ const MAX_BOUNDARY_BYTES: usize = 64 * 1024 * 1024;
 pub(in crate::conversion) struct SegmentedMedia {
     pub media: Media,
     pub boundaries: Vec<SegmentEvidence>,
+    pub audio_presentation: Option<AudioPresentation>,
 }
 
 struct Counted {
@@ -91,6 +93,39 @@ fn count_resources(
     Ok(Counted { receipts, totals })
 }
 
+fn raw_movie(
+    input: &SegmentInput,
+) -> Result<(native_media::Movie, Option<(AudioClaim, u32)>), ConversionError> {
+    let mut movie = input.movie().clone();
+    let claim = audio_presentation::guarded_claim(input.movie_metadata())?;
+    if let Some((_, track_id)) = claim {
+        let [track] = movie.tracks.as_mut_slice() else {
+            return Err(audio_presentation::MISMATCH);
+        };
+        if track.track_id != track_id || track.edits.len() != 2 {
+            return Err(audio_presentation::MISMATCH);
+        }
+        // The canonical empty gap and matching media origin cancel exactly.
+        // Accumulate unchanged raw sample clocks; bind the finite end afterward.
+        track.edits.clear();
+    }
+    Ok((movie, claim))
+}
+
+fn bind_audio(
+    claim: Option<(AudioClaim, u32)>,
+    media: &Media,
+) -> Result<Option<AudioPresentation>, ConversionError> {
+    claim
+        .map(|(claim, _)| {
+            let [track] = media.tracks.as_slice() else {
+                return Err(audio_presentation::MISMATCH);
+            };
+            claim.bind(super::media::audio_evidence(track)?)
+        })
+        .transpose()
+}
+
 fn collect_counted(
     input: &SegmentInput,
     resources: &[PathBuf],
@@ -102,7 +137,7 @@ fn collect_counted(
     if resources.len() != counted.receipts.len() {
         return Err(INCOMPLETE);
     }
-    let mut movie = input.movie().clone();
+    let (mut movie, claim) = raw_movie(input)?;
     if let Some(clock) = clock {
         clock.check_movie(&movie)?;
     }
@@ -115,10 +150,16 @@ fn collect_counted(
     let mut offsets = vec![0_u64; movie.tracks.len()];
     for (resource, expected) in resources.iter().zip(&counted.receipts) {
         backend.check_cancelled()?;
-        let (observed, receipt) = input.scan_with_evidence(
+        let (observed, receipt) = input.scan_with_fragment_metadata(
             resource,
             keys,
             &backend.stop,
+            &mut |bytes| {
+                if let Some((_, track_id)) = claim {
+                    audio_presentation::guarded_fragment(bytes, track_id)?;
+                }
+                Ok(())
+            },
             &mut |descriptor, info, bytes| {
                 let (samples, _) = pending.get_mut(descriptor.index).ok_or(BAD)?;
                 let mut info = info.clone();
@@ -162,9 +203,11 @@ fn collect_counted(
     }
     backend.check_cancelled()?;
     let media = Media { movie, tracks };
+    let audio_presentation = bind_audio(claim, &media)?;
     super::duration_headers::validate(&media)?;
     let result = SegmentedMedia {
         media,
+        audio_presentation,
         boundaries: counted
             .receipts
             .into_iter()

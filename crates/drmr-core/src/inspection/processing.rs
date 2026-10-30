@@ -13,6 +13,7 @@ pub enum ProcessingRouteId {
     MpegTsDash,
     MpegTsSampleAesHls,
     MpegTsHlsTs,
+    Fmp4HlsTs,
     Fmp4Segments,
     MpegTsSegments,
 }
@@ -27,6 +28,7 @@ impl ProcessingRouteId {
             Self::MpegTsDash => "mpeg-ts-dash",
             Self::MpegTsSampleAesHls => "mpeg-ts-sample-aes-hls",
             Self::MpegTsHlsTs => "mpeg-ts-hls-ts",
+            Self::Fmp4HlsTs => "fmp4-hls-ts",
             Self::Fmp4Segments => "fmp4-segments",
             Self::MpegTsSegments => "mpeg-ts-segments",
         }
@@ -53,6 +55,9 @@ impl ProcessingRouteId {
             }
             Self::MpegTsHlsTs => {
                 "Admit the original local transport streams, decrypt when needed, bind complete tracks to their original encoded frames and timestamps, then package MPEG-TS HLS with the requested protection and verify the actual final playlists against the original media."
+            }
+            Self::Fmp4HlsTs => {
+                "Admit complete fragmented MP4 tracks, decrypt when needed, package MPEG-TS HLS with the requested protection, and independently compare every encoded frame and clock with the original media."
             }
             Self::MpegTsSampleAesHls => {
                 "Validate the original SAMPLE-AES transport streams, decrypt encoded frames with supplied keys and initialization vectors, verify every decrypted frame and original timestamp, then package fragmented MP4 HLS and compare its actual playlists with the original media."

@@ -46,6 +46,7 @@ and `boundaries` separately from the handler identifier. See
 | `mpeg-ts-sample-aes-hls` | Known-key SAMPLE-AES transport streams to fragmented MP4 HLS. Decrypted encoded frames and original clocks are checked before packaging; final playlists are verified against the original encrypted source. | Shaka Packager |
 | `mpeg-ts-dash` | Supported clear, AES-128, or SAMPLE-AES TS input to clear, `cenc`, or `cbcs` static DASH. Video, audio, or both retain their original frame and clock evidence; the final MPD and referenced media are read again before publication. | Shaka Packager |
 | `mpeg-ts-hls-ts` | Supported original TS input to TS HLS, with clear, whole-resource AES-128, or SAMPLE-AES protection. Original frame and clock evidence qualifies the private reference; final playlists are compared against it. | Shaka Packager |
+| `fmp4-hls-ts` | Qualified fragmented MP4 file, HLS or DASH to TS HLS, with clear, AES-128 or FairPlay SAMPLE-AES output. Complete tracks are prepared and the final encoded frames, clocks and playlists are independently checked. | Shaka Packager |
 
 The table describes native conversion. Add FFmpeg and ffprobe for `--decode`,
 and Shaka Packager for existing TS complete-decoding preparation;
@@ -176,3 +177,17 @@ The fixed `sample_coverage_reason` explains unknown evidence: `sample-auxiliary-
 Metadata-only analysis reads at most 16 MiB of MP4 movie metadata and skips media and fragment payloads. Local HLS follows bounded child playlists inside its directory tree. URL metadata reads HLS playlists or a DASH MPD under the fetch policy, never initialization files, media segments or keys; remote MP4 requires valid Range responses. These temporary reads do not retain an executable-plan source. The additional facts do not widen those reads. DASH period counts describe direct, supported-namespace `Period` declarations, not verified durations or a complete media timeline. MP4 and HLS have no DASH period count.
 
 Metadata report version-one additions remain optional: `Inspection.details`, `ConversionPlan.processing`, and `ConversionReport.processing`. An absent field in an older report means the information was not supplied. It never means clear media, a selected route, or successful verification. Conditional plans and saved reports are not executable instructions. The separate `kind: "execution-plan"` format saves typed local intent and source identity; execution still revalidates the actual media and runtime configuration. License and device playback remain outside the media-identity checks.
+
+### fmp4-hls-ts
+
+Use `--format hls-ts` with `--to clear`, `--to hls-aes128`, or
+`--to hls-sample-aes`. Supplied input keys decrypt CENC/CBCS samples or outer
+HLS AES-128 protection; the source is retained unchanged. Normalization is
+checked in Rust before TS packaging, and the final HLS presentation is reopened
+for native media and manifest checks. Additional `--decode` checks complete
+media decoding with FFmpeg and ffprobe.
+
+This container change uses `stitch`, including segmentation of its TS output.
+It does not preserve the original fMP4 segment boundaries. MP4 initial audio
+edits that TS cannot represent are refused; supported final AAC playback ranges
+remain explicit. See [conversion support](conversion-support.md#mpeg-transport-stream-output).

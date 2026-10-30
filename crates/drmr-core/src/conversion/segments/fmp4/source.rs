@@ -155,20 +155,22 @@ impl DashSource {
             if declared != TrackKind::Unknown && declared != representation.kind {
                 return Err(ConversionError("track-role-mismatch"));
             }
+            let mut clock = FragmentClock::read(&representation.initialization)?;
             let resources = representation
                 .resources
                 .into_iter()
                 .map(|(path, boundary)| {
+                    // DASH addressing retains complete coded intervals. HLS EXTINF
+                    // instead describes the visible interval, including a final AAC clip.
+                    let (first, end, scale) = clock.segment_presentation(&path)?;
                     Ok(Resource {
                         path,
-                        duration: crate::conversion::finite::manifest::seconds(
-                            boundary.duration,
-                            boundary.timescale,
-                        )?,
+                        duration: crate::conversion::finite::manifest::seconds(end - first, scale)?,
                         dash: boundary,
                     })
                 })
                 .collect::<Result<_, ConversionError>>()?;
+            clock.presentation_window()?;
             parts.push(Part {
                 initialization: representation.initialization,
                 resources,

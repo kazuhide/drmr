@@ -55,7 +55,7 @@ enum Command {
         #[arg(long)]
         decode: bool,
         /// Check a route's native tools, adding decoder tools with --decode; other tools are optional.
-        #[arg(long, default_value = "all", value_parser = ["all", "progressive-mp4", "fragmented-mp4", "dash-presentation", "fmp4-hls-presentation", "mpeg-ts-hls", "mpeg-ts-dash", "mpeg-ts-sample-aes-hls", "mpeg-ts-hls-ts", "fmp4-segments", "mpeg-ts-segments"])]
+        #[arg(long, default_value = "all", value_parser = ["all", "progressive-mp4", "fragmented-mp4", "dash-presentation", "fmp4-hls-presentation", "mpeg-ts-hls", "mpeg-ts-dash", "mpeg-ts-sample-aes-hls", "mpeg-ts-hls-ts", "fmp4-hls-ts", "fmp4-segments", "mpeg-ts-segments"])]
         route: String,
     },
     /// Read metadata or check complete MP4, DASH, or HLS input media.
