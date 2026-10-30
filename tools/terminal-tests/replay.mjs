@@ -7,13 +7,14 @@ const require = createRequire(import.meta.url);
 const { Terminal } = require('@xterm/headless');
 const engine = require('@xterm/headless/package.json');
 if (engine.version !== '6.0.0') throw new Error('terminal-engine-version');
-const history = 'Output before conversion';
+const history = ['Output before conversion', 'user@host $ drmr convert'];
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const dashboard = /^\s*(?:drmr convert\b|Source\b|Overall\b|Renditions\b|(?:S|[1-9]\d*) (?:#\d+|(?:Video|Audio|Text) \d+|Output\b|DASH\b|HLS\b|MP4\b))/;
 const expectedFormats = ['DASH fMP4', 'HLS fMP4'];
 const outputRow = /^([12]) (Output|DASH fMP4|HLS fMP4) +(.+)$/;
 const childRow = /^(?:S|[12]) (?:#[12]|(?:Video|Audio|Text) [12]) +(?:Waiting|Active|Done \(step\)|Stopped)(?: +.*)?$/;
 const hiddenRow = /^\d+ hidden: \d+ active, \d+ waiting$/;
+const sameRows = (left, right) => left.length === right.length && left.every((line, index) => line === right[index]);
 
 function paintLayout(text) {
   const lines = text.filter(line => line.trim());
@@ -29,22 +30,33 @@ function paintLayout(text) {
       tail.every(line => line === 'Renditions' || childRow.test(line) || hiddenRow.test(line)) };
 }
 
-function primaryGrammar(normal, snapshots, capture) {
+function primaryGrammar(normal, snapshots, base, capture) {
   const label = { success: 'Finished', cancel: 'Cancelled', failure: 'Failed' }[capture.outcome];
   const code = capture.outcome === 'success' ? '' : capture.error_code;
   if (!label || (capture.outcome !== 'success' && !/^[a-z0-9-]+$/.test(code || ''))) return false;
   const footer = normal.filter(line => new RegExp('^' + label + ' convert in \\d+\\.\\ds' +
     (code ? ' \\| ' + code : '') + '$').test(line));
   if (footer.length !== 1) return false;
-  const expected = [history, footer[0]];
+  if (!base || history.some((line, index) => base[index] !== line)) return false;
+  // Width changes can leave earlier complete paints in scrollback. They must
+  // still be dashboard rows, rather than unowned output hidden by later erases.
+  const earlier = base.slice(history.length);
+  for (let start = 0; start < earlier.length;) {
+    if (!/^drmr convert\b/.test(earlier[start])) return false;
+    let end = start + 1;
+    while (end < earlier.length && !/^drmr convert\b/.test(earlier[end])) end++;
+    if (!paintLayout(earlier.slice(start, end)).valid_layout) return false;
+    start = end;
+  }
+  const expected = [...base, footer[0]];
   if (capture.outcome !== 'success') {
     if (capture.stop_phase === 'source') expected.push('Source       Stopped');
     else expected.push('Source       Checked', '1 DASH fMP4  Stopped', '2 Output     Not started');
   }
   if (normal.length !== expected.length || normal.some((line, index) => line !== expected[index])) return false;
-  // Every visible primary-screen prefix must belong to the final transcript. This
-  // also rejects stale rows which a later cursor move or erase happens to hide.
-  return snapshots.every(lines => lines[0] === history && lines.length <= expected.length && lines.every((line, index) =>
+  // After the last live frame is cleared, only the final transcript may appear.
+  // A stopped row written and erased before the footer is still rejected.
+  return snapshots.every(lines => lines.length <= expected.length && lines.every((line, index) =>
     index === lines.length - 1 ? expected[index].startsWith(line) : expected[index] === line));
 }
 
@@ -53,13 +65,10 @@ export async function replayCapture(capture) {
   if (raw.length > 262144 || capture.events.length > 8192) throw new Error('capture-limit');
   const terminal = new Terminal({ cols: capture.columns, rows: capture.rows,
     allowProposedApi: true, scrollback: 1000, convertEol: false, logLevel: 'off' });
-  let cursorVisible = true, alternateEntered = false, alternateLeft = false, synchronized = false;
+  let cursorVisible = true, alternateUsed = false, synchronized = false;
   for (const final of ['h', 'l']) terminal.parser.registerCsiHandler({ prefix: '?', final }, parameters => {
     if (parameters.includes(25)) cursorVisible = final === 'h';
-    if (parameters.includes(1049)) {
-      if (final === 'h') alternateEntered = true;
-      else alternateLeft = true;
-    }
+    if ([47, 1047, 1049].some(mode => parameters.includes(mode))) alternateUsed = true;
     if (parameters.includes(2026)) synchronized = final === 'h';
     return false;
   });
@@ -71,15 +80,24 @@ export async function replayCapture(capture) {
   };
   const allNormalRows = () => {
     const buffer = terminal.buffer.normal;
-    return Array.from({ length: buffer.length }, (_, index) =>
-      buffer.getLine(index)?.translateToString(true) ?? '');
+    const lines = [];
+    for (let index = 0; index < buffer.length; index++) {
+      const line = buffer.getLine(index);
+      const text = line?.translateToString(false) ?? '';
+      if (line?.isWrapped && lines.length) lines[lines.length - 1] += text;
+      else lines.push(text);
+    }
+    return lines.map(line => line.trimEnd()).filter(line => line.trim());
   };
-  const frame = () => {
-    const text = rows();
+  const frame = (writtenHeaders = null) => {
+    const normal = allNormalRows();
+    const header = normal.findLastIndex(line => /^drmr convert\b/.test(line));
+    const text = header < 0 ? [] : normal.slice(header);
     const bars = text.flatMap(line => [...line.matchAll(/\[[^\]\r\n]*\]/g)]
       .map(match => ({ column: match.index, ascii: /^[\x20-\x7e]+$/.test(match[0]) })));
     return { columns: terminal.cols, rows: terminal.rows,
-      header_count: text.filter(line => /^drmr convert\b/.test(line)).length,
+      header_count: writtenHeaders ?? text.filter(line => /^drmr convert\b/.test(line)).length,
+      header_row: header,
       source_count: text.filter(line => /^Source\b/.test(line)).length,
       overall_count: text.filter(line => /^Overall\b/.test(line)).length,
       dashboard_rows: text.filter(line => dashboard.test(line)).length,
@@ -89,17 +107,28 @@ export async function replayCapture(capture) {
   // Observe complete paint transactions, including a delimiter split across reads.
   const ends = new Set([...raw.toString('latin1').matchAll(/\x1b\[\?2026l/g)]
     .map(match => match.index + match[0].length));
+  const starts = new Map([...raw.toString('latin1').matchAll(/\x1b\[\?2026h/g)]
+    .map(match => [match.index + match[0].length, match.index]));
   const controls = [...raw.toString('latin1').matchAll(/\x1b\[[0-?]*[ -/]*[@-~]|[\r\n\b\t]/g)];
   const cuts = new Set([...ends, ...controls.flatMap(match => [match.index, match.index + match[0].length])]);
   const frames = [];
   const primarySnapshots = [];
-  let consumed = 0, resizedDuringPaint = false;
+  const resultSnapshots = [];
+  let consumed = 0, resizedDuringPaint = false, transaction = null, closedBase = null;
+  let lastFrameClosedSafely = false, resizedInTransaction = false;
+  let geometry = 0, previousPaint = null, priorFramesReplaced = true;
   try {
-    await write(history + '\r\n');
+    await write(history.join('\r\n') + '\r\n');
     for (const event of capture.events) {
       if (event.offset !== consumed) throw new Error('capture-byte-order');
       if (event.kind === 'resize') {
-        if (synchronized && terminal.buffer.active.type === 'alternate') resizedDuringPaint = true;
+        if (event.columns !== terminal.cols || event.rows !== terminal.rows) {
+          geometry++;
+          if (synchronized) {
+            resizedDuringPaint = true;
+            resizedInTransaction = true;
+          }
+        }
         terminal.resize(event.columns, event.rows);
       } else if (event.kind === 'write') {
         const end = consumed + event.length;
@@ -109,19 +138,46 @@ export async function replayCapture(capture) {
         for (const boundary of boundaries) {
           await write(raw.subarray(consumed, boundary));
           consumed = boundary;
+          if (starts.has(boundary)) {
+            transaction = starts.get(boundary);
+            resizedInTransaction = false;
+          }
           if (terminal.buffer.active.type === 'normal') {
-            primarySnapshots.push(allNormalRows().filter(line => line.trim()));
+            const normal = allNormalRows();
+            primarySnapshots.push(normal);
+            if (closedBase) resultSnapshots.push(normal);
             if (primarySnapshots.length > 1024) throw new Error('primary-observation-limit');
           }
-          if (ends.has(boundary) && terminal.buffer.active.type === 'alternate') {
-            frames.push({ offset: boundary, elapsed_seconds: event.elapsed_seconds, ...frame() });
+          if (ends.has(boundary) && transaction !== null) {
+            const headers = [...raw.subarray(transaction, boundary).toString('latin1').matchAll(/drmr convert\b/g)].length;
+            if (headers) {
+              const current = frame(headers);
+              const normal = allNormalRows();
+              const prefix = normal.slice(0, current.header_row);
+              const mayRetain = previousPaint && (geometry !== previousPaint.geometry || previousPaint.uncertain);
+              // Ordinary redraws replace the previous owned frame. Its rows may
+              // join history only at a recorded geometry-change boundary.
+              priorFramesReplaced &&= sameRows(prefix, previousPaint?.prefix ?? history) ||
+                Boolean(mayRetain && sameRows(prefix, previousPaint.normal));
+              previousPaint = { prefix, normal, geometry, uncertain: resizedInTransaction };
+              frames.push({ offset: boundary, elapsed_seconds: event.elapsed_seconds, ...current });
+            } else if (frames.length && !closedBase) {
+              closedBase = allNormalRows();
+              resultSnapshots.push(closedBase);
+              // A resize inside the last paint makes its row footprint uncertain.
+              // Keeping that complete paint is safer than erasing prior history.
+              const mayRetain = geometry !== previousPaint.geometry || previousPaint.uncertain;
+              lastFrameClosedSafely = sameRows(closedBase, previousPaint.prefix) ||
+                (mayRetain && sameRows(closedBase, previousPaint.normal));
+            }
+            transaction = null;
           }
         }
       } else throw new Error('capture-event-kind');
     }
     if (consumed !== raw.length) throw new Error('capture-byte-total');
     const final = frame();
-    const normal = allNormalRows().filter(line => line.trim());
+    const normal = allNormalRows();
     const summary = capture.outcome === 'success' ? /^Finished convert in / :
       capture.outcome === 'cancel' ? /^Cancelled convert in / : /^Failed convert in /;
     let introduced = false;
@@ -135,7 +191,7 @@ export async function replayCapture(capture) {
         return true;
       }) && (value.output_parents.every(format => format === 'Output') || value.source_ready);
     });
-    const transcriptValid = primaryGrammar(normal, primarySnapshots, capture);
+    const transcriptValid = priorFramesReplaced && primaryGrammar(normal, resultSnapshots, closedBase, capture);
     const sourceStop = capture.outcome !== 'success' && capture.stop_phase === 'source';
     const assertions = {
       completed_dashboard_frames: frames.length >= 3,
@@ -146,11 +202,16 @@ export async function replayCapture(capture) {
         (capture.outcome !== 'success' || formats.every((format, index) => format === expectedFormats[index])),
       fixed_bar_column: frames.every(value => value.columns < 80 || value.bar_columns.every(column => column === 13)),
       observed_ascii_bars: frames.some(value => value.bar_columns.length) && frames.every(value => value.ascii_bars),
-      final_dashboard_clear: transcriptValid,
+      final_dashboard_cleanup_safe: lastFrameClosedSafely && transcriptValid,
+      prior_frames_replaced_without_resize: priorFramesReplaced,
       primary_transcript_valid: transcriptValid,
-      original_history_preserved: normal.filter(line => line === history).length === 1,
+      original_history_preserved: primarySnapshots.every(lines => history.every((line, index) => lines[index] === line)),
+      dashboard_below_command: frames.every(value => value.header_row >= history.length),
+      no_alternate_screen: !alternateUsed,
+      no_screen_clear: !/\x1b\[[0-9;]*J/.test(raw.toString('latin1')),
+      no_absolute_cursor_position: !/\x1b\[[0-9;]*[Hf]/.test(raw.toString('latin1')),
       final_summary_present: rows().some(line => summary.test(line)),
-      final_normal_buffer: final.buffer === 'normal' && alternateEntered && alternateLeft,
+      final_normal_buffer: final.buffer === 'normal' && !alternateUsed,
       final_cursor_visible: cursorVisible,
       synchronized_output_closed: !synchronized,
       resize_during_synchronized_paint: !capture.require_mid_draw || resizedDuringPaint,

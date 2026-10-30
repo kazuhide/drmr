@@ -76,7 +76,10 @@ def capture(owner, binary, source, keys, outputs, directory, environment, outcom
         conversion_environment.pop("NO_COLOR", None)
     master, slave = pty.openpty()
     attributes = termios.tcgetattr(slave)
-    attributes[1] &= ~termios.OPOST
+    if no_color:
+        attributes[1] |= termios.OPOST | termios.ONLCR
+    else:
+        attributes[1] &= ~termios.OPOST
     attributes[3] &= ~termios.ECHO
     termios.tcsetattr(slave, termios.TCSANOW, attributes)
     baseline_attributes = termios.tcgetattr(slave)
@@ -180,6 +183,7 @@ def capture(owner, binary, source, keys, outputs, directory, environment, outcom
         processing["owned_tools_reaped"] = owner.idle()
         return {"passed": screen["passed"] and all(processing.values()), "outcome": outcome,
                 "no_color": no_color, "tty_input": tty_input, "processing": processing,
+                "onlcr": no_color,
                 "workers": workers, "delay_phase": "cenc-output",
                 "conversion_decode_requested": False, "independent_verification_decode_requested": outcome == "success",
                 "stdout_sha256": digest(result_bytes), "terminal": screen}

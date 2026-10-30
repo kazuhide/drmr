@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn screen_switching_requires_a_known_terminal_family() {
+fn inline_updates_require_a_known_terminal_family() {
     for term in [
         "xterm",
         "xterm-256color",
@@ -17,7 +17,7 @@ fn screen_switching_requires_a_known_terminal_family() {
         "vte-256color",
         "st-256color",
     ] {
-        assert!(supports_screen_switching(Some(term)), "{term}");
+        assert!(supports_inline_updates(Some(term)), "{term}");
     }
     for term in [
         None,
@@ -31,7 +31,7 @@ fn screen_switching_requires_a_known_terminal_family() {
         Some("xterminal"),
         Some("screenly"),
     ] {
-        assert!(!supports_screen_switching(term), "{term:?}");
+        assert!(!supports_inline_updates(term), "{term:?}");
     }
 }
 
@@ -143,7 +143,7 @@ fn native_console_without_term_enables_vt_and_restores_output_mode() {
 }
 
 #[test]
-fn screen_entry_paints_and_restore_have_one_ordered_owner() {
+fn inline_rows_are_erased_only_by_their_ordered_owner() {
     let terminal = LiveTerminal::for_test(120, 24);
     let mut out = b"preceding partial line".to_vec();
     terminal.draw(&mut out, "first\nsecond").unwrap();
@@ -151,12 +151,13 @@ fn screen_entry_paints_and_restore_have_one_ordered_owner() {
     terminal.close(&mut out).unwrap();
     terminal.close(&mut out).unwrap();
     let text = String::from_utf8(out).unwrap();
-    assert!(text.starts_with(&format!("preceding partial line{ENTER}{PAINT}")));
-    assert_eq!(text.matches(ENTER).count(), 1);
-    assert_eq!(text.matches(PAINT).count(), 2);
+    assert!(text.starts_with(&format!("preceding partial line{PAINT}{ENTER}")));
+    assert_eq!(text.matches(PAINT).count(), 3);
     assert!(text.contains(&format!("first\r\nsecond{END_PAINT}")));
     assert!(text.ends_with(LEAVE));
-    assert_eq!(text.matches("\x1b[?1049l").count(), 1);
+    assert!(!text.contains("\x1b[?1049"));
+    assert!(!text.contains("\x1b[H"));
+    assert!(!text.contains("\x1b[2J"));
     assert!(!text.contains("\x1b[3J"));
     assert!(!text.contains("\x1b[?25"));
 }
@@ -225,7 +226,7 @@ fn partial_entry_and_paint_failure_still_allow_restoration() {
         };
         assert!(terminal.draw(&mut out, "first\nsecond").is_err());
         assert_eq!(out.bytes.len(), limit);
-        // A failed alternate-screen entry never proceeds to the screen clear.
+        // Partial writes never include a full-screen clear.
         if limit < ENTER.len() {
             assert!(!out.bytes.windows(4).any(|bytes| bytes == b"\x1b[2J"));
         }
@@ -315,6 +316,76 @@ fn panic_restore_precedes_the_existing_diagnostic_hook() {
     assert_eq!(
         text.matches(LEAVE).count(),
         1,
-        "panic cleanup must not restore the saved cursor twice"
+        "panic cleanup must not move back over the diagnostic"
     );
+}
+
+#[test]
+fn inline_progress_never_switches_or_clears_the_terminal_screen() {
+    let terminal = LiveTerminal::for_test(120, 24);
+    let mut out = b"Earlier command output\r\n$ drmr convert source\r\n".to_vec();
+    terminal
+        .draw(&mut out, "drmr convert\nSource checking")
+        .unwrap();
+    terminal
+        .draw(&mut out, "drmr convert\nSource checked")
+        .unwrap();
+    terminal.close(&mut out).unwrap();
+    let text = String::from_utf8(out).unwrap();
+    for control in ["\x1b[?1049", "\x1b[H", "\x1b[2J", "\x1b[3J"] {
+        assert!(
+            !text.contains(control),
+            "unexpected screen control {control:?}"
+        );
+    }
+    assert!(text.starts_with("Earlier command output\r\n$ drmr convert source\r\n"));
+}
+
+#[test]
+fn geometry_changes_keep_the_old_snapshot_in_history() {
+    let terminal = LiveTerminal::for_test(120, 24);
+    let mut out = Vec::new();
+    terminal.draw(&mut out, "first\nold row").unwrap();
+    *terminal.dimensions.as_ref().unwrap().lock().unwrap() = (24, 80);
+    let before = out.len();
+    terminal.draw(&mut out, "second\nnew row").unwrap();
+    let changed = String::from_utf8(out[before..].to_vec()).unwrap();
+    assert!(changed.starts_with(&format!("{PAINT}{ENTER}")));
+    assert!(!changed.contains("\x1b[2K"));
+    assert!(!changed.contains('A'));
+    terminal.close(&mut out).unwrap();
+}
+
+#[test]
+fn interrupted_repaint_does_not_guess_the_previous_cursor_position() {
+    let terminal = LiveTerminal::for_test(120, 24);
+    let mut out = Interrupted::default();
+    terminal.draw(&mut out, "first\nsecond").unwrap();
+    out.remaining = Some(PAINT.len() + 1);
+    assert!(terminal.draw(&mut out, "replacement").is_err());
+    out.remaining = None;
+    let before = out.bytes.len();
+    terminal.close(&mut out).unwrap();
+    let cleanup = String::from_utf8(out.bytes[before..].to_vec()).unwrap();
+    assert!(!cleanup.contains("\x1b[2K"));
+    assert!(!cleanup.contains('A'));
+    assert!(cleanup.ends_with(LEAVE));
+}
+
+#[test]
+fn a_frame_laid_out_before_resizing_is_not_written_or_claimed() {
+    let terminal = LiveTerminal::for_test(120, 24);
+    let layout_size = terminal.size();
+    let message = format!("drmr convert{:>107}", "elapsed");
+    terminal.resize_for_test(40, 24);
+    let mut out = Vec::new();
+    terminal
+        .draw_at_size(&mut out, &message, layout_size)
+        .unwrap();
+    assert!(
+        out.is_empty(),
+        "an obsolete layout must wait for the next update"
+    );
+    assert!(terminal.session.lock().unwrap().frame.is_none());
+    assert_eq!(layout_size, (24, 120));
 }
