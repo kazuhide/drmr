@@ -66,18 +66,19 @@ def keys(profile, kid, key, iv, uri):
     value = {"key": key}
     if protection in ("cenc", "cbcs"):
         value["kid"] = kid
-    if container.startswith("hls-"):
+    if container.startswith("hls-") and protection != "cenc":
         value["hls_key_uri"] = uri
     if protection == "hls-sample-aes":
         value["iv"] = iv
-    if container == "dash":
+    requested_drms = CONTRACT.drms(profile)
+    if "widevine" in requested_drms:
         payload = bytes.fromhex("1210" + kid)
         pssh = struct.pack(">I4sI", 32 + len(payload), b"pssh", 0) + bytes.fromhex("edef8ba979d64acea3c827dcd51d21ed")
         pssh += struct.pack(">I", len(payload)) + payload
         value["signaling"] = {"system": "multi-drm", "widevine_pssh": pssh.hex(),
                               "playready_license_url": "https://license.example.invalid/roundtrip"}
-    elif container.startswith("hls-") and protection in ("cbcs", "hls-sample-aes"):
-        value["signaling"] = {"system": "multi-drm", "fairplay": True}
+    if "fairplay" in requested_drms:
+        value.setdefault("signaling", {"system": "multi-drm"})["fairplay"] = True
     return value
 
 
@@ -113,15 +114,23 @@ def manifest_profile(path, profile):
         key_lines = [line for line in text.splitlines() if line.startswith("#EXT-X-KEY:")]
         require((not key_lines) if method is None else bool(key_lines)
                 and all("METHOD=" + method + "," in line for line in key_lines), "roundtrip-hls-profile-invalid")
-        if CONTRACT.drms(profile):
-            require(all('KEYFORMAT="com.apple.streamingkeydelivery"' in line for line in key_lines),
-                    "roundtrip-fairplay-profile-invalid")
+        requested = CONTRACT.drms(profile)
+        if requested:
+            identifiers = {"fairplay": "com.apple.streamingkeydelivery", "playready": "com.microsoft.playready",
+                           "widevine": "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"}
+            found = [identifier for line in key_lines for identifier in identifiers.values()
+                     if f'KEYFORMAT="{identifier}"' in line]
+            require(len(key_lines) == len(requested) and len(found) == len(requested)
+                    and set(found) == {identifiers[drm] for drm in requested}
+                    and all('KEYFORMATVERSIONS="1"' in line for line in key_lines)
+                    and (container != "hls-fmp4" or all(",IV=" not in line for line in key_lines)),
+                    "roundtrip-hls-drm-profile-invalid")
     return CONTRACT.drms(profile)
 
 
 def proof(value, profile):
     result = CONTRACT.EVIDENCE.v2_proof(value)
-    CONTRACT.native_proof(result, profile[0])
+    CONTRACT.native_proof(result, profile[0], profile[1])
     return result
 
 
@@ -163,8 +172,14 @@ class Executor:
     def check_decoder_guards(self, root):
         runner = self.runner(root)
         for tool in ("ffmpeg", "ffprobe"):
+            executable = shutil.which(tool, path=runner.environment["PATH"])
+            expected = self.decoder_guards / (tool + (".exe" if os.name == "nt" else ""))
+            require(executable is not None and Path(executable).samefile(expected), "roundtrip-decoder-guard-invalid")
             try:
-                runner.run([tool, "-version"], "decoder-guard", 5)
+                # Windows Python executable lookup does not consistently use
+                # env=PATH. Resolve that exact restricted path first, then run
+                # its executable explicitly; no real decoder is selected.
+                runner.run([executable, "-version"], "decoder-guard", 5)
             except SUPPORT.Refusal as error:
                 require(str(error) in ("command-failed", "command-unavailable"), "roundtrip-decoder-guard-invalid")
             else:
@@ -184,13 +199,6 @@ class Executor:
         value = runner.json([self.cli, "verify", output, "--source", source, "--keys-file", key_file,
                              "--packager-bin", self.packager, "--max-workers", "1", "--json"], stage)
         return proof(value.get("verification", value), profile)
-
-    def track_kind(self, path, runner):
-        value = runner.json([self.cli, "analyze", "--metadata-only", path, "--json"], "fixture-track-kind")
-        tracks = value.get("tracks", [])
-        require(value.get("format") == "mp4" and len(tracks) == 1 and tracks[0].get("kind") in ("audio", "video"),
-                "roundtrip-fixture-track-invalid")
-        return tracks[0]["kind"]
 
     def convert(self, source, profile, layout, root):
         root.mkdir(mode=0o700)
@@ -237,25 +245,6 @@ def fixture_profiles(executor, seeds, root):
                                 "final_presented_samples": 240 if rate else None})
             except (CONTRACT.Failure, SUPPORT.Refusal, OSError, ValueError, TypeError, KeyError, ET.ParseError):
                 reports.append({"id": identifier, "status": "failed", "failure_code": "fixture-profile-check-failed"})
-        profile = ("hls-fmp4", "cenc")
-        identifier = f"{layout}:{CONTRACT.profile_id(profile)}"
-        try:
-            operation = root / f"{layout}-cenc-hls-check"
-            operation.mkdir(mode=0o700)
-            runner = executor.runner(operation)
-            path = FIXTURES.cenc_hls(profiles[(layout, ("dash", "cenc"))], profiles[(layout, ("hls-fmp4", "clear"))],
-                                     root / f"{layout}-cenc-hls", executor.uri, SUPPORT,
-                                     lambda init: executor.track_kind(init, runner))
-            key_file = executor.key_file(operation, profile)
-            verified = executor.verify(runner, seeds[layout], path, key_file, profile, "input-only-fixture-verify")
-            manifest_profile(path, profile)
-            profiles[(layout, profile)] = path
-            rate = 44100 if "44100" in layout else 48000 if "48000" in layout else None
-            reports.append({"id": identifier, "graph": graph(path),
-                            "source_graph_sha256": graph(seeds[layout])["sha256"], "verification": verified,
-                            "sample_rate": rate, "final_presented_samples": 240 if rate else None})
-        except (CONTRACT.Failure, SUPPORT.Refusal, OSError, ValueError, TypeError, KeyError, ET.ParseError):
-            reports.append({"id": identifier, "status": "failed", "failure_code": "fixture-profile-check-failed"})
     return profiles, reports
 
 

@@ -36,7 +36,7 @@ def routes():
         formats = ("mp4", "dash", "hls", "hls-ts")
         for output in formats:
             targets = (("clear", "hls-aes128", "hls-sample-aes") if output == "hls-ts" else
-                       ("clear", "cbcs", "hls-aes128") if output == "hls" else
+                       ("clear", "cenc", "cbcs", "hls-aes128") if output == "hls" else
                        ("clear", "cenc", "cbcs"))
             result.extend((source, output, target) for target in targets)
     return tuple(result)

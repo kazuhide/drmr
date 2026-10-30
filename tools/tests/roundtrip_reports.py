@@ -45,6 +45,6 @@ def complete(contract, head="a" * 40, tree="b" * 40, target="aarch64-apple-darwi
             "matrix_sha256": contract.matrix_digest(), "native_ordinary_user": True, "required_depth": "native",
             "decode_evidence": "not-checked", "license_playback_verified": False,
             "fixture_metadata": copy.deepcopy(contract.FIXTURE_METADATA), "fixture_profiles": fixtures,
-            "records": records, "counts": {"expected": 780, "complete": 738, "failed": 0, "not_checked": 0,
+            "records": records, "counts": {"expected": 845, "complete": 803, "failed": 0, "not_checked": 0,
                                            "not_qualified": 42, "kinds": contract.counts(contract.cases())},
             "owned_workspace_cleanup": "confirmed", "limits": contract.LIMITS}

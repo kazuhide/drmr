@@ -21,16 +21,13 @@ CONTRACT = ROUNDTRIP.CONTRACT
 
 
 class ReleaseMatrix(unittest.TestCase):
-    def test_all_sixty_documented_cells_are_represented(self):
+    def test_all_sixty_five_documented_cells_are_represented(self):
         records = CONTRACT.cases()
-        self.assertEqual(len(records), 780)
-        self.assertEqual(len({record["id"] for record in records}), 780)
+        self.assertEqual(len(records), 845)
+        self.assertEqual(len({record["id"] for record in records}), 845)
         self.assertEqual({record["recipe"] for record in records},
                          {CONTRACT.EXAMPLES.identifier(*route) for route in CONTRACT.EXAMPLES.routes()})
-        self.assertEqual(CONTRACT.counts(records), {"roundtrip": 648, "input-only": 54,
-                                                   "forward-only": 36, "layout-condition": 42})
-        self.assertTrue(all(record["source"] == ["hls-fmp4", "cenc"]
-                            for record in records if record["kind"] == "input-only"))
+        self.assertEqual(CONTRACT.counts(records), {"roundtrip": 761, "forward-only": 42, "layout-condition": 42})
 
     def validate(self, value):
         return CONTRACT.validate(value, "a" * 40, "b" * 40, "aarch64-apple-darwin", "1.0.3", "c" * 64, "d" * 64)
@@ -92,8 +89,9 @@ class ReleaseMatrix(unittest.TestCase):
     def test_encryption_keys_keep_mp4_and_hls_signaling_separate(self):
         values = ("01" * 16, "02" * 16, "03" * 16, "skd://fixture")
         self.assertNotIn("signaling", ROUNDTRIP.keys(("mp4", "cbcs"), *values))
-        self.assertEqual(ROUNDTRIP.keys(("hls-fmp4", "cbcs"), *values)["signaling"],
-                         {"system": "multi-drm", "fairplay": True})
+        self.assertTrue(ROUNDTRIP.keys(("hls-fmp4", "cbcs"), *values)["signaling"]["fairplay"])
+        self.assertIn("widevine_pssh", ROUNDTRIP.keys(("hls-fmp4", "cbcs"), *values)["signaling"])
+        self.assertNotIn("hls_key_uri", ROUNDTRIP.keys(("hls-fmp4", "cenc"), *values))
         self.assertNotIn("kid", ROUNDTRIP.keys(("hls-ts", "hls-sample-aes"), *values))
         self.assertEqual(ROUNDTRIP.keys(("dash", "cenc"), *values)["signaling"]["system"], "multi-drm")
         self.assertEqual(ROUNDTRIP.inspection_protection(("hls-ts", "hls-sample-aes")), "unknown")
@@ -111,45 +109,35 @@ class ReleaseMatrix(unittest.TestCase):
                 executor = ROUNDTRIP.Executor(root / "unused-cli", root)
             operation = root / "operation"
             operation.mkdir()
-            runner = executor.runner(operation)
-            for tool in ("ffmpeg", "ffprobe"):
-                with self.subTest(tool=tool), self.assertRaises(ROUNDTRIP.SUPPORT.Refusal):
-                    runner.run([tool, "-version"], "decoder-must-not-run", 5)
-            self.assertEqual(runner.stages, [])
+            check = operation / "check"
+            check.mkdir()
+            executor.check_decoder_guards(check)
 
-    def test_input_only_hls_fixture_preserves_cenc_bytes_and_rational_durations(self):
+    def test_partial_audio_duration_preserves_sample_derived_f64(self):
+        for rate in (44100, 48000):
+            text = ROUNDTRIP.FIXTURES.partial_audio_duration(rate)
+            self.assertEqual(float(text).hex(), (240 / rate).hex())
+            self.assertGreater(len(text.split(".")[1]), 9)
+        self.assertNotEqual(float(format(240 / 44100, ".17f")).hex(), (240 / 44100).hex())
+
+    def test_hls_three_drm_and_ctr_declarations_are_complete(self):
+        identifiers = {"fairplay": "com.apple.streamingkeydelivery", "playready": "com.microsoft.playready",
+                       "widevine": "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"}
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            source = root / "dash"
-            media = source / "audio"
-            media.mkdir(parents=True)
-            for name, data in (("init.mp4", b"canonical-init"), ("seg_1.m4s", b"coded-full"),
-                               ("seg_2.m4s", b"coded-partial-presentation")):
-                (media / name).write_bytes(data)
-            mpd = source / "manifest.mpd"
-            mpd.write_text('<MPD xmlns="urn:mpeg:dash:schema:mpd:2011"><Period><AdaptationSet contentType="audio">'
-                           '<Representation id="1"><SegmentTemplate timescale="44100" startNumber="1" '
-                           'initialization="audio/init.mp4" media="audio/seg_$Number$.m4s"><SegmentTimeline>'
-                           '<S t="0" d="44100"/><S d="240"/></SegmentTimeline></SegmentTemplate>'
-                           '</Representation></AdaptationSet></Period></MPD>', encoding="utf-8")
-            clear = root / "clear"
-            clear.mkdir()
-            (clear / "audio").mkdir()
-            (clear / "audio/init.mp4").write_bytes(b"clear-init")
-            (clear / "master.m3u8").write_text("#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000000\naudio.m3u8\n", encoding="utf-8")
-            (clear / "audio.m3u8").write_text('#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:1\n'
-                                               '#EXT-X-MAP:URI="audio/init.mp4"\n#EXTINF:1,\naudio/seg_1.m4s\n'
-                                               '#EXTINF:0.005442177,\naudio/seg_2.m4s\n#EXT-X-ENDLIST\n', encoding="utf-8")
-            destination = root / "hls"
-            path = ROUNDTRIP.FIXTURES.cenc_hls(mpd, clear / "master.m3u8", destination, "skd://test-fixture",
-                                            ROUNDTRIP.SUPPORT, lambda _: "audio")
-            text = (destination / "audio/audio.m3u8").read_text()
-            self.assertIn("#EXTINF:0.005442177,", text)
-            self.assertIn("#EXT-X-TARGETDURATION:1", text)
-            self.assertEqual((destination / "audio/seg_2.m4s").read_bytes(), (media / "seg_2.m4s").read_bytes())
-            self.assertEqual((destination / "audio/init.mp4").read_bytes(), (media / "init.mp4").read_bytes())
-            self.assertTrue(path.is_file())
-            self.assertFalse((destination / "manifest.mpd").exists())
+            path = Path(directory) / "media.m3u8"
+            for protection in ("cenc", "cbcs"):
+                expected = CONTRACT.drms(("hls-fmp4", protection))
+                method = "SAMPLE-AES-CTR" if protection == "cenc" else "SAMPLE-AES"
+                lines = ["#EXTM3U", "#EXT-X-VERSION:7", "#EXT-X-TARGETDURATION:2"]
+                keys = [f'#EXT-X-KEY:METHOD={method},URI="data:text/plain;base64,AA==",KEYFORMAT="{identifiers[drm]}",KEYFORMATVERSIONS="1"'
+                        for drm in expected]
+                tail = ['#EXT-X-MAP:URI="init.mp4"', "#EXTINF:2,", "segment.m4s", "#EXT-X-ENDLIST"]
+                path.write_text("\n".join(lines + keys + tail), encoding="utf-8")
+                self.assertEqual(ROUNDTRIP.manifest_profile(path, ("hls-fmp4", protection)), expected)
+                for invalid in (keys[:-1], keys + [keys[0]], [key + ",IV=0x1" for key in keys]):
+                    path.write_text("\n".join(lines + invalid + tail), encoding="utf-8")
+                    with self.assertRaises(CONTRACT.Failure):
+                        ROUNDTRIP.manifest_profile(path, ("hls-fmp4", protection))
 
     def test_each_cycle_compares_final_output_directly_with_original(self):
         with tempfile.TemporaryDirectory() as directory:

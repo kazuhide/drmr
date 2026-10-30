@@ -19,12 +19,12 @@ class ConversionExamples(unittest.TestCase):
             outputs = ("mp4", "dash", "hls", "hls-ts")
             for output in outputs:
                 targets = {"mp4": ("clear", "cenc", "cbcs"), "dash": ("clear", "cenc", "cbcs"),
-                           "hls": ("clear", "cbcs", "hls-aes128"),
+                           "hls": ("clear", "cenc", "cbcs", "hls-aes128"),
                            "hls-ts": ("clear", "hls-aes128", "hls-sample-aes")}[output]
                 expected.update((source, output, target) for target in targets)
         self.assertEqual(set(EXAMPLES.routes()), expected)
-        self.assertEqual(len(EXAMPLES.routes()), 60)
-        self.assertEqual(len({EXAMPLES.identifier(*route) for route in expected}), 60)
+        self.assertEqual(len(EXAMPLES.routes()), 65)
+        self.assertEqual(len({EXAMPLES.identifier(*route) for route in expected}), 65)
 
     def test_every_example_has_four_matching_cli_operations(self):
         input_profiles = {
@@ -68,14 +68,14 @@ class ConversionExamples(unittest.TestCase):
                     self.assertEqual(plan[2], "src/input." + extension)
                     checked += 1
         self.assertEqual(sum(map(len, input_profiles.values())), 16)
-        self.assertEqual(checked, 192)
+        self.assertEqual(checked, 208)
 
     def test_locales_retain_identical_commands_and_recipe_identifiers(self):
         en, ja = (EXAMPLES.markdown(locale) for locale in ("en", "ja"))
         self.assertEqual(re.findall(r"\{#(recipe-[a-z0-9-]+)\}", en), re.findall(r"\{#(recipe-[a-z0-9-]+)\}", ja))
         self.assertEqual(re.findall(r"```sh\n(.*?)```", en, re.S), re.findall(r"```sh\n(.*?)```", ja, re.S))
-        self.assertEqual(en.count("```sh"), 60)
-        self.assertEqual(len(re.findall(r"^# .+ input$", en, re.M)), 120)
+        self.assertEqual(en.count("```sh"), 65)
+        self.assertEqual(len(re.findall(r"^# .+ input$", en, re.M)), 130)
         self.assertNotEqual(en, ja)
 
     def test_equivalent_encrypted_inputs_share_one_labeled_command_group(self):
@@ -90,7 +90,7 @@ class ConversionExamples(unittest.TestCase):
             self.assertIn("# " + label, EXAMPLES.markdown("en"))
 
     def test_unsupported_routes_and_locales_are_refused(self):
-        for route in (("mp4", "hls-ts", "cenc"), ("mp4", "hls", "cenc"),
+        for route in (("mp4", "hls-ts", "cenc"), ("mp4", "hls", "hls-sample-aes"),
                       ("mp4; exit", "mp4", "clear")):
             with self.subTest(route=route), self.assertRaises(ValueError):
                 EXAMPLES.commands(*route, "clear")

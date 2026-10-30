@@ -9,8 +9,10 @@ requirement; they do not qualify every codec the formats can contain.
 
 One qualified source can also produce [multiple named outputs](multiple-outputs.md)
 through the common CLI. The `auto` and `stitch` multi-DRM routes support qualified
-clear HLS transport streams and the qualified clear MP4 profile: CBCS DASH with
-Widevine/PlayReady, CBCS fMP4 HLS with FairPlay, or SAMPLE-AES TS HLS with FairPlay.
+HLS transport streams, fMP4 HLS, DASH and qualified MP4 sources with known keys.
+CENC or CBCS DASH can carry Widevine and PlayReady declarations; CBCS fMP4 HLS
+can carry FairPlay, Widevine and PlayReady together, while CENC fMP4 HLS carries
+Widevine and PlayReady. SAMPLE-AES TS HLS carries FairPlay declarations.
 These use separate runtime DRM settings and independently checked final
 manifests. Requested [external manifest validation](manifest-validation.md) is
 additional to native Rust manifest linting and the complete internal media checks.
@@ -34,13 +36,13 @@ unencrypted media. The two containers have different conversion limits:
 
 | HLS input | Input container | DASH output protection | fMP4 HLS output protection | MPEG-TS HLS output protection |
 | --- | --- | --- | --- | --- |
-| Clear HLS | fMP4 | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 | Clear, AES-128, SAMPLE-AES |
-| `cenc` HLS | fMP4 | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 | Clear, AES-128, SAMPLE-AES |
-| `cbcs` HLS | fMP4 | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 | Clear, AES-128, SAMPLE-AES |
-| AES-128 HLS | fMP4 | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 | Clear, AES-128, SAMPLE-AES |
-| Clear HLS | MPEG-TS | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 | Clear, AES-128, SAMPLE-AES |
-| AES-128 HLS | MPEG-TS | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 | Clear, AES-128, SAMPLE-AES |
-| SAMPLE-AES HLS | MPEG-TS | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 | Clear, AES-128, SAMPLE-AES |
+| Clear HLS | fMP4 | Clear, `cenc`, `cbcs` | Clear, `cenc`, `cbcs`, AES-128 | Clear, AES-128, SAMPLE-AES |
+| `cenc` HLS | fMP4 | Clear, `cenc`, `cbcs` | Clear, `cenc`, `cbcs`, AES-128 | Clear, AES-128, SAMPLE-AES |
+| `cbcs` HLS | fMP4 | Clear, `cenc`, `cbcs` | Clear, `cenc`, `cbcs`, AES-128 | Clear, AES-128, SAMPLE-AES |
+| AES-128 HLS | fMP4 | Clear, `cenc`, `cbcs` | Clear, `cenc`, `cbcs`, AES-128 | Clear, AES-128, SAMPLE-AES |
+| Clear HLS | MPEG-TS | Clear, `cenc`, `cbcs` | Clear, `cenc`, `cbcs`, AES-128 | Clear, AES-128, SAMPLE-AES |
+| AES-128 HLS | MPEG-TS | Clear, `cenc`, `cbcs` | Clear, `cenc`, `cbcs`, AES-128 | Clear, AES-128, SAMPLE-AES |
+| SAMPLE-AES HLS | MPEG-TS | Clear, `cenc`, `cbcs` | Clear, `cenc`, `cbcs`, AES-128 | Clear, AES-128, SAMPLE-AES |
 
 Choose `--format hls` for fMP4 HLS or `--format hls-ts` for MPEG-TS HLS.
 For FairPlay transport-stream encryption, use `--to hls-sample-aes`.
@@ -169,8 +171,33 @@ Set `DRMR_CONVERSION_REPORT` to a path outside the repository to save the JSON r
 | --- | --- | --- |
 | MP4 file | Clear, `cenc`, `cbcs` | One track, qualified joint progressive MP4, or one video and one audio from supported TS HLS |
 | DASH directory | Clear, `cenc`, `cbcs` | Separate fragmented MP4 tracks in one static presentation |
-| HLS directory (`hls`) | Clear, `cbcs`, AES-128 | fMP4 resources and completed playlists |
-| HLS directory (`hls-ts`) | Clear, AES-128, SAMPLE-AES | Qualified TS or fragmented MP4 input; separate TS audio/video playlists when both are present |
+| HLS directory (`hls`) | Clear, `cenc`, `cbcs`, AES-128 | fMP4 resources and completed playlists |
+| HLS directory (`hls-ts`) | Clear, AES-128, SAMPLE-AES | Qualified local TS or fMP4 input; separate TS audio/video playlists when both are present |
+
+### DRM declarations in fMP4 HLS
+
+Encryption and DRM declarations are separate output conditions. A CBCS fMP4 HLS
+output can advertise FairPlay, Widevine and PlayReady for the same encrypted
+samples. A CENC fMP4 HLS output can advertise Widevine and PlayReady. Configure
+the required systems through the protected key file's `multi-drm` setting;
+see [DRM signaling](drm-signaling.md). Each selected system receives an
+`EXT-X-KEY` declaration in every media playlist. The generated initialization
+data and declarations are independently checked with the known media key.
+These checks do not obtain licenses or qualify a playback device.
+
+| HLS output protection | Segment container | Method | Available DRM declarations |
+| --- | --- | --- | --- |
+| `cenc` | fMP4 | `SAMPLE-AES-CTR` | Widevine, PlayReady |
+| `cbcs` | fMP4 | `SAMPLE-AES` | FairPlay, Widevine, PlayReady |
+| `hls-sample-aes` | MPEG-TS | `SAMPLE-AES` | FairPlay |
+
+The HLS second-edition draft defines optional `SAMPLE-AES-CTR` for fMP4 using
+CENC, with no playlist IV attribute. It does not define that method for TS.
+This is draft-based HLS support, not a FairPlay output. [HLS draft section
+4.4.4.4](https://datatracker.ietf.org/doc/html/draft-pantos-hls-rfc8216bis-22#section-4.4.4.4).
+Apple's authoring requirements separately prohibit CTR on Apple devices.
+The base HLS linter and Apple-specific profile retain that distinction.
+[Apple content-protection requirements](https://developer.apple.com/streaming/hls-authoring-specification-for-apple-devices.html#Content-Protection).
 
 ### Progressive MP4 with a finite audio range
 
@@ -178,9 +205,9 @@ MP4 can use an edit list to specify which part of decoded audio should play. Thi
 
 | Progressive MP4 input | MP4 output | DASH output | fMP4 HLS output |
 | --- | --- | --- | --- |
-| Clear | Clear, `cenc`, `cbcs` | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 |
-| `cenc` | Clear, `cenc`, `cbcs` | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 |
-| `cbcs` | Clear, `cenc`, `cbcs` | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 |
+| Clear | Clear, `cenc`, `cbcs` | Clear, `cenc`, `cbcs` | Clear, `cenc`, `cbcs`, AES-128 |
+| `cenc` | Clear, `cenc`, `cbcs` | Clear, `cenc`, `cbcs` | Clear, `cenc`, `cbcs`, AES-128 |
+| `cbcs` | Clear, `cenc`, `cbcs` | Clear, `cenc`, `cbcs` | Clear, `cenc`, `cbcs`, AES-128 |
 
 The source must contain one AAC-LC (AAC Low Complexity) audio track stored as `mp4a`, with optional H.264 video stored as `avc1`, from the same complete progressive file. A single normal-rate audio edit must have a nonnegative start and a finite duration that converts exactly into audio clock units. Encrypted input requires every track key by identifier. The supported encryption layouts and presentation checks are described in [processing and verification](media-processing.md#finite-audio-presentation-windows). Multiple edits, initial empty edits, rate changes, extra tracks, combining different source files, key rotation, and input DRM initialization headers remain outside this profile.
 
@@ -207,7 +234,7 @@ drmr convert original.mp4 --to cbcs --format dash --output result-dash --keys-fi
 drmr verify result-dash/manifest.mpd --source original.mp4 --keys-file keys.json --json
 ```
 
-The ten-second Big Buck Bunny regressions cover all nine output choices from each input protection, with audio-only and joint video/audio sources: 54 routes. Every result must pass conversion and fresh verification against the original protected source, including the exact playback range. Additional cases change the audio end by one sample, use reordered video pictures, and reject modified keys, payloads, playback settings, display properties, and manifest declarations. The [public encryption fixtures](https://github.com/kazuhide/drmr/blob/main/crates/drmr/tests/fixtures/bbb/CENC.md) use distinct video/audio keys. GPAC is used only for offline fixture generation, not by tests or conversion. These media checks do not qualify a license service or device playback.
+The existing finite-output Big Buck Bunny regression covers its original nine output choices from each input protection, with audio-only and joint video/audio sources: 54 routes. The release-only round-trip matrix additionally covers CENC HLS under its stated fixture conditions. Every result must pass conversion and fresh verification against the original protected source, including the exact playback range. Additional cases change the audio end by one sample, use reordered video pictures, and reject modified keys, payloads, playback settings, display properties, and manifest declarations. The [public encryption fixtures](https://github.com/kazuhide/drmr/blob/main/crates/drmr/tests/fixtures/bbb/CENC.md) use distinct video/audio keys. GPAC is used only for offline fixture generation, not by tests or conversion. These media checks do not qualify a license service or device playback.
 
 ```sh
 cargo test --locked -p drmr-core --test conversion_finite_outputs -- --nocapture
@@ -216,7 +243,7 @@ cargo test --locked -p drmr --test conversion_finite_outputs -- --nocapture
 
 Earlier clear-output finite-edit regressions also cover eight- and sixteen-byte CENC sample vectors and known-key verification of existing CENC/CBCS files carrying DRM initialization metadata. Conversion's stricter input rules still apply. Use CI artifacts for the exact revision, platforms, and tool versions tested.
 
-The backend also tests joint video/audio HLS with clear, `cbcs`, and AES-128 output. `cenc` HLS output is refused. HLS AES-128 applies to HLS resources, so it cannot be selected as a standalone MP4 or DASH protection scheme. `cens` and `cbc1` can be identified but are not conversion targets.
+The HLS backend supports joint video/audio with clear, `cenc`, `cbcs`, and AES-128 output. CENC and CBCS operate on fragmented MP4 samples; AES-128 encrypts complete HLS resources. HLS AES-128 applies to HLS resources, so it cannot be selected as a standalone MP4 or DASH protection scheme. `cens` and `cbc1` can be identified but are not conversion targets.
 
 Local manifests must stay inside the source directory tree. Key URI mappings come from the protected operator configuration; no key URI or remote media is retrieved. Live input, discontinuities, HLS byte ranges, multiple DASH periods, unsupported addressing or index layouts, and rendition metadata that cannot be retained are rejected. Local MPEG transport stream input has a separate, narrower profile described below. See [DASH references](dash-addressing.md) and [processing and verification](media-processing.md) for the exact source profiles, resource limits, audio trimming, segmentation, and verification behavior.
 
@@ -231,7 +258,7 @@ Clear output needs no output-key section. Keep the original media and keys until
 
 ## MPEG transport stream input
 
-Completed local HLS playlists containing clear, AES-128, or SAMPLE-AES transport stream segments can produce DASH with clear, `cenc`, or `cbcs` protection, or fragmented MP4 HLS with clear, `cbcs`, or AES-128 protection. Encrypted input requires operator-supplied keys. The profile accepts one progressive H.264 video stream, one 44.1 or 48 kHz AAC-LC audio stream, or both, in a single program. Audio-only input supports MP4, DASH, fMP4 HLS, and TS output with the strict native audio timing checks described in [processing and verification](media-processing.md#mpeg-transport-stream-input). SAMPLE-AES-CTR transport streams are refused. Standalone MP4 has the selection conditions described [below](#mpeg-transport-streams-to-one-mp4).
+Completed local HLS playlists containing clear, AES-128, or SAMPLE-AES transport stream segments can produce DASH with clear, `cenc`, or `cbcs` protection, or fragmented MP4 HLS with clear, `cenc`, `cbcs`, or AES-128 protection. Encrypted input requires operator-supplied keys. The profile accepts one progressive H.264 video stream, one 44.1 or 48 kHz AAC-LC audio stream, or both, in a single program. Audio-only input supports MP4, DASH, fMP4 HLS, and TS output with the strict native audio timing checks described in [processing and verification](media-processing.md#mpeg-transport-stream-input). SAMPLE-AES-CTR transport streams are refused. Standalone MP4 has the selection conditions described [below](#mpeg-transport-streams-to-one-mp4).
 
 The 1.0.1 source includes 44.1 kHz AAC support for this TS profile. The unchanged v1.0.0 archives accept only 48 kHz AAC from TS. See [installation](../README.md#install) and [release status](releases.md) when choosing a build.
 

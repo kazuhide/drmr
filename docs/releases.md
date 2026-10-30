@@ -221,20 +221,24 @@ arbitrary original HLS selection groups or player selection attributes; see
 Each matrix cell expands to the input protection schemes and qualified track
 layouts. The matrix uses automatic processing and default DASH `SegmentTemplate`
 references; separate regressions cover other processing and addressing options.
-The report contains 780 explicit records:
+The report contains 845 explicit records across 13 input and output profiles:
 
 | Records per native archive | Required check |
 | --- | --- |
-| 648 reversible cases | Convert A → B, independently verify B against A, convert B → A, independently verify the return leg, and compare final A directly with original A |
-| 54 input-only HLS/fMP4 `cenc` cases | Convert and independently verify the supported forward direction; HLS/fMP4 `cenc` has no output target |
-| 36 joint MP4 → DASH/HLS cases | Convert and independently verify the forward direction; the reverse joint DASH/HLS → MP4 layout is not qualified |
+| 761 reversible cases | Convert A → B, independently verify B against A, convert B → A, independently verify the return leg, and compare final A directly with original A |
+| 42 joint MP4 → DASH/HLS cases | Convert and independently verify the forward direction; the reverse joint DASH/HLS → MP4 layout is not qualified |
 | 42 joint DASH/HLS → MP4 conditions | Explicitly record the single-track MP4 output restriction rather than report a successful conversion |
 
 These are codec and layout conditions, not a claim that every possible input
 bitstream is supported. Multiple video qualities are not silently selected for
-one MP4 output. The separate CENC HLS input fixture reuses verified CENC DASH
-initialization data and sample fragments with equivalent HLS declarations, then
-undergoes a fresh native comparison against its source.
+one MP4 output. Every input profile is generated with the extracted CLI and
+independently checked against its retained seed. CENC fMP4 HLS requests Widevine
+and PlayReady declarations; CBCS fMP4 HLS requests FairPlay, Widevine and
+PlayReady. Every encrypted DASH output requests Widevine and PlayReady.
+The report verifies each required DRM key format and the target encryption
+method, without claiming license acquisition. CENC HLS uses the base HLS manifest
+profile; Apple authoring's separate prohibition on CTR remains an error under
+the Apple-specific profile.
 
 Independent workers run within a fixed resource limit and each CLI invocation
 uses one media worker. Completed case outputs are removed after their evidence
