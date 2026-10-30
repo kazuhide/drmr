@@ -422,8 +422,13 @@ impl Converter {
                 track
             })
             .collect();
-        let verification =
-            self.compare_presentations(sources.to_vec(), actual, request.input_keys, &keys)?;
+        let verification = self.compare_presentations(
+            sources.to_vec(),
+            actual,
+            request.input_keys,
+            &keys,
+            request.format,
+        )?;
         if !verification.passed {
             return Err(ConversionError("round-trip-verification-failed"));
         }
@@ -1066,7 +1071,8 @@ impl Converter {
         {
             eligible_formats.retain(|format| *format != OutputFormat::Mp4);
         }
-        let verification = self.validate_prepared_sources(&prepared, input.input_keys)?;
+        let verification =
+            self.validate_prepared_sources(&prepared, input.input_keys, actual_format)?;
         if !verification.passed {
             return Err(ConversionError("source-media-verification-failed"));
         }
@@ -1086,6 +1092,7 @@ impl Converter {
         &self,
         prepared: &[Prepared],
         input_keys: &InputKeys,
+        source_format: OutputFormat,
     ) -> Result<VerificationReport, ConversionError> {
         let verified = self.run_tracks(prepared.len(), |ordinal| {
             let track = &prepared[ordinal];
@@ -1120,7 +1127,7 @@ impl Converter {
                 self.backend
                     .validate_transport_source(&track.source, index, native)
             } else {
-                self.verify_prepared_pair(track, track, input_keys, input_keys)
+                self.verify_prepared_pair(track, track, input_keys, input_keys, source_format)
             }
         })?;
         Ok(combine_verification(
@@ -1286,12 +1293,10 @@ impl Converter {
         source_preparation.finish();
         self.backend.check_cancelled()?;
         let source_format = self.inspect_input(request.source.input)?.format;
+        let output_format = self.default_output_format(request.output.input)?;
         let (format, processing) = match layout_intent {
             Some(intent) => intent,
-            None => (
-                self.default_output_format(request.output.input)?,
-                super::ProcessingMode::Stitch,
-            ),
+            None => (output_format, super::ProcessingMode::Stitch),
         };
         self.check_admitted_output_options(
             request.source.input,
@@ -1321,6 +1326,7 @@ impl Converter {
             result,
             request.source.input_keys,
             request.output.input_keys,
+            output_format,
         )?;
         if let Some(checked) = checked {
             checked.check(self)?;
@@ -1385,6 +1391,7 @@ impl Converter {
         available: &[Option<Prepared>],
         keys: (&InputKeys, &InputKeys),
         payloads: &mut [Option<String>],
+        output_format: OutputFormat,
     ) -> Result<usize, ConversionError> {
         if candidates.is_empty() {
             return Err(ConversionError("presentation-track-content-mismatch"));
@@ -1414,7 +1421,7 @@ impl Converter {
             // Operational failures always propagate; only a completed negative
             // media proof means this candidate does not represent the source.
             if self
-                .verify_prepared_pair(source, result, keys.0, keys.1)?
+                .verify_prepared_pair(source, result, keys.0, keys.1, output_format)?
                 .passed
             {
                 return Ok(index);
@@ -1432,6 +1439,7 @@ impl Converter {
         mut result: Vec<Prepared>,
         source_keys: &InputKeys,
         result_keys: &InputKeys,
+        output_format: OutputFormat,
     ) -> Result<Vec<Prepared>, ConversionError> {
         if source
             .iter()
@@ -1473,6 +1481,7 @@ impl Converter {
                         &available,
                         (source_keys, result_keys),
                         &mut payloads,
+                        output_format,
                     )?
                 } else {
                     *candidates
@@ -1490,12 +1499,14 @@ impl Converter {
         b: &Prepared,
         source_keys: &InputKeys,
         result_keys: &InputKeys,
+        output_format: OutputFormat,
     ) -> Result<VerificationReport, ConversionError> {
         let native = self.native_prepared_pair(a, b, source_keys, result_keys)?;
         if self.backend.validation_depth == super::ValidationDepth::Native {
             return Ok(native);
         }
-        let mut report = self.verify_prepared_pair_decoded(a, b, source_keys, result_keys)?;
+        let mut report =
+            self.verify_prepared_pair_decoded(a, b, source_keys, result_keys, output_format)?;
         report.require_native(&native)?;
         Ok(report)
     }
@@ -1505,6 +1516,7 @@ impl Converter {
         b: &Prepared,
         source_keys: &InputKeys,
         result_keys: &InputKeys,
+        output_format: OutputFormat,
     ) -> Result<VerificationReport, ConversionError> {
         if a.audio_presentation.is_some() || b.audio_presentation.is_some() {
             let (Some(first), Some(second)) = (a.audio_presentation, b.audio_presentation) else {
@@ -1518,11 +1530,7 @@ impl Converter {
             )?;
             let source = raw_audio_view(a, source_keys);
             let result = raw_audio_view(b, result_keys);
-            let mut proof = if source.transport
-                && !result.transport
-                && b.playlist_reference.is_none()
-                && !b.dash_reference
-            {
+            let mut proof = if ts_mp4::transport_comparison(output_format, a, b) {
                 self.backend
                     .verify_transport_mp4(source, result, &ts_mp4::declared_language(a)?)?
             } else {
@@ -1580,7 +1588,7 @@ impl Converter {
                 native: None,
                 unedited: false,
             };
-            return if b.playlist_reference.is_none() && !b.dash_reference {
+            return if ts_mp4::transport_comparison(output_format, a, b) {
                 self.backend
                     .verify_transport_mp4(source, result, &ts_mp4::declared_language(a)?)
             } else {
@@ -1604,6 +1612,7 @@ impl Converter {
         mut result: Vec<Prepared>,
         source_keys: &InputKeys,
         result_keys: &InputKeys,
+        output_format: OutputFormat,
     ) -> Result<VerificationReport, ConversionError> {
         source.sort_by_key(|p| kind_order(p.report.tracks[0].kind));
         result.sort_by_key(|p| kind_order(p.report.tracks[0].kind));
@@ -1617,13 +1626,10 @@ impl Converter {
         {
             return Err(ConversionError("presentation-track-role-mismatch"));
         }
-        result = self.match_presentations(&source, result, source_keys, result_keys)?;
+        result =
+            self.match_presentations(&source, result, source_keys, result_keys, output_format)?;
         for (a, b) in source.iter().zip(&result) {
-            if a.transport_index.is_some()
-                && b.transport_index.is_none()
-                && b.playlist_reference.is_none()
-                && !b.dash_reference
-            {
+            if ts_mp4::transport_comparison(output_format, a, b) {
                 ts_mp4::metadata_pair(a, b, &self.backend, result_keys)?;
             } else {
                 metadata::pair(&a.metadata, &b.metadata)?;
@@ -1664,6 +1670,7 @@ impl Converter {
                 &result[ordinal],
                 source_keys,
                 result_keys,
+                output_format,
             )?;
             if let Some(progress) = &progress {
                 progress.completed(ordinal);
@@ -2151,7 +2158,10 @@ pub(in crate::conversion) fn hls_media_paths(
         .any(|l| l.starts_with("#EXT-X-STREAM-INF:") || l.starts_with("#EXT-X-MEDIA:"))
     {
         return Ok(vec![MediaPath {
-            path: path.into(),
+            // Use the same canonical namespace as resolved master-playlist children.
+            path: path
+                .canonicalize()
+                .map_err(|_| ConversionError("input-unreadable"))?,
             role: None,
             variants: 0,
             metadata: metadata::Metadata::default(),
@@ -2576,8 +2586,13 @@ impl Converter {
         )?;
         preparation.finish();
         self.backend.check_cancelled()?;
-        let verification =
-            self.compare_presentations(prepared, result, request.input_keys, &output_keys)?;
+        let verification = self.compare_presentations(
+            prepared,
+            result,
+            request.input_keys,
+            &output_keys,
+            request.format,
+        )?;
         if !verification.passed {
             return Err(ConversionError("round-trip-verification-failed"));
         }

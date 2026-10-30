@@ -7,6 +7,20 @@ use super::{
 use crate::inspection::{Protection, TargetProtection};
 use std::io::{Seek as _, SeekFrom, Write as _};
 
+pub(super) fn transport_comparison(
+    output_format: inspection::OutputFormat,
+    source: &Prepared,
+    result: &Prepared,
+) -> bool {
+    // HLS inspection can use joined MP4 bytes without a decoder playlist.
+    // Only an actual standalone MP4 result uses the container metadata projection.
+    output_format == inspection::OutputFormat::Mp4
+        && source.transport_index.is_some()
+        && result.transport_index.is_none()
+        && result.playlist_reference.is_none()
+        && !result.dash_reference
+}
+
 pub(super) fn complete_track_views(
     path: &std::path::Path,
     directory: &std::path::Path,
@@ -274,8 +288,13 @@ impl Converter {
             self.maximum_workers,
             super::SourceValidationPurpose::Verification,
         )?;
-        let verification =
-            self.compare_presentations(prepared, result, request.input_keys, &keys)?;
+        let verification = self.compare_presentations(
+            prepared,
+            result,
+            request.input_keys,
+            &keys,
+            inspection::OutputFormat::Mp4,
+        )?;
         if !verification.passed {
             return Err(ConversionError("round-trip-verification-failed"));
         }

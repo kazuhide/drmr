@@ -2,6 +2,8 @@
 mod common;
 #[path = "support/hls_multi_drm_profiles.rs"]
 mod profiles;
+#[path = "support/hls_multi_drm_renditions.rs"]
+mod renditions;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use drmr_core::{
     conversion::{
