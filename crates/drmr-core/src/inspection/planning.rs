@@ -182,23 +182,10 @@ fn compatibility_findings(
     if target == TargetProtection::HlsSampleAes && formats != [OutputFormat::HlsTs] {
         findings.push(Finding::new("hls-sample-aes-requires-hls-ts-output"));
     }
-    if formats.contains(&OutputFormat::HlsTs) {
-        if matches!(target, TargetProtection::Cenc | TargetProtection::Cbcs) {
-            findings.push(Finding::new("mp4-protection-requires-mp4-container"));
-        }
-        if input.format != InputFormat::Hls {
-            findings.push(Finding::new(
-                "hls-ts-output-requires-transport-stream-input",
-            ));
-        } else if !sample_aes_candidate(input)
-            && !input.tracks.is_empty()
-            && input
-                .tracks
-                .iter()
-                .any(|track| !matches!(track.protection, Protection::Clear | Protection::HlsAes128))
-        {
-            findings.push(Finding::new("hls-ts-source-protection-not-supported"));
-        }
+    if formats.contains(&OutputFormat::HlsTs)
+        && matches!(target, TargetProtection::Cenc | TargetProtection::Cbcs)
+    {
+        findings.push(Finding::new("mp4-protection-requires-mp4-container"));
     }
     if target == TargetProtection::Cenc && formats.contains(&OutputFormat::Hls) {
         findings.push(Finding::new("cenc-hls-output-not-supported"));
@@ -386,15 +373,7 @@ fn describe_processing(
                         ));
                     }
                 }
-                OutputFormat::HlsTs => {
-                    if input.format == InputFormat::Hls {
-                        candidates.push(CandidateRoute::new(
-                            Route::MpegTsHlsTs,
-                            format,
-                            "local-transport-stream-profile-must-pass",
-                        ));
-                    }
-                }
+                OutputFormat::HlsTs => candidates.extend(transport_candidates(input, format)),
                 OutputFormat::Hls => {
                     candidates.push(CandidateRoute::new(
                         Route::Fmp4HlsPresentation,
@@ -426,4 +405,21 @@ fn describe_processing(
         target: target_description,
         candidates,
     }
+}
+
+fn transport_candidates(input: &Inspection, format: OutputFormat) -> Vec<super::CandidateRoute> {
+    let mut candidates = Vec::new();
+    if input.format == InputFormat::Hls {
+        candidates.push(super::CandidateRoute::new(
+            super::ProcessingRouteId::MpegTsHlsTs,
+            format,
+            "local-transport-stream-profile-must-pass",
+        ));
+    }
+    candidates.push(super::CandidateRoute::new(
+        super::ProcessingRouteId::Fmp4HlsTs,
+        format,
+        "fragmented-mp4-tracks-and-transport-presentation-must-pass",
+    ));
+    candidates
 }

@@ -90,6 +90,10 @@ impl SegmentInput {
     pub fn movie(&self) -> &Movie {
         &self.movie
     }
+    /// Original bounded movie bytes share this input's initialization identity.
+    pub fn movie_metadata(&self) -> &[u8] {
+        &self.layout.movie
+    }
     #[cfg(test)]
     pub(super) fn protection_layout(
         &self,
@@ -195,6 +199,18 @@ impl SegmentInput {
         stop: &Stop,
         visitor: &mut impl FnMut(&TrackDescriptor, &SampleInfo, &[u8]) -> Result<(), ConversionError>,
     ) -> Result<(Movie, SegmentReceipt), ConversionError> {
+        self.scan_with_fragment_metadata(resource, keys, stop, &mut |_| Ok(()), visitor)
+    }
+
+    /// Additional metadata qualification observes the same guarded fragment bytes.
+    pub fn scan_with_fragment_metadata(
+        &self,
+        resource: &Path,
+        keys: &InputKeys,
+        stop: &Stop,
+        metadata: &mut impl FnMut(&[u8]) -> Result<(), ConversionError>,
+        visitor: &mut impl FnMut(&TrackDescriptor, &SampleInfo, &[u8]) -> Result<(), ConversionError>,
+    ) -> Result<(Movie, SegmentReceipt), ConversionError> {
         let (mut reader, layout, initialization) = self.prepare(resource, keys, stop)?;
         let fingerprint = reader.expected_fingerprint().ok_or(BAD)?;
         let identity = FileIdentity::read(&reader.file).map_err(|_| BAD)?;
@@ -205,6 +221,7 @@ impl SegmentInput {
             .collect::<Vec<_>>();
         for (fragment_index, range) in layout.moofs.iter().enumerate() {
             let fragment = fragment::parse(&mut reader, range, &layout, &initialization)?;
+            metadata(&fragment.bytes)?;
             for (part_index, part) in fragment.tracks.iter().enumerate() {
                 let hash = hashes.get_mut(part.index).ok_or(BAD)?;
                 hash.grouping.update((fragment_index as u64).to_be_bytes());

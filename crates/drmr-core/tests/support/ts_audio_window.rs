@@ -1030,8 +1030,11 @@ fn standalone_partial_audio_mp4_inputs_and_outputs_are_refused_without_side_effe
     for (format, code) in [
         (OutputFormat::Hls, "audio-presentation-range-not-supported"),
         (OutputFormat::Dash, "audio-presentation-range-not-supported"),
-        // TS output first requires an original HLS transport source.
-        (OutputFormat::HlsTs, "ts-original-evidence-required"),
+        // This standalone edit profile remains outside conversion admission.
+        (
+            OutputFormat::HlsTs,
+            "audio-presentation-range-not-supported",
+        ),
         (OutputFormat::Mp4, "audio-presentation-range-not-supported"),
     ] {
         let output = root

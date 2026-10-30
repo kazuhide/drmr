@@ -181,13 +181,139 @@ fn effective_key_methods_must_agree_and_none_resets_all_formats() {
     assert_eq!(run(reset.as_bytes(), Profile::HlsBaseManifest).errors, 0);
     let replaced = value.replace("KEYFORMAT=\"format-two\"", "KEYFORMAT=\"format-one\"");
     assert_eq!(run(replaced.as_bytes(), Profile::HlsBaseManifest).errors, 0);
-    let future = value.replace("METHOD=SAMPLE-AES,", "METHOD=SAMPLE-AES-CTR,");
+    let future = value.replace("METHOD=SAMPLE-AES,", "METHOD=FUTURE-AES,");
     let incomplete = run(future.as_bytes(), Profile::HlsBaseManifest);
     assert!(
         incomplete.coverage["HLS-KEY-METHOD-CONSISTENCY"]
             .not_checked_reasons
             .contains(&NotCheckedReason::UnsupportedFeature)
     );
+}
+
+#[test]
+fn ctr_fmp4_declarations_are_complete_at_the_feature_derived_version() {
+    for version in [6, 7] {
+        let value = media(version).replace(
+            "#EXT-X-MAP",
+            "#EXT-X-KEY:METHOD=SAMPLE-AES-CTR,URI=\"key.bin\"\n#EXT-X-MAP",
+        );
+        let result = run(value.as_bytes(), Profile::HlsBaseManifest);
+        assert_eq!(result.errors, 0);
+        assert!(!result.incomplete, "valid CTR declarations must be checked");
+        for id in ["HLS-CTR-KEY", "HLS-CTR-MAP", "HLS-KEY-METHOD-CONSISTENCY"] {
+            assert_eq!(result.coverage[id].status, CheckStatus::Passed);
+        }
+        let reference = &result.coverage["HLS-CTR-KEY"].reference;
+        assert_eq!(
+            reference.url,
+            "https://datatracker.ietf.org/doc/html/draft-pantos-hls-rfc8216bis-22"
+        );
+        assert_eq!(reference.section, "4.4.4.4");
+        assert_eq!(
+            reference.revision,
+            "draft-pantos-hls-rfc8216bis-22 (2026-05-01, work in progress)"
+        );
+    }
+    let too_old = media(5).replace(
+        "#EXT-X-MAP",
+        "#EXT-X-KEY:METHOD=SAMPLE-AES-CTR,URI=\"key.bin\"\n#EXT-X-MAP",
+    );
+    assert!(has(
+        &run(too_old.as_bytes(), Profile::HlsBaseManifest),
+        "HLS-VERSION-MINIMUM"
+    ));
+    assert_eq!(Profile::HlsBaseManifest.revision(), "2026-10-30.1");
+    assert_eq!(Profile::AppleVodManifest.revision(), "2026-10-30.1");
+    assert_eq!(Profile::DashStaticManifest.revision(), "2026-10-26.1");
+}
+
+#[test]
+fn ctr_requires_an_applicable_map_for_each_encrypted_segment() {
+    let declaration = "#EXT-X-KEY:METHOD=SAMPLE-AES-CTR,URI=\"key.bin\"";
+    for body in [
+        format!("{declaration}\n#EXTINF:2,\npart.ts"),
+        format!(
+            "{declaration}\n#EXTINF:2,\nearlier.ts\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:2,\nlater.m4s"
+        ),
+        format!(
+            "#EXT-X-MAP:URI=\"init.mp4\"\n{declaration}\n#EXT-X-MAP:BYTERANGE=\"16@0\"\n#EXTINF:2,\npart.m4s"
+        ),
+    ] {
+        let value = plain(&body);
+        let result = run(value.as_bytes(), Profile::HlsBaseManifest);
+        assert!(has(&result, "HLS-CTR-MAP"), "{body}");
+        let failure = result
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.rule_id == "HLS-CTR-MAP")
+            .unwrap();
+        let span = failure.location.unwrap().span;
+        assert!(matches!(
+            &value[span.start..span.end],
+            "part.ts" | "earlier.ts" | "part.m4s"
+        ));
+    }
+    let value = plain(&format!(
+        "#EXTINF:2,\nclear.ts\n#EXT-X-MAP:URI=\"init.mp4\"\n{declaration}\n#EXTINF:2,\npart.m4s"
+    ));
+    let result = run(value.as_bytes(), Profile::HlsBaseManifest);
+    assert_eq!(result.errors, 0);
+    assert!(!result.incomplete);
+}
+
+#[test]
+fn ctr_effective_methods_must_agree_and_replacement_or_none_removes_the_method() {
+    let matching = media(6).replace("#EXT-X-MAP", "#EXT-X-KEY:METHOD=SAMPLE-AES-CTR,URI=\"wv.bin\",KEYFORMAT=\"urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed\",KEYFORMATVERSIONS=\"1\"\n#EXT-X-KEY:METHOD=SAMPLE-AES-CTR,URI=\"pr.bin\",KEYFORMAT=\"com.microsoft.playready\",KEYFORMATVERSIONS=\"1\"\n#EXT-X-MAP");
+    let result = run(matching.as_bytes(), Profile::HlsBaseManifest);
+    assert_eq!(result.errors, 0);
+    assert!(!result.incomplete);
+    for other in ["AES-128,IV=0x1", "SAMPLE-AES"] {
+        let value = media(7).replace("#EXT-X-MAP", &format!("#EXT-X-KEY:METHOD={other},URI=\"key-one.bin\",KEYFORMAT=\"one\"\n#EXT-X-KEY:METHOD=SAMPLE-AES-CTR,URI=\"key-two.bin\",KEYFORMAT=\"two\"\n#EXT-X-MAP"));
+        let result = run(value.as_bytes(), Profile::HlsBaseManifest);
+        assert_eq!(
+            result.coverage["HLS-KEY-METHOD-CONSISTENCY"].status,
+            CheckStatus::Failed
+        );
+        assert!(!result.incomplete);
+    }
+    for replacement in [
+        "#EXT-X-KEY:METHOD=SAMPLE-AES,URI=\"replacement.bin\"",
+        "#EXT-X-KEY:METHOD=NONE",
+    ] {
+        let value = plain(&format!(
+            "#EXT-X-KEY:METHOD=SAMPLE-AES-CTR,URI=\"key.bin\"\n{replacement}\n#EXTINF:2,\npart.ts"
+        ));
+        let result = run(value.as_bytes(), Profile::HlsBaseManifest);
+        assert_eq!(result.errors, 0);
+        assert!(!result.incomplete);
+        assert!(!result.coverage.contains_key("HLS-CTR-MAP"));
+    }
+}
+
+#[test]
+fn ctr_iv_is_forbidden_on_media_and_session_keys_and_apple_rejects_ctr() {
+    for tag in ["#EXT-X-KEY", "#EXT-X-SESSION-KEY"] {
+        let template = if tag == "#EXT-X-KEY" {
+            media(7).replace("#EXT-X-MAP", "KEY-DECLARATION\n#EXT-X-MAP")
+        } else {
+            "#EXTM3U\n#EXT-X-VERSION:7\nKEY-DECLARATION\n#EXT-X-STREAM-INF:BANDWIDTH=128000,CODECS=\"mp4a.40.2\",AVERAGE-BANDWIDTH=120000\nchild.m3u8\n".to_owned()
+        };
+        let declaration = format!("{tag}:METHOD=SAMPLE-AES-CTR,URI=\"key.bin\"");
+        let valid = template.replace("KEY-DECLARATION", &declaration);
+        let base = run(valid.as_bytes(), Profile::HlsBaseManifest);
+        assert_eq!(base.coverage["HLS-CTR-KEY"].status, CheckStatus::Passed);
+        assert!(!has(&base, "APPLE-HLS-CTR"));
+        let invalid = template.replace("KEY-DECLARATION", &format!("{declaration},IV=0x1"));
+        for profile in [Profile::HlsBaseManifest, Profile::AppleVodManifest] {
+            assert!(has(&run(invalid.as_bytes(), profile), "HLS-CTR-KEY"));
+        }
+        let apple = run(valid.as_bytes(), Profile::AppleVodManifest);
+        assert!(has(&apple, "APPLE-HLS-CTR"));
+        let coverage = &apple.coverage["APPLE-HLS-CTR"];
+        assert_eq!(coverage.status, CheckStatus::Failed);
+        assert_eq!(coverage.reference.section, "13.11");
+        assert_eq!(coverage.reference.revision, "retrieved 2026-10-30");
+    }
 }
 
 #[test]

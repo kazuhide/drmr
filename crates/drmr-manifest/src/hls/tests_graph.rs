@@ -606,6 +606,45 @@ fn session_keys_match_child_method_format_and_versions_without_exposing_identifi
 }
 
 #[test]
+fn ctr_session_keys_match_fmp4_children_and_both_apple_declarations_are_rejected() {
+    let declaration = "METHOD=SAMPLE-AES-CTR,URI=\"https://keys.example.invalid/key\",KEYFORMAT=\"urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed\",KEYFORMATVERSIONS=\"1\"";
+    let value = master(&format!("#EXT-X-SESSION-KEY:{declaration}\n{}", variant()));
+    let child = media_tags(&format!(
+        "#EXT-X-KEY:{declaration}\n#EXT-X-MAP:URI=\"init.mp4\""
+    ));
+    let child = child.replace("part.ts", "part.m4s");
+    let links = [(0, "child.m3u8", 1)];
+    let good = graph(
+        &[value.as_bytes(), child.as_bytes()],
+        &links,
+        Profile::HlsBaseManifest,
+    );
+    assert!(
+        good.iter()
+            .all(|result| result.errors == 0 && !result.incomplete)
+    );
+    assert_eq!(
+        good[0].coverage["HLS-SESSION-KEY-MATCH"].status,
+        CheckStatus::Passed
+    );
+    let mismatch = child.replace("SAMPLE-AES-CTR", "SAMPLE-AES");
+    assert!(has(
+        &graph(
+            &[value.as_bytes(), mismatch.as_bytes()],
+            &links,
+            Profile::HlsBaseManifest
+        )[0],
+        "HLS-SESSION-KEY-MATCH"
+    ));
+    let apple = graph(
+        &[value.as_bytes(), child.as_bytes()],
+        &links,
+        Profile::AppleVodManifest,
+    );
+    assert!(apple.iter().all(|result| has(result, "APPLE-HLS-CTR")));
+}
+
+#[test]
 fn relative_session_key_addresses_need_a_supplied_reference_base() {
     let value = master(&format!(
         "#EXT-X-SESSION-KEY:METHOD=AES-128,URI=\"key.bin\"\n{}",

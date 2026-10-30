@@ -93,6 +93,30 @@ fn kind(value: &str) -> TrackKind {
     }
 }
 
+fn hls_variant_kind(attributes: &Attributes) -> TrackKind {
+    let audio_only = attributes.get("RESOLUTION").is_none()
+        && attributes.get("CODECS").is_some_and(|value| {
+            !value.is_empty()
+                && value.split(',').all(|codec| {
+                    matches!(
+                        codec
+                            .trim()
+                            .split('.')
+                            .next()
+                            .unwrap_or("")
+                            .to_ascii_lowercase()
+                            .as_str(),
+                        "mp4a" | "ac-3" | "ec-3" | "ac-4" | "opus" | "flac" | "alac"
+                    )
+                })
+        });
+    if audio_only {
+        TrackKind::Audio
+    } else {
+        TrackKind::Video
+    }
+}
+
 fn inherited<'a>(node: Node<'a, 'a>, name: &str) -> Option<&'a str> {
     node.ancestors()
         .filter(Node::is_element)
@@ -537,7 +561,7 @@ impl HlsDocument {
                 }
                 self.pending_variant = Some(Reference {
                     uri: String::new(),
-                    kind: TrackKind::Video,
+                    kind: hls_variant_kind(&attrs),
                     codec: attrs.get("CODECS").and_then(safe_codec),
                 });
             }

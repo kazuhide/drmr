@@ -34,10 +34,10 @@ unencrypted media. The two containers have different conversion limits:
 
 | HLS input | Input container | DASH output protection | fMP4 HLS output protection | MPEG-TS HLS output protection |
 | --- | --- | --- | --- | --- |
-| Clear HLS | fMP4 | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 | Not supported |
-| `cenc` HLS | fMP4 | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 | Not supported |
-| `cbcs` HLS | fMP4 | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 | Not supported |
-| AES-128 HLS | fMP4 | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 | Not supported |
+| Clear HLS | fMP4 | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 | Clear, AES-128, SAMPLE-AES |
+| `cenc` HLS | fMP4 | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 | Clear, AES-128, SAMPLE-AES |
+| `cbcs` HLS | fMP4 | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 | Clear, AES-128, SAMPLE-AES |
+| AES-128 HLS | fMP4 | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 | Clear, AES-128, SAMPLE-AES |
 | Clear HLS | MPEG-TS | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 | Clear, AES-128, SAMPLE-AES |
 | AES-128 HLS | MPEG-TS | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 | Clear, AES-128, SAMPLE-AES |
 | SAMPLE-AES HLS | MPEG-TS | Clear, `cenc`, `cbcs` | Clear, `cbcs`, AES-128 | Clear, AES-128, SAMPLE-AES |
@@ -169,7 +169,7 @@ Set `DRMR_CONVERSION_REPORT` to a path outside the repository to save the JSON r
 | MP4 file | Clear, `cenc`, `cbcs` | One track, or the audio and video from one qualified progressive source below |
 | DASH directory | Clear, `cenc`, `cbcs` | Separate fragmented MP4 tracks in one static presentation |
 | HLS directory (`hls`) | Clear, `cbcs`, AES-128 | fMP4 resources and completed playlists |
-| HLS directory (`hls-ts`) | Clear, AES-128, SAMPLE-AES | Supported local TS input; separate TS audio/video playlists when both are present |
+| HLS directory (`hls-ts`) | Clear, AES-128, SAMPLE-AES | Qualified TS or fragmented MP4 input; separate TS audio/video playlists when both are present |
 
 ### Progressive MP4 with a finite audio range
 
@@ -303,8 +303,23 @@ cargo test -p drmr-core --test conversion_sample_aes --locked
 Clear, AES-128, and SAMPLE-AES TS inputs can produce all three TS output
 protections. Use `--format hls-ts`, with `--to clear`, `--to hls-aes128`, or
 `--to hls-sample-aes`. `cenc` and `cbcs` apply to MP4 samples and are refused
-with this output container. MP4, fragmented MP4 HLS, and DASH inputs are outside
-the current TS output profile.
+with this output container. Qualified fragmented MP4 files, fragmented MP4 HLS,
+and static DASH can also produce these TS outputs, with supplied keys for
+encrypted input. Progressive MP4 remains outside the TS output profile.
+
+Changing from fragmented MP4 to TS uses `--processing stitch` (or `auto`). It
+prepares complete tracks, repackages them into TS segments, then independently
+reads the final playlists and compares every encoded frame and timestamp with
+the source. `--processing segments` refuses this container change. Existing
+TS-to-TS segment processing remains available.
+
+MP4 edits that exclude initial audio decoder warm-up samples cannot be carried
+into this TS profile and are refused with
+`ts-output-presentation-not-representable`, without publishing an output. A
+qualified final playback end inside the last AAC frame is retained through the
+HLS duration declaration. The input must have the supported exact transport
+clock mapping; conversion does not apply a broad timestamp tolerance. See
+[verification](verification.md) for the evidence provided by native checks.
 
 The profile supports progressive H.264 video, 44.1 or 48 kHz AAC-LC audio, or both.
 When both are present, output uses separate video and audio TS playlists joined
@@ -338,7 +353,8 @@ A passing short fixture does not qualify arbitrary broadcast streams or codecs.
 The default `auto` and explicit `stitch` converter support a `multi-drm` profile for qualified clear
 MPEG-TS HLS and clear MP4 sources. Fragmented MP4 DASH can carry Widevine,
 PlayReady, or both with CBCS encryption; fragmented MP4 HLS and SAMPLE-AES TS HLS
-can carry FairPlay declarations. TS output requires a supported TS source.
+can carry FairPlay declarations. TS output accepts supported TS or fragmented
+MP4 sources, including known-key encrypted fragmented MP4.
 With `segments`, supported clear or known-key encrypted TS/fMP4 sources can
 generate the corresponding DRM output while retaining the source container and
 sample boundaries.
@@ -384,4 +400,19 @@ regression with:
 
 ```sh
 cargo test --locked -p drmr --test conversion_signaling -- --nocapture
+```
+
+## Fragmented MP4 to transport-stream regression
+
+The ten-second Big Buck Bunny regression covers clear, CENC and CBCS DASH/HLS
+inputs converted to clear or FairPlay SAMPLE-AES TS, including separate video
+and audio. Audio-only cases retain 44.1 and 48 kHz frame clocks. Additional
+cases cover a standalone fragmented MP4 and whole-segment AES-128 TS output.
+The normal conversion and independent verification run with unavailable decoder
+executables; one short route additionally checks complete decoded media.
+Manifest, key/IV, resource-content and processing-mode changes must be rejected
+by their corresponding checks. The initial-audio-edit refusal is tested separately.
+
+```sh
+cargo test --locked -p drmr-core --test conversion_fmp4_ts -- --nocapture
 ```

@@ -12,6 +12,7 @@ use std::{
     sync::Arc,
 };
 
+mod audio_range;
 mod crypto;
 
 #[test]

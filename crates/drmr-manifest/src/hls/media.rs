@@ -15,6 +15,7 @@ struct Media<'a> {
     // Length and offset are u64; their exclusive sum has no separate u64 limit.
     previous: Option<(&'a str, u128)>,
     keys: super::keys::State<'a>,
+    initialization: Option<Span>,
     segments: usize,
     saw_discontinuity: bool,
     endlist: bool,
@@ -49,7 +50,14 @@ pub(super) fn lint(
         ..Media::default()
     };
     for &line in &lines[1..] {
-        state.line(document, line, sink, minimum, facts);
+        state.line(
+            document,
+            line,
+            context.options.profile,
+            sink,
+            minimum,
+            facts,
+        );
         if state.references > context.options.limits.max_references {
             super::resource_limit(sink, line.span);
             sink.check(
@@ -72,6 +80,7 @@ impl<'a> Media<'a> {
         &mut self,
         document: &Document<'_>,
         line: Line<'a>,
+        profile: Profile,
         sink: &mut DiagnosticSink<'_>,
         minimum: &mut u64,
         facts: &mut super::HlsFacts,
@@ -93,7 +102,7 @@ impl<'a> Media<'a> {
             "#EXT-X-KEY" => {
                 if let Some(attributes) = attribute_list(line, sink) {
                     self.references += usize::from(syntax::get(&attributes, "URI").is_some());
-                    self.keys.declare(&attributes, line, minimum, sink);
+                    self.keys.declare(&attributes, line, minimum, profile, sink);
                     if let Some(fact) = super::keys::fact(&attributes, line.span, document.base_uri)
                     {
                         facts.keys.push(fact);
@@ -178,6 +187,7 @@ impl<'a> Media<'a> {
     }
 
     fn map(&mut self, line: Line<'_>, sink: &mut DiagnosticSink<'_>) {
+        self.initialization = None;
         let Some(attributes) = attribute_list(line, sink) else {
             return;
         };
@@ -192,6 +202,7 @@ impl<'a> Media<'a> {
         );
         if let Some(uri) = syntax::get(&attributes, "URI") {
             super::uri_check(uri, sink);
+            self.initialization = (uri.quoted && syntax::uri(uri.value)).then_some(line.span);
         }
         if let Some(attribute) = syntax::get(&attributes, "BYTERANGE") {
             map_range(attribute, sink);
@@ -202,7 +213,8 @@ impl<'a> Media<'a> {
     fn segment(&mut self, line: Line<'a>, sink: &mut DiagnosticSink<'_>) {
         self.references += 1;
         self.segments += 1;
-        self.keys.check_methods(line.span, sink);
+        self.keys
+            .check_segment(self.initialization, line.span, sink);
         check(
             sink,
             rule(

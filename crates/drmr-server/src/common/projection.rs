@@ -930,6 +930,35 @@ mod coverage_tests {
     }
 
     #[test]
+    fn unrepresentable_transport_presentation_retains_its_refusal_without_private_detail() {
+        let payload = json!({
+            "schema_version":1,"command":"convert","status":"failed",
+            "error":{"code":"ts-output-presentation-not-representable",
+                "hint":"PRIVATE_SOURCE_OR_TOOL_DETAIL","last_activity":"input-preparation"}
+        });
+        let projected = project(OperationName::Convert, None, None, &payload).unwrap();
+        assert!(!projected.success);
+        assert_eq!(projected.kind, "failure");
+        assert_eq!(
+            projected.value["error"]["code"],
+            "ts-output-presentation-not-representable"
+        );
+        assert_eq!(
+            projected.value["error"]["last_activity"],
+            "input-preparation"
+        );
+        assert!(
+            !projected
+                .value
+                .to_string()
+                .contains("PRIVATE_SOURCE_OR_TOOL_DETAIL")
+        );
+        let mut unknown = payload;
+        unknown["error"]["code"] = json!("private-transport-error");
+        assert!(project(OperationName::Convert, None, None, &unknown).is_err());
+    }
+
+    #[test]
     fn native_static_refusals_retain_their_code_without_private_detail_passthrough() {
         for code in [
             "invalid-avc-syntax",
@@ -1053,6 +1082,7 @@ const NATIVE_RULES: &[&str] = &[
     "APPLE-HLS-AUDIO-DESCRIPTION",
     "APPLE-HLS-AVERAGE-BANDWIDTH",
     "APPLE-HLS-HD-VARIANTS",
+    "APPLE-HLS-CTR",
     "APPLE-HLS-IFRAME-AVERAGE-BANDWIDTH",
     "APPLE-HLS-LANGUAGE",
     "APPLE-HLS-MEDIA-ALIGNMENT",
@@ -1128,6 +1158,8 @@ const NATIVE_RULES: &[&str] = &[
     "HLS-I-FRAME-ATTRIBUTES",
     "HLS-KEY",
     "HLS-KEY-METHOD",
+    "HLS-CTR-KEY",
+    "HLS-CTR-MAP",
     "HLS-KEY-METHOD-CONSISTENCY",
     "HLS-LIMITS",
     "HLS-MAP",
@@ -1181,6 +1213,7 @@ const NATIVE_MESSAGES: &[&str] = &[
     "APPLE-HLS-AUDIO-DESCRIPTION",
     "APPLE-HLS-AVERAGE-BANDWIDTH",
     "APPLE-HLS-HD-VARIANTS",
+    "APPLE-HLS-CTR",
     "APPLE-HLS-IFRAME-AVERAGE-BANDWIDTH",
     "APPLE-HLS-LANGUAGE",
     "APPLE-HLS-MEDIA-ALIGNMENT",
@@ -1256,6 +1289,8 @@ const NATIVE_MESSAGES: &[&str] = &[
     "HLS-I-FRAME-ATTRIBUTES",
     "HLS-KEY",
     "HLS-KEY-METHOD",
+    "HLS-CTR-KEY",
+    "HLS-CTR-MAP",
     "HLS-KEY-METHOD-CONSISTENCY",
     "HLS-LIMITS",
     "HLS-MAP",
@@ -1299,6 +1334,7 @@ const NATIVE_MESSAGES: &[&str] = &[
     "apple-hls-audio-description-selection-invalid",
     "apple-hls-average-bandwidth-required",
     "apple-hls-finite-vod-required",
+    "apple-hls-ctr-not-permitted",
     "apple-hls-highest-resolution-variants-recommended",
     "apple-hls-iframe-average-bandwidth-required",
     "apple-hls-media-alignment-not-inspected",
@@ -1329,6 +1365,8 @@ const NATIVE_MESSAGES: &[&str] = &[
     "hls-date-time-invalid",
     "hls-delivery-not-inspected",
     "hls-effective-encryption-methods-differ",
+    "hls-ctr-iv-not-permitted",
+    "hls-ctr-map-required",
     "hls-encrypted-map-iv-required",
     "hls-encryption-method-not-checked",
     "hls-extension-attribute-not-checked",
@@ -1387,6 +1425,7 @@ const NATIVE_MESSAGES: &[&str] = &[
 ];
 
 const NATIVE_URLS: &[&str] = &[
+    "https://datatracker.ietf.org/doc/html/draft-pantos-hls-rfc8216bis-22",
     "https://github.com/MPEGGroup/DASHSchema/blob/6th-Ed/DASH-MPD.xsd",
     "https://conformance.dashif.org/faq",
     "https://dashif.org/Guidelines-TimingModel/",
@@ -1402,6 +1441,9 @@ const NATIVE_URLS: &[&str] = &[
 ];
 
 const NATIVE_SECTIONS: &[&str] = &[
+    "4.4.4.4",
+    "3.1.2,4.4.4.4-4.4.4.5",
+    "13.11",
     "SegmentBaseType, MultipleSegmentBaseType, SegmentListType, SegmentURLType",
     "18.4 Simple addressing; finite reference counts and nominal timing",
     "1 Format; 4 Common SystemID and PSSH Box Format",
@@ -1456,6 +1498,9 @@ const NATIVE_SECTIONS: &[&str] = &[
 ];
 
 const NATIVE_REVISIONS: &[&str] = &[
+    "2026-10-30.1",
+    "draft-pantos-hls-rfc8216bis-22 (2026-05-01, work in progress)",
+    "retrieved 2026-10-30",
     "2026-10-26.1",
     "MPEG DASH sixth-edition schema",
     "2026-10-21.1",
@@ -1545,6 +1590,7 @@ const FIXED_INSPECTION_TOKENS: &[&str] = &[
     "mpeg-ts-dash",
     "mpeg-ts-hls",
     "mpeg-ts-hls-ts",
+    "fmp4-hls-ts",
     "mpeg-ts-sample-aes-hls",
     "multiple-mp4-movie-boxes",
     "no-supported-processing-route",
@@ -1870,6 +1916,7 @@ const FAILURE_CODES: &[&str] = &[
     "ts-original-evidence-required",
     "ts-original-pending-limit",
     "ts-output-map-not-supported",
+    "ts-output-presentation-not-representable",
     "ts-output-profile-not-supported",
     "ts-pes-incomplete-at-segment-boundary",
     "ts-pes-metadata-not-supported",
@@ -1954,6 +2001,59 @@ mod tests {
             .is_err()
         );
     }
+    #[test]
+    fn actual_ctr_manifest_reports_preserve_checked_extensions_and_apple_refusal() {
+        use drmr_core::{
+            conversion::{Converter, manifest_lint::ManifestProfile},
+            events::NoSink,
+            toolrun::{Secrets, ToolRunner},
+        };
+        use std::sync::Arc;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("media.m3u8");
+        let source = "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:2\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXT-X-KEY:METHOD=SAMPLE-AES-CTR,URI=\"skd://synthetic-ctr\"\n#EXT-X-MAP:URI=\"absent-init.mp4\"\n#EXTINF:2.0,\nabsent-segment.m4s\n#EXT-X-ENDLIST\n";
+        let converter = Converter::new(
+            Arc::new(ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink))),
+            "unused-packager",
+            "unused-ffmpeg",
+        );
+        for (profile, value, expected_rule) in [
+            (ManifestProfile::Base, source.to_owned(), None),
+            (
+                ManifestProfile::AppleVod,
+                source.to_owned(),
+                Some("APPLE-HLS-CTR"),
+            ),
+            (
+                ManifestProfile::Base,
+                source.replace(",URI=", ",IV=0x1,URI="),
+                Some("HLS-CTR-KEY"),
+            ),
+            (
+                ManifestProfile::Base,
+                source.replace("#EXT-X-MAP:URI=\"absent-init.mp4\"\n", ""),
+                Some("HLS-CTR-MAP"),
+            ),
+        ] {
+            std::fs::write(&path, value).unwrap();
+            let report = converter
+                .lint_manifest_with_profile(&path, OutputFormat::Hls, profile)
+                .unwrap();
+            if let Some(rule) = expected_rule {
+                assert!(
+                    report
+                        .diagnostics
+                        .iter()
+                        .any(|diagnostic| diagnostic.rule_id == rule)
+                );
+            } else {
+                assert!(report.is_clean_for_scope());
+            }
+            let input = serde_json::to_value(&report).unwrap();
+            assert_eq!(native(&input).unwrap(), input);
+        }
+    }
+
     #[test]
     fn actual_hls_native_report_keeps_fixed_reference_sections_and_refuses_private_mutations() {
         use drmr_core::{

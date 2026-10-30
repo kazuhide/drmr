@@ -73,6 +73,34 @@ fn hls_resource_and_sample_declarations_have_different_units() {
     }
 }
 #[test]
+fn audio_only_hls_variants_report_their_declared_audio_role() {
+    let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("master.m3u8");
+    std::fs::write(
+        root.path().join("media.m3u8"),
+        "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\npart.ts\n#EXT-X-ENDLIST\n",
+    )
+    .unwrap();
+    for (attributes, expected) in [
+        (",CODECS=\"mp4a.40.2\"", "audio"),
+        (",CODECS=\"ec-3\"", "audio"),
+        (",CODECS=\"avc1.64001f,mp4a.40.2\"", "video"),
+        (",CODECS=\"mp4a.40.2\",RESOLUTION=640x360", "video"),
+        (",CODECS=\"unrecognized\"", "video"),
+        ("", "video"),
+    ] {
+        std::fs::write(
+            &input,
+            format!("#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100000{attributes}\nmedia.m3u8\n"),
+        )
+        .unwrap();
+        let report = json(&input);
+        assert_eq!(report["tracks"][0]["kind"], expected, "{attributes}");
+        assert_eq!(report["media_verified"], false);
+    }
+}
+
+#[test]
 fn hls_method_evidence_stays_with_each_child_and_unknown_methods_are_fixed_tokens() {
     let dir = tempfile::tempdir().unwrap();
     for (name, method) in [
@@ -438,8 +466,10 @@ fn ts_output_plans_separate_the_container_and_sample_encryption_intent() {
         let report = inspection::plan(source.clone(), target, vec![OutputFormat::HlsTs]);
         assert!(report.compatible && report.execution_available);
         let processing = report.processing.unwrap();
-        assert_eq!(processing.candidates.len(), 1);
+        assert_eq!(processing.candidates.len(), 2);
         assert_eq!(processing.candidates[0].route.as_str(), "mpeg-ts-hls-ts");
+        assert_eq!(processing.candidates[1].route.as_str(), "fmp4-hls-ts");
+        assert!(processing.candidates[1].revalidation_required);
         assert!(processing.candidates[0].revalidation_required);
         if target == TargetProtection::HlsSampleAes {
             let description = serde_json::to_value(processing.target).unwrap();
@@ -478,5 +508,9 @@ fn ts_output_plans_separate_the_container_and_sample_encryption_intent() {
         TargetProtection::Clear,
         vec![OutputFormat::HlsTs],
     );
-    assert!(!report.compatible && report.processing.unwrap().candidates.is_empty());
+    assert!(report.compatible && report.execution_available);
+    let candidates = report.processing.unwrap().candidates;
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].route.as_str(), "fmp4-hls-ts");
+    assert!(candidates[0].revalidation_required);
 }
