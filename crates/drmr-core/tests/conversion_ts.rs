@@ -726,11 +726,14 @@ fn segment_durations_and_output_profile_are_not_silently_normalized() {
     request.format = OutputFormat::Mp4;
     assert!(converter().convert(request).unwrap().verification.passed);
     assert!(mp4_output.exists());
+    let output_key = OutputKey::from_hex(KID, KEY).unwrap();
     let mut request = clear_request(&input, &output, &keys, &hls);
     request.target = TargetProtection::Cenc;
+    request.output_key = Some(&output_key);
+    // CENC fMP4 HLS is supported, but generic encryption still needs a key URI.
     assert_eq!(
         converter().convert(request).unwrap_err().0,
-        "ts-output-profile-not-supported"
+        "hls-key-uri-required"
     );
     assert!(!output.exists());
 }
