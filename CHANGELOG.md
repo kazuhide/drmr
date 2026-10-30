@@ -15,6 +15,11 @@ and the existing CLI workflow. Web and Desktop remain experimental.
 - Generate and independently check Widevine and PlayReady declarations for
   CENC (counter-mode) DASH, including PlayReady AESCTR headers and their key
   checksum. CBCS retains its separate AESCBC header profile.
+- Generate CBCS fMP4 HLS with FairPlay, Widevine and PlayReady together, or
+  any supported subset. CENC fMP4 HLS supports Widevine and PlayReady with
+  `SAMPLE-AES-CTR`; FairPlay and Apple's authoring profile require CBCS.
+  Check each provider declaration against the actual encryption and key
+  identifier during conversion, retained-source acquisition and fresh verification.
 - Package qualified fragmented MP4 files, DASH and fMP4 HLS as clear, AES-128
   or FairPlay SAMPLE-AES TS HLS. Encrypted input requires known keys.
   Container changes use `auto` or `stitch`; `segments` refuses them.
@@ -25,6 +30,11 @@ and the existing CLI workflow. Web and Desktop remain experimental.
   are refused rather than silently dropped.
 - Link the website's input/output matrix to examples for the added routes,
   including separate clear-input and encrypted-input instructions.
+- Qualify release archives with native A → B → A comparisons across the
+  documented container/protection profiles. Reuse generated short fixtures,
+  verify every conversion independently, and bind complete reports to each
+  archive and source revision. Explicit track-layout conditions remain separate
+  from successful conversions.
 
 ### Fixed
 

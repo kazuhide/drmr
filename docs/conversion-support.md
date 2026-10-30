@@ -46,6 +46,10 @@ unencrypted media. The two containers have different conversion limits:
 
 Choose `--format hls` for fMP4 HLS or `--format hls-ts` for MPEG-TS HLS.
 For FairPlay transport-stream encryption, use `--to hls-sample-aes`.
+CENC fMP4 HLS uses `SAMPLE-AES-CTR`; it is a base-HLS profile and is not compatible
+with Apple's authoring requirements or FairPlay. CBCS fMP4 HLS uses `SAMPLE-AES`
+and can carry all three DRM declarations. These declarations do not establish
+license-server or device playback support. See [DRM signaling](drm-signaling.md).
 SAMPLE-AES TS output is technically supported by HLS; the supported drmr profile
 is described below. Restrictions in this table describe drmr's current
 implementation, rather than an impossibility of the media formats.

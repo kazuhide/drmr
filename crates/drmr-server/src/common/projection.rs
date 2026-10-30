@@ -959,6 +959,29 @@ mod coverage_tests {
     }
 
     #[test]
+    fn invalid_hls_provider_signaling_preserves_only_the_public_failure_code() {
+        let payload = json!({
+            "schema_version":1,"command":"convert","status":"failed",
+            "error":{"code":"hls-drm-signaling-invalid",
+                "hint":"PRIVATE_PROVIDER_URI_OR_KEY","last_activity":"inspection"}
+        });
+        let projected = project(OperationName::Convert, None, None, &payload).unwrap();
+        assert!(!projected.success);
+        assert_eq!(projected.kind, "failure");
+        assert_eq!(
+            projected.value["error"]["code"],
+            "hls-drm-signaling-invalid"
+        );
+        assert_eq!(projected.value["error"]["last_activity"], "inspection");
+        assert!(
+            !projected
+                .value
+                .to_string()
+                .contains("PRIVATE_PROVIDER_URI_OR_KEY")
+        );
+    }
+
+    #[test]
     fn native_static_refusals_retain_their_code_without_private_detail_passthrough() {
         for code in [
             "invalid-avc-syntax",
@@ -1518,7 +1541,6 @@ const FIXED_INSPECTION_TOKENS: &[&str] = &[
     "ac-3",
     "aes-128-cbc",
     "aes-128-ctr",
-    "cenc-hls-output-not-supported",
     "convert-one-output-format-per-invocation",
     "dash-invalid-xml",
     "dash-no-representations",
@@ -1640,7 +1662,6 @@ const FAILURE_CODES: &[&str] = &[
     "processing-selection-invalid",
     "audio-presentation-edit-not-supported",
     "cancelled",
-    "cenc-hls-output-not-supported",
     "dash-invalid-xml",
     "dash-unsupported-root",
     "decoded-presentation-range-unavailable",
@@ -1674,6 +1695,7 @@ const FAILURE_CODES: &[&str] = &[
     "hls-complete-vod-required",
     "hls-data-after-endlist",
     "hls-duplicate-header",
+    "hls-drm-signaling-invalid",
     "hls-encrypted-map-explicit-iv-required",
     "hls-input-key-required",
     "hls-inspection-failed",
