@@ -440,7 +440,10 @@ fn supported(format: OutputFormat, target: TargetProtection) -> bool {
         ),
         OutputFormat::Hls => matches!(
             target,
-            TargetProtection::Clear | TargetProtection::Cbcs | TargetProtection::HlsAes128
+            TargetProtection::Clear
+                | TargetProtection::Cenc
+                | TargetProtection::Cbcs
+                | TargetProtection::HlsAes128
         ),
         OutputFormat::HlsTs => matches!(
             target,

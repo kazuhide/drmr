@@ -38,6 +38,14 @@ no cryptographic authentication, license acquisition or device qualification.
 
 A license URL can also be encoded inside a Protection System Specific Header (PSSH), which is DRM initialization metadata stored in a media file or manifest. Hexadecimal and Base64 are reversible encodings, not encryption. Masking a URL only in its readable form is insufficient. Known signaling values are removed from diagnostic records, while the intended signaling remains in the media output.
 
+Explicit HLS DRM output publishes Widevine PSSH and PlayReady Object (PRO)
+metadata in Base64 data URIs and stores the selected PSSH boxes in MP4
+initialization files. A PlayReady PRO can contain the configured license URL.
+drmr does not insert content-key bytes into these declarations. FairPlay
+output publishes its configured `skd:` key URI. Logs and UI omit or mask these
+addresses, complete data URIs and their registered encoded forms; the output
+manifests and initialization files deliberately retain them for players.
+
 Do not place confidential tokens in an output license URL or key URI unless publishing that address is intended. Keep signed input manifests and retained downloads private: original HLS playlists and DASH MPDs can contain credentials or signed URLs.
 
 HLS, DASH and MP4 URL input use the same fetch policy. Request headers are sent

@@ -187,11 +187,10 @@ pub(in crate::conversion) fn profile(
         return Err(super::UNSUPPORTED);
     }
     let supported = match (format, target) {
-        (OutputFormat::Dash, TargetProtection::Cenc | TargetProtection::Cbcs) => {
-            !systems.contains(&DrmSystem::FairPlay)
-        }
-        (OutputFormat::Hls, TargetProtection::Cbcs)
-        | (OutputFormat::HlsTs, TargetProtection::HlsSampleAes) => systems == [DrmSystem::FairPlay],
+        (OutputFormat::Dash, TargetProtection::Cenc | TargetProtection::Cbcs)
+        | (OutputFormat::Hls, TargetProtection::Cenc) => !systems.contains(&DrmSystem::FairPlay),
+        (OutputFormat::Hls, TargetProtection::Cbcs) => true,
+        (OutputFormat::HlsTs, TargetProtection::HlsSampleAes) => systems == [DrmSystem::FairPlay],
         _ => false,
     };
     if !supported {
@@ -220,23 +219,11 @@ impl crate::conversion::Converter {
                 admitted.actual_format,
                 format,
             )?;
-        } else if format != OutputFormat::HlsTs {
-            match admitted.input.format {
-                InputFormat::Mp4 => super::clear_mp4(source, &self.backend.stop)?,
-                InputFormat::Hls if admitted.actual_format == OutputFormat::HlsTs => {}
-                _ => return Err(super::UNSUPPORTED),
-            }
-            if admitted
-                .track_protection
-                .iter()
-                .any(|value| *value != crate::conversion::SourceProtection::Clear)
-            {
-                return Err(super::UNSUPPORTED);
-            }
         }
         if admitted.track_protection.is_empty() || !admitted.eligible_formats.contains(&format) {
             return Err(super::UNSUPPORTED);
         }
+        qualified_source_metadata(source, admitted, &self.backend.stop)?;
         Ok(())
     }
 
@@ -273,42 +260,59 @@ impl crate::conversion::Converter {
     ) -> Result<(), ConversionError> {
         profile(systems, format, target)?;
         self.backend.check_cancelled()?;
-        if self.processing_mode == crate::conversion::ProcessingMode::Segments
-            || format == OutputFormat::HlsTs
-        {
-            let qualified = self.validate_source(
-                source,
-                crate::conversion::SourceValidationPurpose::Conversion,
-            )?;
-            return self.validate_qualified_drm_source(
-                source.input,
-                &qualified,
-                systems,
-                format,
-                target,
-            );
-        }
-        let input = crate::inspection::inspect(source.input).map_err(|_| super::UNSUPPORTED)?;
-        if input.format == InputFormat::Mp4 {
-            super::clear_mp4(source.input, &self.backend.stop)?;
-        } else if input.format != InputFormat::Hls {
-            return Err(super::UNSUPPORTED);
-        }
-        let admitted = self.validate_source(
+        let qualified = self.validate_source(
             source,
             crate::conversion::SourceValidationPurpose::Conversion,
         )?;
-        if admitted.track_protection.is_empty()
-            || admitted
-                .track_protection
-                .iter()
-                .any(|value| *value != crate::conversion::SourceProtection::Clear)
-            || (input.format == InputFormat::Hls && admitted.actual_format != OutputFormat::HlsTs)
-            || !admitted.eligible_formats.contains(&format)
-        {
-            return Err(super::UNSUPPORTED);
-        }
+        self.validate_qualified_drm_source(source.input, &qualified, systems, format, target)?;
         Ok(())
+    }
+}
+
+fn qualified_source_metadata(
+    source: &std::path::Path,
+    admitted: &crate::conversion::SourceQualification,
+    stop: &crate::concurrency::Stop,
+) -> Result<(), ConversionError> {
+    use crate::conversion::{SourceProtection, dash, files, hls, presentation};
+    match admitted.input.format {
+        InputFormat::Mp4 => super::qualified_mp4(source, stop, true),
+        InputFormat::Dash => {
+            let parent = source.parent().ok_or(super::UNSUPPORTED)?;
+            for row in dash::layout_output_resources(source, stop)? {
+                for (ordinal, path) in row.into_iter().enumerate() {
+                    super::qualified_mp4(&parent.join(path), stop, ordinal == 0)?;
+                }
+            }
+            Ok(())
+        }
+        InputFormat::Hls => {
+            if admitted.actual_format != OutputFormat::Hls
+                || admitted
+                    .track_protection
+                    .contains(&SourceProtection::HlsAes128)
+            {
+                // Transport media has no MP4 metadata. AES-128 resources are checked
+                // after localization, which exposes their plaintext init and media.
+                return Ok(());
+            }
+            for media in presentation::hls_media_paths(source)? {
+                let parent = media.path.parent().ok_or(super::UNSUPPORTED)?;
+                let bytes = files::read_manifest(&media.path)?;
+                let text = std::str::from_utf8(&bytes).map_err(|_| super::UNSUPPORTED)?;
+                for line in text.lines().map(str::trim) {
+                    super::cancelled(stop)?;
+                    if let Some(value) = line.strip_prefix("#EXT-X-MAP:") {
+                        let attrs = hls::attributes(value)?;
+                        let uri = attrs.get("URI").ok_or(super::UNSUPPORTED)?;
+                        super::qualified_mp4(&hls::local_resource(parent, uri)?, stop, true)?;
+                    } else if !line.is_empty() && !line.starts_with('#') {
+                        super::qualified_mp4(&hls::local_resource(parent, line)?, stop, false)?;
+                    }
+                }
+            }
+            Ok(())
+        }
     }
 }
 
@@ -373,13 +377,44 @@ mod tests {
                 OutputFormat::Dash,
                 TargetProtection::Cbcs,
             ),
-            (vec![Widevine], OutputFormat::Hls, TargetProtection::Cbcs),
             (vec![FairPlay], OutputFormat::HlsTs, TargetProtection::Cbcs),
             (vec![FairPlay], OutputFormat::Dash, TargetProtection::Cenc),
         ] {
             assert!(profile(&systems, format, target).is_err());
         }
     }
+    #[test]
+    fn hls_sample_encryption_profiles_allow_exact_ordered_provider_subsets() {
+        use DrmSystem::{FairPlay, PlayReady, Widevine};
+        for systems in [vec![Widevine], vec![PlayReady], vec![Widevine, PlayReady]] {
+            profile(&systems, OutputFormat::Hls, TargetProtection::Cenc).unwrap();
+            profile(&systems, OutputFormat::Hls, TargetProtection::Cbcs).unwrap();
+        }
+        for systems in [
+            vec![FairPlay],
+            vec![Widevine, FairPlay],
+            vec![PlayReady, FairPlay],
+            vec![Widevine, PlayReady, FairPlay],
+        ] {
+            profile(&systems, OutputFormat::Hls, TargetProtection::Cbcs).unwrap();
+            assert!(profile(&systems, OutputFormat::Hls, TargetProtection::Cenc).is_err());
+        }
+        for systems in [
+            vec![Widevine],
+            vec![PlayReady],
+            vec![Widevine, PlayReady, FairPlay],
+        ] {
+            assert!(
+                profile(
+                    &systems,
+                    OutputFormat::HlsTs,
+                    TargetProtection::HlsSampleAes
+                )
+                .is_err()
+            );
+        }
+    }
+
     #[test]
     fn declared_widevine_scheme_and_every_identifier_are_bound_to_the_output() {
         let kid = "000102030405060708090a0b0c0d0e0f";

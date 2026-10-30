@@ -507,7 +507,7 @@ impl Converter {
         let multi_signaling = self
             .output_signaling
             .as_ref()
-            .filter(|value| value.is_multi() && request.format == OutputFormat::Dash)
+            .filter(|value| value.is_multi())
             .map(|value| {
                 value.multi_objects(
                     request
@@ -526,20 +526,18 @@ impl Converter {
                 format!("label=:key_id={}:key={}", key.0.id_hex(), secret.as_str()),
             ]);
             if request.format == OutputFormat::Hls {
-                if self
-                    .output_signaling
-                    .as_ref()
-                    .is_some_and(|value| value.is_multi())
-                {
-                    argv.extend(["--protection_systems".into(), "FairPlay".into()]);
+                if self.output_signaling.is_some() {
+                    // Provider PSSH records are supplied explicitly; FairPlay needs no PSSH.
+                    if multi_signaling
+                        .as_ref()
+                        .is_some_and(|value| value.hex.is_empty())
+                    {
+                        argv.extend(["--protection_systems".into(), "FairPlay".into()]);
+                    }
                 }
-                argv.extend([
-                    "--hls_key_uri".into(),
-                    request
-                        .hls_key_uri
-                        .ok_or(ConversionError("hls-key-uri-required"))?
-                        .into(),
-                ]);
+                if let Some(uri) = request.hls_key_uri {
+                    argv.extend(["--hls_key_uri".into(), uri.into()]);
+                }
             }
         }
         let secrets: Vec<&str> = secret
@@ -552,7 +550,12 @@ impl Converter {
         let pssh = signaling
             .as_ref()
             .map(|value| value.hex.as_str())
-            .or_else(|| multi_signaling.as_ref().map(|value| value.hex.as_str()));
+            .or_else(|| {
+                multi_signaling
+                    .as_ref()
+                    .filter(|value| !value.hex.is_empty())
+                    .map(|value| value.hex.as_str())
+            });
         let kinds: Vec<_> = request.tracks.iter().map(|track| track.kind).collect();
         let audio =
             super::packaging_clock::prepare(input_owner, clear, &kinds, &self.backend.stop)?;
@@ -707,9 +710,6 @@ fn validate_request(request: &TrackConversionRequest<'_>) -> Result<(), Conversi
     if request.target == TargetProtection::HlsAes128 && request.format != OutputFormat::Hls {
         return Err(ConversionError("target-requires-hls-output"));
     }
-    if request.target == TargetProtection::Cenc && request.format == OutputFormat::Hls {
-        return Err(ConversionError("cenc-hls-output-not-supported"));
-    }
     if matches!(
         request.target,
         TargetProtection::Cenc | TargetProtection::Cbcs
@@ -719,14 +719,6 @@ fn validate_request(request: &TrackConversionRequest<'_>) -> Result<(), Conversi
     }
     if (request.target == TargetProtection::HlsAes128) != request.hls_output_key.is_some() {
         return Err(ConversionError("output-key-role-mismatch"));
-    }
-    if request.format == OutputFormat::Hls && request.target == TargetProtection::Cbcs {
-        let uri = request
-            .hls_key_uri
-            .ok_or(ConversionError("hls-key-uri-required"))?;
-        if uri.is_empty() || uri.chars().any(char::is_control) || uri.contains('"') {
-            return Err(ConversionError("invalid-hls-key-uri"));
-        }
     }
     Ok(())
 }
@@ -2143,6 +2135,11 @@ fn variant_role(attrs: &crate::m3u8::Attributes) -> Option<TrackKind> {
         }
     })
 }
+fn hls_master_metadata(line: &str) -> bool {
+    line.starts_with("#EXT-X-VERSION:")
+        || line.starts_with("#EXT-X-SESSION-KEY:")
+        || line == "#EXT-X-INDEPENDENT-SEGMENTS"
+}
 pub(in crate::conversion) fn hls_media_paths(
     path: &Path,
 ) -> Result<Vec<MediaPath>, ConversionError> {
@@ -2230,10 +2227,7 @@ pub(in crate::conversion) fn hls_media_paths(
                 audio_variant_alias: false,
             });
             pending = false;
-        } else if line.starts_with("#EXT-X-")
-            && !line.starts_with("#EXT-X-VERSION:")
-            && line != "#EXT-X-INDEPENDENT-SEGMENTS"
-        {
+        } else if line.starts_with("#EXT-X-") && !hls_master_metadata(line) {
             return Err(ConversionError("hls-master-feature-not-supported"));
         }
         if paths.len() > 64 {
@@ -2326,7 +2320,10 @@ fn validate_prepared_output(
             (request.format, request.target),
             (
                 OutputFormat::Hls,
-                TargetProtection::Clear | TargetProtection::Cbcs | TargetProtection::HlsAes128
+                TargetProtection::Clear
+                    | TargetProtection::Cenc
+                    | TargetProtection::Cbcs
+                    | TargetProtection::HlsAes128
             ) | (
                 OutputFormat::Dash | OutputFormat::Mp4,
                 TargetProtection::Clear | TargetProtection::Cenc | TargetProtection::Cbcs

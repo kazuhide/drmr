@@ -3,6 +3,7 @@ use super::{ConversionError, backend::Backend};
 use crate::{concurrency::Stop, toolrun::RunOptions};
 use std::path::Path;
 mod edit;
+pub(in crate::conversion) use edit::metadata_count as id3_metadata_count;
 const BAD: ConversionError = ConversionError("audio-presentation-range-not-supported");
 pub(super) const MISMATCH: ConversionError = ConversionError("audio-presentation-range-mismatch");
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

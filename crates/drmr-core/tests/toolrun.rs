@@ -8,7 +8,8 @@ use drmr_core::canonical::Dumps;
 use drmr_core::events::{Collector, JsonLinesWriter, NoSink, Record};
 use drmr_core::resources::Limiter;
 use drmr_core::toolrun::{
-    REDACTED, RunOptions, SecretRegistry, Secrets, ToolError, ToolRunner, bounded, patterns_for,
+    DEFAULT_STDERR_BYTES, REDACTED, RunOptions, SecretRegistry, Secrets, ToolError, ToolRunner,
+    bounded, patterns_for, scrub_with,
 };
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -1131,4 +1132,108 @@ fn accepted_whitespace_hex_secrets_cover_canonical_byte_encodings() {
     assert_eq!(Secrets::with([mixed]).scrub(&encoded), REDACTED);
     assert_eq!(Secrets::with(["short"]).scrub("short"), "short");
     assert_eq!(Secrets::with(["aa      bb"]).scrub("aabb"), "aabb");
+}
+
+#[test]
+fn opaque_data_uris_and_complete_payload_encodings_precede_registered_inner_values() {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    let private = "https://example.invalid/private-operator-metadata";
+    let payload = format!("header:{private}:tail");
+    let encoded = STANDARD.encode(payload.as_bytes());
+    for prefix in [
+        "data:text/plain;base64,",
+        "data:application/octet-stream;base64,",
+    ] {
+        let uri = format!("{prefix}{encoded}");
+        let mut secrets = SecretRegistry::new();
+        let hex = hex::encode(payload.as_bytes());
+        secrets.register([private, encoded.as_str(), hex.as_str()]);
+        secrets.register([uri.as_str()]);
+        secrets.register([private]);
+        for value in [&uri, &encoded, &hex::encode(payload.as_bytes())] {
+            assert!(
+                secrets.scrub(value) == REDACTED,
+                "an opaque provider value was only partially masked"
+            );
+        }
+        assert_eq!(
+            secrets.scrub(&format!("before {uri} after")),
+            format!("before {REDACTED} after")
+        );
+    }
+}
+
+#[test]
+fn overlapping_operator_metadata_is_masked_against_original_text_in_any_order() {
+    let inner = "private-license-operator-address";
+    let outer = format!("provider-header:{inner}:provider-tail");
+    for values in [[inner, outer.as_str()], [outer.as_str(), inner]] {
+        let secrets = Secrets::with(values);
+        assert_eq!(secrets.scrub(&outer), REDACTED);
+        assert_eq!(
+            secrets.scrub(&format!("{inner} {outer}")),
+            format!("{REDACTED} {REDACTED}")
+        );
+    }
+}
+
+#[test]
+fn masking_merges_partial_and_self_overlaps_without_splitting_unicode() {
+    for patterns in [["abcde", "cdefg"], ["cdefg", "abcde"]] {
+        let patterns: Vec<_> = patterns
+            .into_iter()
+            .map(|pattern| regex::Regex::new(pattern).unwrap())
+            .collect();
+        assert_eq!(
+            scrub_with(&patterns, "before abcdefg after"),
+            format!("before {REDACTED} after")
+        );
+    }
+    let pattern = regex::Regex::new("ababa").unwrap();
+    assert_eq!(scrub_with(&[pattern], "abababa"), REDACTED);
+    let first = "機密のライセンス";
+    let second = "のライセンス情報";
+    for values in [[first, second], [second, first]] {
+        assert_eq!(
+            Secrets::with(values).scrub("前 機密のライセンス情報 後"),
+            format!("前 {REDACTED} 後")
+        );
+    }
+}
+#[test]
+fn repeated_short_patterns_stream_one_capture_without_retaining_match_intervals() {
+    let text = "ab".repeat(DEFAULT_STDERR_BYTES / 2);
+    let patterns = [
+        regex::Regex::new("ababa").unwrap(),
+        regex::Regex::new("babab").unwrap(),
+    ];
+    assert_eq!(scrub_with(&patterns, &text), REDACTED);
+    let text = "x ".repeat(DEFAULT_STDERR_BYTES / 2);
+    let patterns = [regex::Regex::new("x").unwrap()];
+    let scrubbed = scrub_with(&patterns, &text);
+    assert_eq!(
+        scrubbed.len(),
+        (REDACTED.len() + 1) * (DEFAULT_STDERR_BYTES / 2)
+    );
+    assert!(scrubbed.starts_with(REDACTED) && scrubbed.ends_with(' '));
+}
+
+#[test]
+fn registered_and_per_call_nested_values_match_the_same_original_bytes() {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    let payload = STANDARD.encode(b"known-private-provider-record");
+    let uri = format!("data:text/plain;base64,{payload}");
+    for (registered, extra) in [
+        (payload.as_str(), uri.as_str()),
+        (uri.as_str(), payload.as_str()),
+    ] {
+        let secrets = Secrets::with([registered]);
+        let patterns = patterns_for(extra);
+        assert_eq!(secrets.scrub_with_patterns(&uri, &patterns), REDACTED);
+        assert_eq!(secrets.scrub_extra(&uri, &[extra]), REDACTED);
+        assert_eq!(
+            secrets.scrub_with_patterns(&format!("before {uri} after"), &patterns),
+            format!("before {REDACTED} after")
+        );
+    }
 }

@@ -180,13 +180,56 @@ pub fn patterns_for(secret: &str) -> Vec<Regex> {
 
 /// `text` with every match of `patterns` replaced by [`REDACTED`].
 pub fn scrub_with(patterns: &[Regex], text: &str) -> String {
-    let mut current = text.to_string();
-    for pattern in patterns {
-        if pattern.is_match(&current) {
-            current = pattern.replace_all(&current, REDACTED).into_owned();
+    scrub_combined(patterns, &[], text)
+}
+
+fn scrub_combined(registered: &[Regex], extra: &[Regex], text: &str) -> String {
+    // Keep one pending match per pattern. Match original bytes so an inner PRO
+    // cannot destroy the later match of its full PSSH or data URI. The heap is
+    // bounded by pattern count, including for millions of overlapping matches.
+    let mut pending = std::collections::BinaryHeap::with_capacity(registered.len() + extra.len());
+    for (index, pattern) in registered.iter().chain(extra).enumerate() {
+        if let Some(found) = pattern.find(text) {
+            pending.push(std::cmp::Reverse((found.start(), found.end(), index)));
         }
     }
-    current
+    let mut result = String::with_capacity(text.len());
+    let mut at = 0;
+    let mut active: Option<(usize, usize)> = None;
+    while let Some(std::cmp::Reverse((start, end, index))) = pending.pop() {
+        if let Some((first, last)) = active
+            && start < last
+        {
+            active = Some((first, last.max(end)));
+        } else {
+            if let Some((first, last)) = active {
+                result.push_str(&text[at..first]);
+                result.push_str(REDACTED);
+                at = last;
+            }
+            active = Some((start, end));
+        }
+        if active.is_some_and(|(first, last)| first < last && last == text.len()) {
+            break;
+        }
+        // Advance from the previous start by one complete character, rather
+        // than from its end, to find self-overlapping secrets without splitting UTF-8.
+        if let Some(character) = text[start..].chars().next()
+            && let Some(found) = registered
+                .get(index)
+                .unwrap_or_else(|| &extra[index - registered.len()])
+                .find_at(text, start + character.len_utf8())
+        {
+            pending.push(std::cmp::Reverse((found.start(), found.end(), index)));
+        }
+    }
+    if let Some((first, last)) = active {
+        result.push_str(&text[at..first]);
+        result.push_str(REDACTED);
+        at = last;
+    }
+    result.push_str(&text[at..]);
+    result
 }
 
 /// The job's secrets as patterns for every encoding.
@@ -243,11 +286,11 @@ impl SecretRegistry {
         if extra.is_empty() {
             return self.scrub(text);
         }
-        let mut patterns = self.patterns.clone();
+        let mut patterns = Vec::new();
         for secret in extra {
             patterns.extend(patterns_for(secret));
         }
-        scrub_with(&patterns, text)
+        scrub_combined(&self.patterns, &patterns, text)
     }
 }
 
@@ -327,11 +370,12 @@ impl Secrets {
             .scrub_extra(text, extra)
     }
 
-    /// [`Secrets::scrub`], then `extra` patterns the caller compiled once ([`patterns_for`]):
+    /// Scrub registered and precompiled `extra` patterns against the same original text:
     /// a tool run scrubs its per-call secrets from every argv token and both outputs without
     /// recompiling them per token.
     pub fn scrub_with_patterns(&self, text: &str, extra: &[Regex]) -> String {
-        scrub_with(extra, &self.scrub(text))
+        let registry = self.registry.read().unwrap_or_else(PoisonError::into_inner);
+        scrub_combined(&registry.patterns, extra, text)
     }
 }
 

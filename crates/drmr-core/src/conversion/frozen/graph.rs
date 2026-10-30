@@ -126,7 +126,10 @@ fn hls(
             attrs.get("URI").map(str::to_owned)
         } else {
             // Key addresses identify operator-supplied keys. They never become fetches.
-            if line.contains("URI=") && !line.starts_with("#EXT-X-KEY:") {
+            if line.contains("URI=")
+                && !line.starts_with("#EXT-X-KEY:")
+                && !line.starts_with("#EXT-X-SESSION-KEY:")
+            {
                 return Err(INVALID);
             }
             None

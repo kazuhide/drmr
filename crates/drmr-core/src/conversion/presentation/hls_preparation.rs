@@ -25,6 +25,7 @@ pub(super) fn prepare(
     purpose: SourceValidationPurpose,
     normalize: bool,
 ) -> Result<Vec<Prepared>, ConversionError> {
+    super::super::signaling::records::hls::validate_source(input.input, input.input_keys, backend)?;
     let backend = preparation_backend(backend, maximum_workers);
     let paths = hls_media_paths(input.input)?;
     let progress = backend.preparation();

@@ -4,26 +4,31 @@ Encryption protects media samples. DRM signaling tells a player which license sy
 and key identifier to use. The common `convert` command can generate and check both
 the encrypted media and the corresponding DASH or HLS manifests.
 
-For fragmented-MP4 DRM output, the default `auto` and explicit `stitch` routes accept completed video-on-demand **clear HLS with MPEG-TS segments**
-and the existing qualified **clear MP4** profile: H.264 video with optional AAC
-audio. It does not accept existing DRM records or unknown
-MP4 initialization metadata for replacement. It does not contact a license server.
+The `multi-drm` configuration accepts supported VOD inputs qualified by the same
+native media checks as ordinary conversion. Clear or known-key CENC/CBCS MP4,
+fMP4 HLS and static DASH inputs can be processed with `auto` or `stitch`, including
+qualified progressive MP4 audio playback ranges. Supported TS HLS inputs retain
+their documented key and codec requirements. A separate bounded metadata census
+still refuses unknown opaque boxes and unsupported controls. Recognized static
+ID3 metadata and supported descriptive text tags do not establish timed-track
+support. No license service is contacted.
 
-With `--processing segments`, supported original fMP4 resources can instead
-produce fMP4 DASH or HLS with the requested DRM records. Supported TS resources
-can produce TS HLS with FairPlay declarations. These paths accept their
-qualified clear or encrypted source profiles with separately supplied input
-keys. They preserve segment membership and replace the protection records in
-new output files; they never modify the originals. Container changes still use
-`stitch`. The supported codecs, playback windows and record checks remain
-mandatory; recognizing an input DRM system alone does not qualify its media.
+`stitch` prepares complete tracks and segments the new output again. With
+`--processing segments`, supported original fMP4 resources instead produce fMP4
+DASH or HLS while preserving segment membership. Supported TS resources can
+produce TS HLS with FairPlay declarations. Both paths use separately supplied
+input keys and replace protection records in new output files. They never modify
+the originals. Container changes use `stitch`. The supported codecs, playback
+windows and record checks remain mandatory; a recognized DRM name alone does
+not qualify the media.
 
 ## Supported outputs
 
 | Output | Encryption | Explicit DRM selection |
 | --- | --- | --- |
 | DASH with fragmented MP4 | `cenc`, `cbcs` | Widevine, PlayReady, or both |
-| HLS with fragmented MP4 | `cbcs` | FairPlay |
+| HLS with fragmented MP4 | `cbcs` | Any nonempty selection of Widevine, PlayReady and FairPlay |
+| HLS with fragmented MP4 | `cenc` | Widevine, PlayReady, or both |
 | HLS with MPEG-TS | `hls-sample-aes` | FairPlay |
 
 `cenc` uses AES counter mode. `cbcs` uses AES cipher block chaining with a defined
@@ -91,7 +96,7 @@ The same generated PSSH and PlayReady Object (PRO) data are used in initializati
 files and the MPD. These operations do
 not generate provider-specific Widevine policy data or validate license responses.
 
-On `stitch` routes, explicit DASH PSSH data is passed to Shaka Packager through its
+On `stitch` routes, explicit provider PSSH data is passed to Shaka Packager through its
 [`--flagfile` facility](https://github.com/shaka-project/shaka-packager/blob/v3.8.0/packager/app/packager_main.cc),
 using a separate owner-protected temporary file. This avoids command-line size
 limits for large metadata. The file is checked before and after packaging, is
@@ -101,7 +106,7 @@ The file is never included in the output directory. The temporary directory
 path must not contain a comma, because the flag-file option treats commas as
 file-name separators; such a path is refused before packaging.
 Native `segments` routes write the validated records directly to new MP4
-initialization files and the MPD, then reopen and check that output graph.
+initialization files and the final MPD or HLS declarations, then reopen and check that output graph.
 
 Omit `widevine_pssh` or `playready_license_url` to select only one system. At least
 one must remain. Do not select FairPlay for the DASH output.
@@ -119,16 +124,19 @@ drmr convert ./source/media.m3u8 --to cenc --format dash \
   --output ./dash-ctr --keys-file ./dash-ctr.keys.json
 ```
 
-For a qualified encrypted fMP4 DASH or HLS source, use `--processing segments`
-and supply the input keys separately. This replaces the DRM initialization
-records with the selected output records while preserving the input samples,
-segment membership and packet clocks. For example, CENC DASH can be converted to
+For a qualified encrypted MP4, fMP4 DASH or HLS source, supply the input keys
+separately. Use `--processing segments` when preserving original fMP4 segment
+membership; `stitch` also accepts qualified encrypted sources. Both replace the DRM initialization
+records with the selected output records while independently comparing input samples
+and presentation clocks. `segments` also preserves segment membership. For example, CENC DASH can be converted to
 CBCS DASH with new Widevine and PlayReady records using
 `--to cbcs --format dash --processing segments`. Output verification checks the selected scheme and key
 identifier in the MPD and every referenced initialization file, as well as the
 exact provider records. A valid PSSH alone does not prove a working DRM license.
 
-### HLS with fragmented MP4: FairPlay
+### HLS fragmented MP4
+
+CBCS HLS can declare FairPlay, Widevine and PlayReady together for the same key:
 
 ```json
 {
@@ -137,20 +145,57 @@ exact provider records. A valid PSSH alone does not prove a working DRM license.
   "hls_key_uri": "skd://content-key",
   "signaling": {
     "system": "multi-drm",
+    "widevine_pssh": "<complete Widevine PSSH box, hexadecimal or base64>",
+    "playready_license_url": "https://license.example.invalid/playready",
     "fairplay": true
   }
 }
 ```
 
-The `skd://` address identifies the FairPlay content key. It is written into the
-playlists and is never fetched by drmr. Supply the matching key to the license
-service separately. Do not add `iv` to this configuration: fragmented MP4 stores
-the sample-encryption initialization vector in its media initialization data.
-
 ```sh
 drmr convert ./source/media.m3u8 --to cbcs --format hls \
-  --output ./fairplay-fmp4 --keys-file ./fairplay-fmp4.keys.json
+  --output ./hls-cbcs --keys-file ./hls-cbcs.keys.json
 ```
+
+For CENC HLS, select `--to cenc`, omit `hls_key_uri`, and set `fairplay` to `false`
+or omit it. Keep Widevine, PlayReady, or both. FairPlay requires CBCS. CBCS can
+also select any nonempty subset of the three systems: omit unwanted provider
+fields and disable `fairplay` when it is not selected. A FairPlay selection needs
+a `skd://` key URI; Widevine/PlayReady-only selections do not need that field.
+Do not supply `iv`: fMP4 stores the sample-encryption vectors in its media.
+
+Every media playlist declares the selected systems with `KEYFORMATVERSIONS="1"`:
+
+| System | `KEYFORMAT` | `URI` data |
+| --- | --- | --- |
+| Widevine | `urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed` | Complete PSSH box in a base64 `data:text/plain` URI |
+| PlayReady | `com.microsoft.playready` | PlayReady Object containing the UTF-16 header in a base64 `data:text/plain` URI |
+| FairPlay | `com.apple.streamingkeydelivery` | The operator-supplied `skd://` identifier |
+
+CBCS uses `METHOD=SAMPLE-AES`; CENC uses `METHOD=SAMPLE-AES-CTR`. The corresponding
+MP4 initialization files contain the exact selected Widevine/PlayReady PSSH
+records and the same key identifier and encryption scheme. FairPlay adds no PSSH.
+Generated fMP4 declarations omit `IV`. An existing CBCS declaration can supply an
+IV only when it matches the actual initialization file's constant vector; CENC
+declarations cannot supply one.
+Generated outputs can be supplied to `analyze`, `plan`, `convert` and `verify`
+with the matching input key IDs and content keys. URI identifiers are never key
+or license fetch instructions. An input `EXT-X-SESSION-KEY`, when present, must
+agree with the corresponding media declaration.
+
+CENC HLS follows the optional fMP4 counter-mode method in the
+[HLS second-edition draft, section 4.4.4.4](https://datatracker.ietf.org/doc/html/draft-pantos-hls-rfc8216bis-22#section-4.4.4.4).
+It is not an Apple HLS authoring profile: the Apple-profile linter rejects CTR.
+Supported playback depends on the player, content decryption module and device;
+generation and native verification do not certify those systems. The provider
+URI forms follow the official
+[Shaka Player HLS DRM parsers](https://shaka-project.github.io/shaka-player/docs/api/lib_hls_hls_parser.js.html).
+
+Without explicit provider signaling, generic CENC/CBCS HLS uses
+`KEYFORMAT="identity"` and still requires `output.hls_key_uri` alongside `kid` and
+`key`. drmr uses supplied keys for verification and never retrieves that URI.
+This generic encryption configuration does not claim provider-specific DRM
+signaling or license playback.
 
 ### HLS with MPEG-TS: FairPlay
 
@@ -187,12 +232,16 @@ the license service has been checked.
 Conversion checks the final output before publication. DASH checks include the
 actual referenced initialization and media files, the exact selected PSSH set, key
 identifiers, encryption scheme, XML namespaces, and generated PlayReady PRO/PSSH
-agreement. HLS checks every referenced media playlist and its FairPlay method,
-key address, key-format declaration, initialization metadata, and declared vector
-when present. A DASH media resource may repeat a selected provider's exact
+agreement. HLS checks every referenced media playlist's method, selected key formats,
+provider data URIs, key identifiers and actual initialization metadata. Referenced
+Widevine PSSH and PlayReady PRO bytes must match the MP4 records, including the
+CENC PlayReady checksum. Explicit output checks also bind the FairPlay key URI
+to the operator configuration; no license service is consulted. TS FairPlay
+checks retain the declared vector requirements. A DASH media resource may repeat a selected provider's exact
 initialization PSSH once per provider. Different records, additional systems,
-and duplicate records are rejected. FairPlay fragmented-MP4 HLS has no PSSH
-records in either its initialization or media files. These checks read bounded
+and duplicate records are rejected. FairPlay-only fragmented-MP4 HLS has no PSSH
+records. HLS selections containing Widevine or PlayReady carry only the exact
+selected provider records; unexpected Common or other provider records fail. These checks read bounded
 metadata and skip media-data payloads; they do not load an entire segment into memory.
 
 FairPlay media playlists require one valid `EXT-X-VERSION` declaration: at least
@@ -239,6 +288,8 @@ records, key identifiers, manifest schemes, and initialization-file references.
 ```sh
 cargo test --locked -p drmr --test conversion_cenc_drm -- --nocapture
 cargo test --locked -p drmr-core --test conversion_multi_drm -- --nocapture
+cargo test --locked -p drmr-core --test conversion_hls_multi_drm -- --nocapture
+cargo test --locked -p drmr --test conversion_hls_drm -- --nocapture
 ```
 
 Whole-file AES-128 encryption can make resource bytes opaque. The native metadata
@@ -256,8 +307,9 @@ Successful verification does **not** establish license acquisition, a content
 decryption module (CDM) session, playback on a particular device, or full standards
 conformance. Use the relevant provider and device tests for those claims.
 
-Keys, vectors, license addresses, PSSH data, and FairPlay addresses are excluded
-from diagnostic output. Addresses and initialization data intentionally appear in
+Keys, vectors, license addresses, PSSH data, PlayReady PRO data and FairPlay
+addresses are excluded from diagnostic output, including their base64, hexadecimal
+and complete generated data-URI forms. Addresses and initialization data intentionally appear in
 the generated media and manifests where the delivery format requires them.
 
 The playlist rules above follow

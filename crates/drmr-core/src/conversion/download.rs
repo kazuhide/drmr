@@ -933,7 +933,10 @@ impl Graph<'_> {
                 raw
             };
             let line = content.trim();
-            if let Some(value) = line.strip_prefix("#EXT-X-KEY:") {
+            if let Some(value) = line
+                .strip_prefix("#EXT-X-KEY:")
+                .or_else(|| line.strip_prefix("#EXT-X-SESSION-KEY:"))
+            {
                 if let Some(target) = retained_key_uri(value, effective)? {
                     let (start, length, _) = uri_span(raw)?;
                     result.extend_from_slice(&raw.as_bytes()[..start]);
@@ -998,7 +1001,10 @@ fn expanded_references(
             let resolved = source::child_url(effective, line).map_err(|_| INVALID)?;
             valid_url(&resolved)?;
             add(&resolved)?;
-        } else if let Some(value) = line.strip_prefix("#EXT-X-KEY:") {
+        } else if let Some(value) = line
+            .strip_prefix("#EXT-X-KEY:")
+            .or_else(|| line.strip_prefix("#EXT-X-SESSION-KEY:"))
+        {
             if let Some(uri) = retained_key_uri(value, effective)? {
                 add(&uri)?;
             }
@@ -1069,7 +1075,15 @@ fn retained_key_uri(value: &str, effective: &str) -> Result<Option<String>, Conv
         })
         || attrs.get("KEYFORMAT").is_some_and(|format| {
             format != "identity"
-                && (method != "SAMPLE-AES" || format != "com.apple.streamingkeydelivery")
+                && !matches!(
+                    (method, format),
+                    ("SAMPLE-AES", "com.apple.streamingkeydelivery")
+                        | (
+                            "SAMPLE-AES" | "SAMPLE-AES-CTR",
+                            "com.microsoft.playready"
+                                | "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"
+                        )
+                )
         })
         || attrs
             .get("KEYFORMATVERSIONS")
@@ -1077,10 +1091,22 @@ fn retained_key_uri(value: &str, effective: &str) -> Result<Option<String>, Conv
         || attrs
             .get("IV")
             .is_some_and(|iv| super::SegmentIv::from_hex(iv).is_err())
+        || method == "SAMPLE-AES-CTR" && attrs.get("IV").is_some()
     {
         return Err(INVALID);
     }
     let (_, _, uri, quoted) = uri_value_span(value)?;
+    if let Some(
+        format @ ("com.microsoft.playready" | "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"),
+    ) = attrs.get("KEYFORMAT")
+    {
+        if !quoted {
+            return Err(INVALID);
+        }
+        super::signaling::records::hls::validate_retained_provider(method, format, &uri)
+            .map_err(|_| INVALID)?;
+        return Ok(Some(uri));
+    }
     let safe = |uri: &str| {
         !uri.is_empty() && uri.len() <= 4096 && !uri.chars().any(|c| c.is_control() || c == '"')
     };

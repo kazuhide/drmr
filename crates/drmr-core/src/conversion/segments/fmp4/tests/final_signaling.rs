@@ -53,9 +53,6 @@ fn final_single_default_selection_checks_initialization_and_middle_and_final_med
             TargetProtection::Cenc,
             TargetProtection::Cbcs,
         ] {
-            if format == OutputFormat::Hls && target == TargetProtection::Cenc {
-                continue;
-            }
             let output = fixture
                 .directory
                 .path()
@@ -84,8 +81,13 @@ fn final_single_default_selection_checks_initialization_and_middle_and_final_med
             let mut keys = OperatorKeys::default();
             keys.output = (target != TargetProtection::Clear)
                 .then(|| OutputKey::from_hex(OUTPUT_ID, OUTPUT_KEY).unwrap());
-            if format == OutputFormat::Hls && target == TargetProtection::Cbcs {
-                let path = fixture.directory.path().join("identity.keys.json");
+            if format == OutputFormat::Hls
+                && matches!(target, TargetProtection::Cenc | TargetProtection::Cbcs)
+            {
+                let path = fixture
+                    .directory
+                    .path()
+                    .join(format!("identity-{target:?}.keys.json"));
                 crate::native::create_private_new(&path).unwrap().write_all(
                     serde_json::to_string(&serde_json::json!({"schema_version":1,"output":{
                         "kid":OUTPUT_ID,"key":OUTPUT_KEY,"hls_key_uri":"https://example.invalid/key"
@@ -250,9 +252,11 @@ fn final_fairplay_bundle_rejects_provider_records_in_middle_and_final_media() {
             append(&path, &widevine(OUTPUT_ID));
             let result = command.verify_bundle_plan(&plan, &keys, &tools);
             fs::write(&path, original).unwrap();
+            // Re-input now binds every HLS provider declaration to init and media
+            // before the final-output signaling checker can inspect this resource.
             assert_eq!(
                 result.err(),
-                Some(ConversionError("output-signaling-verification-failed")),
+                Some(ConversionError("hls-drm-signaling-invalid")),
                 "{part}/{name}"
             );
         }

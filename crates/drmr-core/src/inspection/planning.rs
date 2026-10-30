@@ -219,9 +219,6 @@ fn compatibility_findings(
     {
         findings.push(Finding::new("mp4-protection-requires-mp4-container"));
     }
-    if target == TargetProtection::Cenc && formats.contains(&OutputFormat::Hls) {
-        findings.push(Finding::new("cenc-hls-output-not-supported"));
-    }
     if input.tracks.is_empty()
         || input
             .tracks
