@@ -273,13 +273,15 @@ impl Display {
         };
         // Sample the latest state, including phase changes, at a readable cadence.
         if self.paint_due(now) {
-            let (height, columns) = terminal.size();
+            let size = terminal.size();
+            let (height, columns) = size;
             let columns = usize::from(columns.saturating_sub(1));
             let height = usize::from(height.saturating_sub(1));
             // A complete frame has one writer and one draw, including all outputs.
-            terminal.draw(
+            terminal.draw_at_size(
                 out,
                 &dashboard::frame_with_height(command, view, now, columns, height),
+                size,
             )?;
         }
         Ok(())

@@ -57,6 +57,7 @@ struct Cursor {
     written: usize,
     resize_at: Option<(usize, usize, usize)>,
     resize_count: usize,
+    fail_after: Option<usize>,
 }
 impl Cursor {
     fn active(&mut self) -> &mut Buffer {
@@ -178,6 +179,7 @@ impl Terminal {
             written: 0,
             resize_at: None,
             resize_count: 0,
+            fail_after: None,
         })))
     }
 
@@ -212,6 +214,12 @@ impl Write for Terminal {
         let accepted = state.resize_at.map_or(bytes.len(), |(at, _, _)| {
             bytes.len().min(at - state.written)
         });
+        let accepted = state.fail_after.map_or(accepted, |at| {
+            accepted.min(at.saturating_sub(state.written))
+        });
+        if accepted == 0 && !bytes.is_empty() {
+            return Err(std::io::Error::other("fixture interrupted terminal"));
+        }
         state.write(std::str::from_utf8(&bytes[..accepted]).unwrap());
         state.written += accepted;
         if let Some((at, columns, rows)) = state.resize_at
@@ -407,4 +415,29 @@ fn stopped_output_summaries_start_at_column_zero_without_newline_translation() {
     );
     assert!(rows[2..].iter().all(|line| !line.starts_with(' ')));
     assert!(terminal.restored());
+}
+
+#[test]
+fn a_failed_repaint_cannot_place_the_result_inside_the_old_frame() {
+    let terminal = Terminal::new(120, 17, false);
+    let bar = LiveTerminal::for_test(120, 24);
+    bar.draw(
+        &mut terminal.clone(),
+        "drmr convert\nSource checking\nOverall working\nFourth row\nFifth row",
+    )
+    .unwrap();
+    {
+        let mut state = terminal.0.lock().unwrap();
+        // Stop immediately after the repaint moves four rows upward.
+        state.fail_after = Some(state.written + "\x1b[?2026h\r\x1b[4A".len());
+    }
+    assert!(bar.draw(&mut terminal.clone(), "replacement").is_err());
+    terminal.0.lock().unwrap().fail_after = None;
+    bar.close(&mut terminal.clone()).unwrap();
+    write!(terminal.clone(), "Result is visible.\r\n").unwrap();
+    let rows = terminal.primary();
+    let result = rows.iter().position(|s| s == "Result is visible.").unwrap();
+    let old_end = rows.iter().position(|s| s == "Fifth row").unwrap();
+    assert!(result > old_end, "{rows:?}");
+    assert_eq!(rows.first().map(String::as_str), Some(PRIOR_LOG));
 }

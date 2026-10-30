@@ -14,6 +14,7 @@ const expectedFormats = ['DASH fMP4', 'HLS fMP4'];
 const outputRow = /^([12]) (Output|DASH fMP4|HLS fMP4) +(.+)$/;
 const childRow = /^(?:S|[12]) (?:#[12]|(?:Video|Audio|Text) [12]) +(?:Waiting|Active|Done \(step\)|Stopped)(?: +.*)?$/;
 const hiddenRow = /^\d+ hidden: \d+ active, \d+ waiting$/;
+const sameRows = (left, right) => left.length === right.length && left.every((line, index) => line === right[index]);
 
 function paintLayout(text) {
   const lines = text.filter(line => line.trim());
@@ -114,17 +115,20 @@ export async function replayCapture(capture) {
   const primarySnapshots = [];
   const resultSnapshots = [];
   let consumed = 0, resizedDuringPaint = false, transaction = null, closedBase = null;
-  let lastFrameClosedSafely = false, resizedSinceFrame = false, resizedInTransaction = false;
+  let lastFrameClosedSafely = false, resizedInTransaction = false;
+  let geometry = 0, previousPaint = null, priorFramesReplaced = true;
   try {
     await write(history.join('\r\n') + '\r\n');
     for (const event of capture.events) {
       if (event.offset !== consumed) throw new Error('capture-byte-order');
       if (event.kind === 'resize') {
-        if (synchronized) {
-          resizedDuringPaint = true;
-          resizedInTransaction = true;
+        if (event.columns !== terminal.cols || event.rows !== terminal.rows) {
+          geometry++;
+          if (synchronized) {
+            resizedDuringPaint = true;
+            resizedInTransaction = true;
+          }
         }
-        resizedSinceFrame = true;
         terminal.resize(event.columns, event.rows);
       } else if (event.kind === 'write') {
         const end = consumed + event.length;
@@ -147,14 +151,24 @@ export async function replayCapture(capture) {
           if (ends.has(boundary) && transaction !== null) {
             const headers = [...raw.subarray(transaction, boundary).toString('latin1').matchAll(/drmr convert\b/g)].length;
             if (headers) {
-              frames.push({ offset: boundary, elapsed_seconds: event.elapsed_seconds, ...frame(headers) });
-              resizedSinceFrame = resizedInTransaction;
+              const current = frame(headers);
+              const normal = allNormalRows();
+              const prefix = normal.slice(0, current.header_row);
+              const mayRetain = previousPaint && (geometry !== previousPaint.geometry || previousPaint.uncertain);
+              // Ordinary redraws replace the previous owned frame. Its rows may
+              // join history only at a recorded geometry-change boundary.
+              priorFramesReplaced &&= sameRows(prefix, previousPaint?.prefix ?? history) ||
+                Boolean(mayRetain && sameRows(prefix, previousPaint.normal));
+              previousPaint = { prefix, normal, geometry, uncertain: resizedInTransaction };
+              frames.push({ offset: boundary, elapsed_seconds: event.elapsed_seconds, ...current });
             } else if (frames.length && !closedBase) {
               closedBase = allNormalRows();
               resultSnapshots.push(closedBase);
               // A resize inside the last paint makes its row footprint uncertain.
               // Keeping that complete paint is safer than erasing prior history.
-              lastFrameClosedSafely = resizedSinceFrame || closedBase.length <= frames.at(-1).header_row;
+              const mayRetain = geometry !== previousPaint.geometry || previousPaint.uncertain;
+              lastFrameClosedSafely = sameRows(closedBase, previousPaint.prefix) ||
+                (mayRetain && sameRows(closedBase, previousPaint.normal));
             }
             transaction = null;
           }
@@ -177,7 +191,7 @@ export async function replayCapture(capture) {
         return true;
       }) && (value.output_parents.every(format => format === 'Output') || value.source_ready);
     });
-    const transcriptValid = primaryGrammar(normal, resultSnapshots, closedBase, capture);
+    const transcriptValid = priorFramesReplaced && primaryGrammar(normal, resultSnapshots, closedBase, capture);
     const sourceStop = capture.outcome !== 'success' && capture.stop_phase === 'source';
     const assertions = {
       completed_dashboard_frames: frames.length >= 3,
@@ -189,6 +203,7 @@ export async function replayCapture(capture) {
       fixed_bar_column: frames.every(value => value.columns < 80 || value.bar_columns.every(column => column === 13)),
       observed_ascii_bars: frames.some(value => value.bar_columns.length) && frames.every(value => value.ascii_bars),
       final_dashboard_cleanup_safe: lastFrameClosedSafely && transcriptValid,
+      prior_frames_replaced_without_resize: priorFramesReplaced,
       primary_transcript_valid: transcriptValid,
       original_history_preserved: primarySnapshots.every(lines => history.every((line, index) => lines[index] === line)),
       dashboard_below_command: frames.every(value => value.header_row >= history.length),

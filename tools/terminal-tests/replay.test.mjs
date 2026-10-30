@@ -19,6 +19,30 @@ test('inline paints remain below the command and preserve primary-screen history
   assert.equal(result.assertions.dashboard_below_command, true);
   assert.equal(result.assertions.no_alternate_screen, true);
 });
+test('stable geometry refuses earlier paints left above a cleared final paint', async () => {
+  const body = paint.repeat(3) + clear(5) + 'Finished convert in 1.0s\r\n';
+  assert.equal((await replayCapture(capture(body))).passed, false);
+});
+test('a no-op resize cannot authorize earlier paints left in history', async () => {
+  const body = paint.repeat(3) + clear(5) + 'Finished convert in 1.0s\r\n';
+  const value = capture(body);
+  value.events = [
+    { kind: 'write', offset: 0, length: Buffer.byteLength(paint), elapsed_seconds: 0 },
+    { kind: 'resize', offset: Buffer.byteLength(paint), columns: 120, rows: 24, elapsed_seconds: 1 },
+    { kind: 'write', offset: Buffer.byteLength(paint), length: Buffer.byteLength(body) - Buffer.byteLength(paint), elapsed_seconds: 2 },
+  ];
+  assert.equal((await replayCapture(value)).passed, false);
+});
+test('one actual resize does not authorize later stable-geometry residue', async () => {
+  const body = paint.repeat(3) + clear(5) + 'Finished convert in 1.0s\r\n';
+  const value = capture(body);
+  value.events = [
+    { kind: 'write', offset: 0, length: Buffer.byteLength(paint), elapsed_seconds: 0 },
+    { kind: 'resize', offset: Buffer.byteLength(paint), columns: 80, rows: 24, elapsed_seconds: 1 },
+    { kind: 'write', offset: Buffer.byteLength(paint), length: Buffer.byteLength(body) - Buffer.byteLength(paint), elapsed_seconds: 2 },
+  ];
+  assert.equal((await replayCapture(value)).passed, false);
+});
 test('incomplete unframed rows left above the result are refused', async () => {
   const result = await replayCapture(capture('drmr convert\r\nSource Ready\r\nOverall [----------]\r\nFinished convert in 1.0s'));
   assert.equal(result.assertions.final_dashboard_cleanup_safe, false);

@@ -1,7 +1,7 @@
 //! An inline dashboard that redraws only its own rows below existing output.
 
 use std::io::{self, IsTerminal as _, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, Once, PoisonError};
 
 const ENTER: &str = "\r\n";
@@ -11,11 +11,13 @@ const LEAVE: &str = "\x1b[?2026l\r\n";
 
 static SCREEN_ACTIVE: AtomicBool = AtomicBool::new(false);
 static PANICKED: AtomicBool = AtomicBool::new(false);
+static RECOVERY_ROWS: AtomicUsize = AtomicUsize::new(0);
 
 struct Session {
     entered: bool,
     closed: bool,
     frame: Option<((u16, u16), usize)>,
+    recovery_rows: usize,
     #[cfg(windows)]
     mode: Option<OutputMode>,
     #[cfg(test)]
@@ -49,6 +51,7 @@ impl LiveTerminal {
                 entered: false,
                 closed: false,
                 frame: None,
+                recovery_rows: 0,
                 #[cfg(windows)]
                 mode: Some(mode),
                 #[cfg(test)]
@@ -66,6 +69,7 @@ impl LiveTerminal {
                 entered: false,
                 closed: false,
                 frame: None,
+                recovery_rows: 0,
                 #[cfg(windows)]
                 mode: None,
                 message: String::new(),
@@ -96,16 +100,33 @@ impl LiveTerminal {
             .clone()
     }
 
+    #[cfg(test)]
     pub(super) fn draw(&self, out: &mut dyn Write, message: &str) -> io::Result<()> {
+        self.draw_at_size(out, message, self.size())
+    }
+
+    pub(super) fn draw_at_size(
+        &self,
+        out: &mut dyn Write,
+        message: &str,
+        size: (u16, u16),
+    ) -> io::Result<()> {
         let mut session = self.session.lock().unwrap_or_else(PoisonError::into_inner);
-        if session.closed {
+        if session.closed || self.size() != size {
+            // The caller laid out this frame at a different width. Wait for the
+            // next observation instead of writing a frame that can wrap.
             return Ok(());
         }
-        let size = self.size();
         let previous = session.frame.take();
+        let recovery = session.recovery_rows;
+        session.recovery_rows = recovery
+            .max(previous.map_or(0, |(_, rows)| rows))
+            .max(message.split('\n').count());
         let mut frame = String::with_capacity(message.len() + 128);
         frame.push_str(PAINT);
-        if !session.entered || !clear_frame(&mut frame, previous, size) {
+        if recovery > 0 {
+            frame.push_str(&ENTER.repeat(recovery + 1));
+        } else if !session.entered || !clear_frame(&mut frame, previous, size) {
             // After a resize, the terminal may have reflowed the old rows.
             // Keep that snapshot in history rather than erasing guessed rows.
             frame.push_str(ENTER);
@@ -125,6 +146,7 @@ impl LiveTerminal {
                 return Ok(());
             }
             SCREEN_ACTIVE.store(true, Ordering::Release);
+            RECOVERY_ROWS.store(session.recovery_rows, Ordering::Release);
             session.entered = true;
             stderr.write_all(frame.as_bytes())?;
             stderr.flush()?;
@@ -132,6 +154,10 @@ impl LiveTerminal {
             session.entered = true;
             out.write_all(frame.as_bytes())?;
             out.flush()?;
+        }
+        session.recovery_rows = 0;
+        if self.real {
+            RECOVERY_ROWS.store(0, Ordering::Release);
         }
         if self.size() == size {
             session.frame = Some((size, message.split('\n').count()));
@@ -149,8 +175,13 @@ impl LiveTerminal {
         let mut frame = String::new();
         if session.entered {
             frame.push_str(PAINT);
-            if !clear_frame(&mut frame, session.frame.take(), self.size()) {
-                frame.push_str("\r\n");
+            let previous = session.frame.take();
+            let recovery = session.recovery_rows;
+            session.recovery_rows = recovery.max(previous.map_or(0, |(_, rows)| rows));
+            if recovery > 0 {
+                frame.push_str(&ENTER.repeat(recovery + 1));
+            } else if !clear_frame(&mut frame, previous, self.size()) {
+                frame.push_str(ENTER);
             }
             frame.push_str(LEAVE);
         }
@@ -159,14 +190,18 @@ impl LiveTerminal {
             // The panic hook has already moved beyond the live view. Do not
             // move the cursor back over that diagnostic during destruction.
             if !PANICKED.load(Ordering::Acquire) && session.entered {
+                RECOVERY_ROWS.store(session.recovery_rows, Ordering::Release);
                 stderr.write_all(frame.as_bytes())?;
+                RECOVERY_ROWS.store(0, Ordering::Release);
                 SCREEN_ACTIVE.store(false, Ordering::Release);
             }
             session.entered = false;
+            session.recovery_rows = 0;
             stderr.flush()?;
         } else {
             out.write_all(frame.as_bytes())?;
             session.entered = false;
+            session.recovery_rows = 0;
             out.flush()?;
         }
         session.closed = true;
@@ -226,7 +261,9 @@ fn install_panic_restore() {
             {
                 let mut stderr = std::io::stderr().lock();
                 if SCREEN_ACTIVE.load(Ordering::Acquire) {
-                    if stderr.write_all(LEAVE.as_bytes()).is_ok() {
+                    let recovery = RECOVERY_ROWS.load(Ordering::Acquire);
+                    let restore = format!("{END_PAINT}{}", ENTER.repeat(recovery + 1));
+                    if stderr.write_all(restore.as_bytes()).is_ok() {
                         SCREEN_ACTIVE.store(false, Ordering::Release);
                     }
                     let _ = stderr.flush();

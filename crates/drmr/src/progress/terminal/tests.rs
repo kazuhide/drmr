@@ -371,3 +371,21 @@ fn interrupted_repaint_does_not_guess_the_previous_cursor_position() {
     assert!(!cleanup.contains('A'));
     assert!(cleanup.ends_with(LEAVE));
 }
+
+#[test]
+fn a_frame_laid_out_before_resizing_is_not_written_or_claimed() {
+    let terminal = LiveTerminal::for_test(120, 24);
+    let layout_size = terminal.size();
+    let message = format!("drmr convert{:>107}", "elapsed");
+    terminal.resize_for_test(40, 24);
+    let mut out = Vec::new();
+    terminal
+        .draw_at_size(&mut out, &message, layout_size)
+        .unwrap();
+    assert!(
+        out.is_empty(),
+        "an obsolete layout must wait for the next update"
+    );
+    assert!(terminal.session.lock().unwrap().frame.is_none());
+    assert_eq!(layout_size, (24, 120));
+}
