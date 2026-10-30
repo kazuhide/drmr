@@ -649,6 +649,8 @@ Supply output key/IV/URI or source URI/IV mappings as applicable. Clear, AES-128
 
 ## Explicit PlayReady signaling
 
+The following `system: "playready"` setting has its own input restrictions. For `system: "multi-drm"`, even with PlayReady alone, use [chapter 5](#key-configuration) and chapter 3's input conditions.
+
 This `auto`/`stitch` profile produces CENC or CBCS DASH from a qualified clear MP4 source and refuses source DRM records. The `segments` source conditions are in chapter 3. Supply the output key identifier (KID), key and license URL below. drmr generates the PlayReady Object (PRO) and Protection System Specific Header (PSSH), then checks the initialization segments and DASH manifest.
 
 ```json

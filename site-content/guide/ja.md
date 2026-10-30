@@ -709,6 +709,8 @@ SAMPLE-AES TS は入力・出力の両方に対応しています。これらは
 
 ## PlayReady の明示シグナリング
 
+次は `system: "playready"` の専用設定です。PlayReady 単独でも `system: "multi-drm"` を使う場合は、[第5章](#key-configuration)の設定と第3章の入力条件に従います。
+
 `auto`・`stitch` では、対応する Clear MP4 から CENC または CBCS の DASH を作る場合に使えます。`segments` の入力条件は第3章を参照してください。次の signaling を持つ出力設定を使い、鍵はご自身の値へ置き換えてください。
 
 ```json

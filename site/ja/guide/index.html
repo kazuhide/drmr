@@ -244,7 +244,7 @@ drmr verify fairplay-ts/master.m3u8 --source clear-ts/media.m3u8 \
   --output clear-ts --keys-file config/sample-aes-source.json
 drmr verify clear-ts/master.m3u8 --source encrypted-ts/media.m3u8 \
   --keys-file config/sample-aes-source.json --json
-</code></pre></figure><p>SAMPLE-AES TS は入力・出力の両方に対応しています。これらは既知の鍵でのメディア変換で、FairPlay のライセンス取得を行いません。<h3>PlayReady の明示シグナリング</h3><p><code>auto</code>・<code>stitch</code> では、対応する Clear MP4 から CENC または CBCS の DASH を作る場合に使えます。<code>segments</code> の入力条件は第3章を参照してください。次の signaling を持つ出力設定を使い、鍵はご自身の値へ置き換えてください。<figure class=guide-example aria-labelledby=e33 data-code-language=json><figcaption id=e33>例 33: json</figcaption><pre tabindex=0><code>{
+</code></pre></figure><p>SAMPLE-AES TS は入力・出力の両方に対応しています。これらは既知の鍵でのメディア変換で、FairPlay のライセンス取得を行いません。<h3>PlayReady の明示シグナリング</h3><p>次は <code>system: "playready"</code> の専用設定です。PlayReady 単独でも <code>system: "multi-drm"</code> を使う場合は、<a href=#key-configuration>第5章</a>の設定と第3章の入力条件に従います。<p><code>auto</code>・<code>stitch</code> では、対応する Clear MP4 から CENC または CBCS の DASH を作る場合に使えます。<code>segments</code> の入力条件は第3章を参照してください。次の signaling を持つ出力設定を使い、鍵はご自身の値へ置き換えてください。<figure class=guide-example aria-labelledby=e33 data-code-language=json><figcaption id=e33>例 33: json</figcaption><pre tabindex=0><code>{
   "schema_version": 1,
   "output": {
     "kid": "&lt;32-hex-output-kid&gt;",
