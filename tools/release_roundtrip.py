@@ -125,6 +125,14 @@ def proof(value, profile):
     return result
 
 
+def inspection_protection(profile):
+    # Generic inspection intentionally leaves TS SAMPLE-AES as unknown: its
+    # playlist declaration alone cannot establish MP4 CBCS sample semantics.
+    # The TS container, SAMPLE-AES/FairPlay declarations and known-key complete
+    # sample comparison are checked independently before this leg can pass.
+    return "unknown" if profile == ("hls-ts", "hls-sample-aes") else profile[1]
+
+
 class Executor:
     def __init__(self, cli, root):
         self.cli, self.root = cli, root
@@ -177,6 +185,13 @@ class Executor:
                              "--packager-bin", self.packager, "--max-workers", "1", "--json"], stage)
         return proof(value.get("verification", value), profile)
 
+    def track_kind(self, path, runner):
+        value = runner.json([self.cli, "analyze", "--metadata-only", path, "--json"], "fixture-track-kind")
+        tracks = value.get("tracks", [])
+        require(value.get("format") == "mp4" and len(tracks) == 1 and tracks[0].get("kind") in ("audio", "video"),
+                "roundtrip-fixture-track-invalid")
+        return tracks[0]["kind"]
+
     def convert(self, source, profile, layout, root):
         root.mkdir(mode=0o700)
         runner = self.runner(root)
@@ -194,7 +209,7 @@ class Executor:
         path = destination if profile[0] == "mp4" else output / ("manifest.mpd" if profile[0] == "dash" else "master.m3u8")
         inspection = value.get("output", {})
         expected_format = "hls" if profile[0].startswith("hls-") else profile[0]
-        require(inspection.get("format") == expected_format and inspection.get("protection") == profile[1],
+        require(inspection.get("format") == expected_format and inspection.get("protection") == inspection_protection(profile),
                 "roundtrip-output-profile-invalid")
         kinds = [track.get("kind") for track in inspection.get("tracks", [])]
         expected_kinds = ["video", "audio"] if CONTRACT.joint(layout) else ["audio"] if layout.startswith("aac") else ["video"]
@@ -211,27 +226,36 @@ def fixture_profiles(executor, seeds, root):
     profiles, reports = {}, []
     for layout in CONTRACT.LAYOUTS:
         for ordinal, profile in enumerate(CONTRACT.OUTPUTS):
-            path, report = executor.convert(seeds[layout], profile, layout, root / f"{layout}-{ordinal}")
+            identifier = f"{layout}:{CONTRACT.profile_id(profile)}"
+            try:
+                path, report = executor.convert(seeds[layout], profile, layout, root / f"{layout}-{ordinal}")
+                profiles[(layout, profile)] = path
+                rate = 44100 if "44100" in layout else 48000 if "48000" in layout else None
+                reports.append({"id": identifier, "graph": report["output_graph"],
+                                "source_graph_sha256": graph(seeds[layout])["sha256"],
+                                "verification": report["independent_verification"], "sample_rate": rate,
+                                "final_presented_samples": 240 if rate else None})
+            except (CONTRACT.Failure, SUPPORT.Refusal, OSError, ValueError, TypeError, KeyError, ET.ParseError):
+                reports.append({"id": identifier, "status": "failed", "failure_code": "fixture-profile-check-failed"})
+        profile = ("hls-fmp4", "cenc")
+        identifier = f"{layout}:{CONTRACT.profile_id(profile)}"
+        try:
+            operation = root / f"{layout}-cenc-hls-check"
+            operation.mkdir(mode=0o700)
+            runner = executor.runner(operation)
+            path = FIXTURES.cenc_hls(profiles[(layout, ("dash", "cenc"))], profiles[(layout, ("hls-fmp4", "clear"))],
+                                     root / f"{layout}-cenc-hls", executor.uri, SUPPORT,
+                                     lambda init: executor.track_kind(init, runner))
+            key_file = executor.key_file(operation, profile)
+            verified = executor.verify(runner, seeds[layout], path, key_file, profile, "input-only-fixture-verify")
+            manifest_profile(path, profile)
             profiles[(layout, profile)] = path
             rate = 44100 if "44100" in layout else 48000 if "48000" in layout else None
-            reports.append({"id": f"{layout}:{CONTRACT.profile_id(profile)}", "graph": report["output_graph"],
-                            "source_graph_sha256": graph(seeds[layout])["sha256"],
-                            "verification": report["independent_verification"], "sample_rate": rate,
-                            "final_presented_samples": 240 if rate else None})
-        profile = ("hls-fmp4", "cenc")
-        path = FIXTURES.cenc_hls(profiles[(layout, ("dash", "cenc"))], root / f"{layout}-cenc-hls",
-                                 executor.uri, SUPPORT)
-        operation = root / f"{layout}-cenc-hls-check"
-        operation.mkdir(mode=0o700)
-        runner = executor.runner(operation)
-        key_file = executor.key_file(operation, profile)
-        verified = executor.verify(runner, seeds[layout], path, key_file, profile, "input-only-fixture-verify")
-        manifest_profile(path, profile)
-        profiles[(layout, profile)] = path
-        rate = 44100 if "44100" in layout else 48000 if "48000" in layout else None
-        reports.append({"id": f"{layout}:{CONTRACT.profile_id(profile)}", "graph": graph(path),
-                        "source_graph_sha256": graph(seeds[layout])["sha256"], "verification": verified,
-                        "sample_rate": rate, "final_presented_samples": 240 if rate else None})
+            reports.append({"id": identifier, "graph": graph(path),
+                            "source_graph_sha256": graph(seeds[layout])["sha256"], "verification": verified,
+                            "sample_rate": rate, "final_presented_samples": 240 if rate else None})
+        except (CONTRACT.Failure, SUPPORT.Refusal, OSError, ValueError, TypeError, KeyError, ET.ParseError):
+            reports.append({"id": identifier, "status": "failed", "failure_code": "fixture-profile-check-failed"})
     return profiles, reports
 
 
@@ -239,6 +263,8 @@ def execute_case(case, executor, profiles, root):
     if case["kind"] == "layout-condition":
         return {**case, "status": "not-qualified"}
     source_profile, target_profile = tuple(case["source"]), tuple(case["target"])
+    if (case["layout"], source_profile) not in profiles:
+        return {**case, "status": "not-checked", "failure_code": "source-fixture-unavailable"}
     source = profiles[(case["layout"], source_profile)]
     before = graph(source)
     workspace = SUPPORT.Workspace(parent=root)
@@ -255,7 +281,7 @@ def execute_case(case, executor, profiles, root):
                 executor.runner(operation), source, final_path, key_file, source_profile, "final-against-original"))
         require(graph(source) == before, "roundtrip-source-changed")
         return result
-    except (CONTRACT.Failure, SUPPORT.Refusal, OSError, ValueError, TypeError, KeyError):
+    except (CONTRACT.Failure, SUPPORT.Refusal, OSError, ValueError, TypeError, KeyError, ET.ParseError):
         return {**case, "status": "failed", "failure_code": "roundtrip-operation-failed"}
     finally:
         workspace.close()

@@ -1,9 +1,8 @@
 """Generate three small source streams once and reuse qualified profile graphs."""
 import hashlib
-from pathlib import Path
+import os
 import re
 import shutil
-import xml.etree.ElementTree as ET
 
 
 def source_seeds(root, clip, runner, support):
@@ -72,78 +71,75 @@ def source_seeds(root, clip, runner, support):
     return result
 
 
-def substitute(template, representation, number, timestamp):
-    values = {"RepresentationID": representation.get("id"), "Bandwidth": representation.get("bandwidth"),
-              "Number": number, "Time": timestamp}
-
-    def replace(match):
-        value = values[match.group(1)]
-        if value is None:
-            raise ValueError("fixture-template-invalid")
-        width = int(match.group(2) or 0)
-        return str(value).zfill(width)
-
-    return re.sub(r"\$(RepresentationID|Bandwidth|Number|Time)(?:%0([1-9][0-9]?)d)?\$", replace, template)
 
 
-def seconds(ticks, timescale):
-    """Use the same integer nanosecond ceiling as the native manifest writer."""
-    nanoseconds = (ticks * 1_000_000_000 + timescale - 1) // timescale
-    return f"{nanoseconds // 1_000_000_000}.{nanoseconds % 1_000_000_000:09d}".rstrip("0").rstrip(".")
+def cenc_hls(dash, clear_hls, destination, uri, support, inspect_kind):
+    """Combine verified declarations and CENC bytes by actual track kind.
 
-
-def cenc_hls(dash, destination, uri, support):
-    """Change only declarations around already-verified CENC sample bytes.
-
-    This input-only profile deliberately cannot be produced by drmr. Its init
-    boxes, edit lists, fragments and sample clocks stay byte-identical to the
-    cached CENC DASH fixture; fresh native verification binds the new HLS graph.
+    Only playlist paths and the CENC key declaration change. Endpoint strings
+    come from the independently verified clear HLS companion. Fresh native
+    comparison of the new HLS graph remains mandatory; matching filenames or
+    declared segment durations alone never qualify the generated fixture.
     """
     shutil.copytree(dash.parent, destination)
-    mpd = ET.parse(destination / "manifest.mpd").getroot()
-    namespace = {"d": "urn:mpeg:dash:schema:mpd:2011"}
-    references = []
-    for adaptation in mpd.findall(".//d:AdaptationSet", namespace):
-        for representation in adaptation.findall("d:Representation", namespace):
-            template = representation.find("d:SegmentTemplate", namespace)
-            if template is None:
-                template = adaptation.find("d:SegmentTemplate", namespace)
-            support.require(template is not None, "fixture-template-invalid")
-            timeline = template.find("d:SegmentTimeline", namespace)
-            support.require(timeline is not None, "fixture-timeline-required")
-            timescale = int(template.get("timescale", "1"))
-            number, timestamp, segments = int(template.get("startNumber", "1")), 0, []
-            for item in timeline.findall("d:S", namespace):
-                timestamp = int(item.get("t", timestamp))
-                duration, repeat = int(item.get("d", "0")), int(item.get("r", "0"))
-                support.require(timescale > 0 and duration > 0 and 0 <= repeat <= 16, "fixture-timeline-invalid")
-                for _ in range(repeat + 1):
-                    name = substitute(template.get("media", ""), representation, number, timestamp)
-                    support.require((destination / name).is_file() and len(segments) < 16, "fixture-resource-invalid")
-                    segments.append((duration, name))
-                    timestamp += duration
-                    number += 1
-            init = substitute(template.get("initialization", ""), representation, number, timestamp)
-            support.require((destination / init).is_file() and bool(segments), "fixture-resource-invalid")
-            kind = adaptation.get("contentType") or representation.get("mimeType", adaptation.get("mimeType", "")).split("/")[0]
-            support.require(kind in ("audio", "video"), "fixture-track-invalid")
-            name = f"{kind}.m3u8"
-            lines = ["#EXTM3U", "#EXT-X-VERSION:7", "#EXT-X-PLAYLIST-TYPE:VOD", "#EXT-X-MEDIA-SEQUENCE:1",
-                     f"#EXT-X-TARGETDURATION:{(max(duration for duration, _ in segments) + timescale - 1) // timescale}",
-                     f'#EXT-X-KEY:METHOD=SAMPLE-AES-CTR,URI="{uri}"', f'#EXT-X-MAP:URI="{init}"']
-            for duration, media in segments:
-                lines += [f"#EXTINF:{seconds(duration, timescale)},", media]
-            (destination / name).write_text("\n".join(lines + ["#EXT-X-ENDLIST", ""]), encoding="utf-8")
-            references.append((kind, name))
-    support.require(1 <= len(references) <= 2, "fixture-track-invalid")
-    master = ["#EXTM3U", "#EXT-X-VERSION:7"]
-    audio = next((name for kind, name in references if kind == "audio"), None)
-    video = next((name for kind, name in references if kind == "video"), None)
-    if audio and video:
-        master += [f'#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="default-audio-group",NAME="Main",LANGUAGE="en",DEFAULT=NO,AUTOSELECT=YES,URI="{audio}"',
-                   '#EXT-X-STREAM-INF:BANDWIDTH=1000000,AUDIO="default-audio-group"', video]
-    else:
-        master += ["#EXT-X-STREAM-INF:BANDWIDTH=1000000", video or audio]
-    (destination / "master.m3u8").write_text("\n".join(master) + "\n", encoding="utf-8")
+    initializations = {}
+    for initialization in destination.rglob("*.mp4"):
+        kind = inspect_kind(initialization)
+        support.require(kind not in initializations, "fixture-track-ambiguous")
+        initializations[kind] = initialization
+    support.require(1 <= len(initializations) <= 2, "fixture-track-invalid")
+    playlists = list(clear_hls.parent.rglob("*.m3u8"))
+    support.require(1 <= len(playlists) <= 4, "fixture-playlists-invalid")
+    replacements, media = {}, []
+    for playlist in playlists:
+        lines = playlist.read_text(encoding="utf-8").splitlines()
+        if not any(line.startswith("#EXTINF:") for line in lines):
+            continue
+        support.require(not any(line.startswith("#EXT-X-KEY:") for line in lines), "fixture-clear-key-invalid")
+        maps = [index for index, line in enumerate(lines) if line.startswith("#EXT-X-MAP:")]
+        support.require(len(maps) == 1, "fixture-map-invalid")
+        matched = re.search(r'URI="([^"\r\n]+)"', lines[maps[0]])
+        support.require(matched is not None, "fixture-map-invalid")
+        clear_init = (playlist.parent / matched.group(1)).resolve()
+        support.require(clear_init.is_relative_to(clear_hls.parent.resolve()) and clear_init.is_file(), "fixture-map-invalid")
+        kind = inspect_kind(clear_init)
+        support.require(kind in initializations, "fixture-track-invalid")
+        initialization = initializations[kind]
+        output = initialization.parent / playlist.name
+        support.require(output not in replacements.values(), "fixture-playlists-ambiguous")
+        replacements[playlist.resolve()] = output
+        lines[maps[0]] = f'#EXT-X-MAP:URI="{initialization.name}"'
+        for index, line in enumerate(lines):
+            if not line or line.startswith("#"):
+                continue
+            name = line.rsplit("/", 1)[-1]
+            resource = output.parent / name
+            support.require(resource.is_file() and not resource.is_symlink(), "fixture-resource-invalid")
+            lines[index] = name
+        lines.insert(maps[0], f'#EXT-X-KEY:METHOD=SAMPLE-AES-CTR,URI="{uri}"')
+        media.append((output, lines))
+    support.require(len(media) == len(initializations), "fixture-track-invalid")
+    for output, lines in media:
+        output.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    for playlist in playlists:
+        if playlist.resolve() in replacements:
+            continue
+        output = destination / playlist.relative_to(clear_hls.parent)
+        output.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        lines = playlist.read_text(encoding="utf-8").splitlines()
+        for index, line in enumerate(lines):
+            if not line or line.startswith("#") and not line.startswith("#EXT-X-MEDIA:"):
+                continue
+            if line.startswith("#EXT-X-MEDIA:"):
+                match = re.search(r'URI="([^"\r\n]+)"', line)
+                support.require(match is not None, "fixture-playlist-reference-invalid")
+                name = match.group(1)
+            else:
+                name = line
+            original = (playlist.parent / name).resolve()
+            support.require(original in replacements, "fixture-playlist-reference-invalid")
+            relative = os.path.relpath(replacements[original], output.parent).replace(os.sep, "/")
+            lines[index] = line.replace(f'URI="{name}"', f'URI="{relative}"') if line.startswith("#") else relative
+        output.write_text("\n".join(lines) + "\n", encoding="utf-8")
     (destination / "manifest.mpd").unlink()
-    return destination / "master.m3u8"
+    return destination / clear_hls.name

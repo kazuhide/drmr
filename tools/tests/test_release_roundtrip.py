@@ -82,10 +82,12 @@ class ReleaseMatrix(unittest.TestCase):
             with self.assertRaises(CONTRACT.Failure):
                 self.validate(value)
 
-    def test_nanosecond_format_ceil_keeps_nonintegral_aac_endpoint(self):
-        self.assertEqual(ROUNDTRIP.FIXTURES.seconds(240, 44100), "0.005442177")
-        self.assertEqual(ROUNDTRIP.FIXTURES.seconds(1024, 44100), "0.023219955")
-        self.assertEqual(ROUNDTRIP.FIXTURES.seconds(96000, 48000), "2")
+    def test_unshared_selection_metadata_cannot_qualify(self):
+        for field, wrong in (("hls_audio_group", "audio"), ("hls_audio_autoselect", False)):
+            value = roundtrip_reports.complete(CONTRACT)
+            value["fixture_metadata"][field] = wrong
+            with self.subTest(field=field), self.assertRaises(CONTRACT.Failure):
+                self.validate(value)
 
     def test_encryption_keys_keep_mp4_and_hls_signaling_separate(self):
         values = ("01" * 16, "02" * 16, "03" * 16, "skd://fixture")
@@ -94,6 +96,8 @@ class ReleaseMatrix(unittest.TestCase):
                          {"system": "multi-drm", "fairplay": True})
         self.assertNotIn("kid", ROUNDTRIP.keys(("hls-ts", "hls-sample-aes"), *values))
         self.assertEqual(ROUNDTRIP.keys(("dash", "cenc"), *values)["signaling"]["system"], "multi-drm")
+        self.assertEqual(ROUNDTRIP.inspection_protection(("hls-ts", "hls-sample-aes")), "unknown")
+        self.assertEqual(ROUNDTRIP.inspection_protection(("hls-fmp4", "hls-aes128")), "hls-aes128")
 
     def test_fixture_generation_is_the_only_ffmpeg_path(self):
         implementation = (TOOLS / "release_roundtrip.py").read_text(encoding="utf-8")
@@ -128,9 +132,18 @@ class ReleaseMatrix(unittest.TestCase):
                            'initialization="audio/init.mp4" media="audio/seg_$Number$.m4s"><SegmentTimeline>'
                            '<S t="0" d="44100"/><S d="240"/></SegmentTimeline></SegmentTemplate>'
                            '</Representation></AdaptationSet></Period></MPD>', encoding="utf-8")
+            clear = root / "clear"
+            clear.mkdir()
+            (clear / "audio").mkdir()
+            (clear / "audio/init.mp4").write_bytes(b"clear-init")
+            (clear / "master.m3u8").write_text("#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000000\naudio.m3u8\n", encoding="utf-8")
+            (clear / "audio.m3u8").write_text('#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:1\n'
+                                               '#EXT-X-MAP:URI="audio/init.mp4"\n#EXTINF:1,\naudio/seg_1.m4s\n'
+                                               '#EXTINF:0.005442177,\naudio/seg_2.m4s\n#EXT-X-ENDLIST\n', encoding="utf-8")
             destination = root / "hls"
-            path = ROUNDTRIP.FIXTURES.cenc_hls(mpd, destination, "skd://test-fixture", ROUNDTRIP.SUPPORT)
-            text = (destination / "audio.m3u8").read_text()
+            path = ROUNDTRIP.FIXTURES.cenc_hls(mpd, clear / "master.m3u8", destination, "skd://test-fixture",
+                                            ROUNDTRIP.SUPPORT, lambda _: "audio")
+            text = (destination / "audio/audio.m3u8").read_text()
             self.assertIn("#EXTINF:0.005442177,", text)
             self.assertIn("#EXT-X-TARGETDURATION:1", text)
             self.assertEqual((destination / "audio/seg_2.m4s").read_bytes(), (media / "seg_2.m4s").read_bytes())
@@ -179,6 +192,13 @@ class ReleaseMatrix(unittest.TestCase):
             self.assertEqual(result["status"], "failed")
             self.assertNotIn("forward", result)
             self.assertEqual(list(root.glob("drmr-cli-archive-*")), [])
+
+    def test_missing_verified_fixture_is_reported_without_executing_its_case(self):
+        executor = Mock()
+        result = ROUNDTRIP.execute_case(CONTRACT.cases()[0], executor, {}, Path("unused"))
+        self.assertEqual(result["status"], "not-checked")
+        self.assertEqual(result["failure_code"], "source-fixture-unavailable")
+        executor.convert.assert_not_called()
 
     def test_existing_report_is_preserved_and_private_argument_is_not_logged(self):
         with tempfile.TemporaryDirectory() as directory:
