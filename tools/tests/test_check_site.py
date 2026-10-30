@@ -448,6 +448,17 @@ class Site(unittest.TestCase):
 
 
     def regenerate_guide_fixture(self):
+        # URL mutations must reach reference validation even when real guides
+        # nearly fill the transfer budget. Replace only link-free introduction
+        # prose in these copied fixtures; production bytes and the explicit
+        # transfer-budget regression remain unchanged.
+        for language in ("en", "ja"):
+            source = self.repo / ("site-content/guide/" + language + ".md")
+            paragraphs = source.read_text(encoding="utf-8").split("\n\n")
+            self.assertTrue(paragraphs[1].startswith("# 1."))
+            self.assertNotIn("[", paragraphs[2])
+            paragraphs[2] = "Guide fixture introduction."
+            source.write_bytes("\n\n".join(paragraphs).encode("utf-8"))
         spec = importlib.util.spec_from_file_location("chapter_link_builder_fixture", self.repo / "tools/build_guide_site.py")
         builder = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(builder)
