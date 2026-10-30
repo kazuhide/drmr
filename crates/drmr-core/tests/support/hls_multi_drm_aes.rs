@@ -483,3 +483,199 @@ fn every_encrypted_rendition_is_censused_before_the_first_decoded_probe() {
     );
     assert_eq!(started, [] as [serde_json::Value; 0]);
 }
+
+const ORDINARY_IODS: [u8; 13] = [0, 0, 0, 0, 0x10, 7, 0, 0x4f, 0xff, 0xff, 0x29, 0x7f, 0xff];
+fn control_box(kind: [u8; 4], payload: &[u8]) -> Vec<u8> {
+    [
+        u32::try_from(payload.len() + 8)
+            .unwrap()
+            .to_be_bytes()
+            .as_slice(),
+        kind.as_slice(),
+        payload,
+    ]
+    .concat()
+}
+fn control_seed(
+    seed: &Path,
+    root: &Path,
+    parent: [u8; 4],
+    child: &[u8],
+    media_resource: bool,
+) -> PathBuf {
+    for (name, bytes) in common::snapshot_tree(seed.parent().unwrap()) {
+        let path = root.join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, bytes).unwrap();
+    }
+    let master = root.join("master.m3u8");
+    let text = std::fs::read_to_string(&master).unwrap();
+    let media = root.join(
+        text.lines()
+            .find(|line| !line.is_empty() && !line.starts_with('#'))
+            .unwrap(),
+    );
+    let text = std::fs::read_to_string(&media).unwrap();
+    let resource = if media_resource {
+        text.lines()
+            .find(|line| !line.is_empty() && !line.starts_with('#'))
+            .unwrap()
+            .to_owned()
+    } else {
+        let attrs = drmr_core::m3u8::parse_attributes(
+            text.lines()
+                .find_map(|line| line.strip_prefix("#EXT-X-MAP:"))
+                .unwrap(),
+        )
+        .unwrap();
+        attrs.get("URI").unwrap().to_owned()
+    };
+    let path = media.parent().unwrap().join(resource);
+    let mut bytes = std::fs::read(&path).unwrap();
+    let boxes = drmr_core::mp4::parse_boxes(&bytes).unwrap();
+    let nodes = drmr_core::mp4::walk(&boxes);
+    let target = nodes
+        .iter()
+        .find(|node| node.kind() == parent)
+        .unwrap()
+        .header;
+    if media_resource {
+        for node in nodes.iter().filter(|node| node.kind() == *b"tfhd") {
+            let flags = u32::from_be_bytes(node.header.payload(&bytes)[..4].try_into().unwrap());
+            assert!(flags & 0x20000 != 0 && flags & 1 == 0);
+        }
+        for node in nodes.iter().filter(|node| node.kind() == *b"trun") {
+            let flags = u32::from_be_bytes(node.header.payload(&bytes)[..4].try_into().unwrap());
+            assert_ne!(flags & 1, 0);
+            let at = node.header.offset + node.header.header_size + 8;
+            let offset = i32::from_be_bytes(bytes[at..at + 4].try_into().unwrap());
+            bytes[at..at + 4]
+                .copy_from_slice(&(offset + i32::try_from(child.len()).unwrap()).to_be_bytes());
+        }
+    }
+    for node in nodes.iter().filter(|node| {
+        node.header.offset <= target.offset
+            && node.header.offset + node.header.size >= target.offset + target.size
+    }) {
+        assert_eq!(node.header.header_size, 8);
+        bytes[node.header.offset..node.header.offset + 4].copy_from_slice(
+            &u32::try_from(node.header.size + child.len())
+                .unwrap()
+                .to_be_bytes(),
+        );
+    }
+    bytes.splice(
+        target.offset + target.size..target.offset + target.size,
+        child.iter().copied(),
+    );
+    std::fs::write(path, bytes).unwrap();
+    master
+}
+fn paired_master(root: &Path, good: &Path, bad: &Path) -> PathBuf {
+    let uri = |input: &Path| {
+        let text = std::fs::read_to_string(input).unwrap();
+        let media = text
+            .lines()
+            .find(|line| !line.starts_with('#') && !line.is_empty())
+            .unwrap();
+        format!(
+            "{}/{}",
+            input
+                .parent()
+                .unwrap()
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            media
+        )
+    };
+    let input = root.join("master.m3u8");
+    std::fs::write(&input, format!("#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-STREAM-INF:BANDWIDTH=1000000,RESOLUTION=320x180\n{}\n#EXT-X-STREAM-INF:BANDWIDTH=1000001,RESOLUTION=320x180\n{}\n", uri(good), uri(bad))).unwrap();
+    input
+}
+#[test]
+fn misplaced_controls_in_aes_initialization_and_fragments_refuse_before_any_probe() {
+    let root = common::private_tempdir().unwrap();
+    let original = seed(&root.path().join("seed"));
+    for (label, parent, child, media) in [
+        (
+            "track-iods",
+            *b"trak",
+            control_box(*b"iods", &ORDINARY_IODS),
+            false,
+        ),
+        (
+            "fragment-iods",
+            *b"traf",
+            control_box(*b"iods", &ORDINARY_IODS),
+            true,
+        ),
+        (
+            "descriptive-auxiliary",
+            *b"moov",
+            control_box(*b"udta", &control_box(*b"saiz", &[0; 9])),
+            false,
+        ),
+    ] {
+        let cell = root.path().join(label);
+        let changed = control_seed(&original, &cell.join("changed"), parent, &child, media);
+        let good = encrypted_fixture(&original, &cell.join("good"), Encryption::All, None);
+        let bad = encrypted_fixture(&changed, &cell.join("bad"), Encryption::All, None);
+        let input = paired_master(&cell, &good, &bad);
+        let empty = InputKeys::default();
+        let hls = input_keys();
+        let keys = operator_keys(
+            &cell,
+            "locations",
+            TargetProtection::Cbcs,
+            OutputFormat::Hls,
+        );
+        let systems = keys.signaling.unwrap().systems();
+        for decode in [true, false] {
+            let (command, events) = no_tools(decode);
+            let error = command
+                .with_max_workers(Some(1))
+                .unwrap()
+                .validate_drm_source(
+                    view(&input, &empty, &hls),
+                    &systems,
+                    OutputFormat::Hls,
+                    TargetProtection::Cbcs,
+                )
+                .unwrap_err();
+            let started: Vec<_> = events
+                .records()
+                .iter()
+                .filter(|record| record.get("event") == Some(&serde_json::json!("command")))
+                .filter_map(|record| record.get("tool").cloned())
+                .collect();
+            assert_eq!(
+                error.0, "output-signaling-profile-not-supported",
+                "{label}/{decode}: started={started:?}"
+            );
+            assert_eq!(started, [] as [serde_json::Value; 0]);
+        }
+    }
+}
+#[test]
+fn a_closed_movie_descriptor_remains_supported_for_native_and_decoded_outer_aes() {
+    let root = common::private_tempdir().unwrap();
+    let original = seed(&root.path().join("seed"));
+    let reference = control_seed(
+        &original,
+        &root.path().join("movie-iods"),
+        *b"moov",
+        &control_box(*b"iods", &ORDINARY_IODS),
+        false,
+    );
+    let input = encrypted_fixture(
+        &reference,
+        &root.path().join("input"),
+        Encryption::All,
+        None,
+    );
+    for decode in [false, true] {
+        positive_conversion(&input, &reference, root.path(), OutputFormat::Hls, decode);
+    }
+}

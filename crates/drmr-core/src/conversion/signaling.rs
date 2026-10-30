@@ -445,6 +445,7 @@ fn metadata_tree(
     qualified: bool,
 ) -> Result<(), ConversionError> {
     let tree = mp4::parse_boxes_with_limit(bytes, METADATA_BOX_LIMIT).map_err(|_| UNSUPPORTED)?;
+    super::native_media::metadata_controls(&tree).map_err(|_| UNSUPPORTED)?;
     let descriptive = if qualified {
         qualified_descriptive_metadata(&tree, bytes)?
     } else {
@@ -978,6 +979,24 @@ mod tests {
             ),
         );
         metadata_tree(&text, &stop, true).unwrap();
+    }
+    #[test]
+    fn native_location_errors_keep_the_fixed_signaling_refusal() {
+        let bytes = [
+            24_u32.to_be_bytes().as_slice(),
+            b"moov",
+            &8_u32.to_be_bytes(),
+            b"mvex",
+            &8_u32.to_be_bytes(),
+            b"mvex",
+        ]
+        .concat();
+        // Duplicate canonical containers produce a native framing error; it must
+        // not become a separate public error through the strict signaling census.
+        assert_eq!(
+            metadata_tree(&bytes, &crate::concurrency::Stop::new(), true),
+            Err(UNSUPPORTED)
+        );
     }
     #[test]
     fn explicit_addresses_are_bounded_absolute_metadata_and_never_debug_values() {

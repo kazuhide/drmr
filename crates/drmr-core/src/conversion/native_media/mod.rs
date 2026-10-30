@@ -14,6 +14,8 @@ use std::{
 mod aac;
 mod auxiliary;
 pub(in crate::conversion) use aac::AacConfiguration;
+mod controls;
+pub(in crate::conversion) use controls::census as metadata_controls;
 mod crypto;
 mod encrypt;
 mod entry;
