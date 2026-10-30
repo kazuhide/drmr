@@ -51,6 +51,111 @@ pub fn transport_source(root: &Path, layout: &str, rate: Option<u32>) -> PathBuf
     root.join("media.m3u8")
 }
 
+pub fn bframe_transport_source(root: &Path) -> PathBuf {
+    drmr_core::native::create_media_dir_all(root).unwrap();
+    let result = Command::new("ffmpeg")
+        .args(["-v", "error", "-nostdin", "-threads", "1", "-i"])
+        .arg(fixture())
+        .args([
+            "-t",
+            "4",
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a:0",
+            "-c:v",
+            "libx264",
+            "-threads",
+            "1",
+            "-preset",
+            "veryfast",
+            "-bf",
+            "2",
+            "-g",
+            "48",
+            "-x264-params",
+            "b-adapt=0:scenecut=0",
+            "-c:a",
+            "aac",
+            "-ar",
+            "44100",
+            "-hls_time",
+            "2",
+            "-hls_playlist_type",
+            "vod",
+            "-hls_segment_filename",
+        ])
+        .arg(root.join("segment-%d.ts"))
+        .arg(root.join("media.m3u8"))
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "licensed B-frame fixture failed");
+    root.join("media.m3u8")
+}
+
+pub fn assert_video_time_correction(root: &Path) {
+    let mut pending = vec![root.to_path_buf()];
+    let mut checked = 0;
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            assert!(!path.is_symlink());
+            if path.is_dir() {
+                pending.push(path);
+            } else if path.extension().is_some_and(|extension| extension == "mp4") {
+                let bytes = std::fs::read(path).unwrap();
+                let roots = drmr_core::mp4::parse_boxes(&bytes).unwrap();
+                let nodes = drmr_core::mp4::walk(&roots);
+                let video = nodes.iter().any(|node| {
+                    if node.kind() != *b"hdlr" {
+                        return false;
+                    }
+                    let at = node.header.offset + node.header.header_size;
+                    bytes.get(at + 8..at + 12) == Some(b"vide")
+                });
+                if !video {
+                    continue;
+                }
+                let edit = nodes.iter().find(|node| node.kind() == *b"elst").unwrap();
+                let at = edit.header.offset + edit.header.header_size;
+                assert_eq!(
+                    u32::from_be_bytes(bytes[at + 4..at + 8].try_into().unwrap()),
+                    1
+                );
+                let (duration, media_time, rate_at) = if bytes[at] == 1 {
+                    (
+                        u64::from_be_bytes(bytes[at + 8..at + 16].try_into().unwrap()),
+                        i64::from_be_bytes(bytes[at + 16..at + 24].try_into().unwrap()),
+                        at + 24,
+                    )
+                } else {
+                    assert_eq!(bytes[at], 0);
+                    (
+                        u64::from(u32::from_be_bytes(
+                            bytes[at + 8..at + 12].try_into().unwrap(),
+                        )),
+                        i64::from(i32::from_be_bytes(
+                            bytes[at + 12..at + 16].try_into().unwrap(),
+                        )),
+                        at + 16,
+                    )
+                };
+                assert_eq!(duration, 0, "the fixture must not be a finite video crop");
+                assert_eq!(
+                    media_time, 7_500,
+                    "the fixture must exercise the two-frame B-frame time correction"
+                );
+                assert_eq!(&bytes[rate_at..rate_at + 4], &[0, 1, 0, 0]);
+                checked += 1;
+            }
+        }
+    }
+    assert_eq!(
+        checked, 1,
+        "exactly one corrected video initialization is required"
+    );
+}
+
 pub fn fmp4_source(
     root: &Path,
     original: &Path,
@@ -164,6 +269,97 @@ pub fn cenc_hls_source(root: &Path, original: &Path) -> PathBuf {
             text.replace("#EXT-X-MAP:", &(declaration + "#EXT-X-MAP:")),
         )
         .unwrap();
+    }
+    root.join("master.m3u8")
+}
+
+fn initialization_handler(bytes: &[u8]) -> [u8; 4] {
+    let roots = drmr_core::mp4::parse_boxes(bytes).unwrap();
+    drmr_core::mp4::walk(&roots)
+        .into_iter()
+        .filter(|node| node.kind() == *b"hdlr")
+        .find_map(|node| {
+            let at = node.header.offset + node.header.header_size;
+            match bytes.get(at + 8..at + 12) {
+                Some(b"vide") => Some(*b"vide"),
+                Some(b"soun") => Some(*b"soun"),
+                _ => None,
+            }
+        })
+        .unwrap()
+}
+
+pub fn clock_bound_cenc_hls_source(root: &Path, clear_dash: &Path) -> PathBuf {
+    let clear = root.with_extension("clear");
+    let source = fmp4_source(
+        &clear,
+        clear_dash,
+        OutputFormat::Hls,
+        TargetProtection::Clear,
+        ProcessingMode::Segments,
+    );
+    fmp4_source(
+        root,
+        &source,
+        OutputFormat::Dash,
+        TargetProtection::Cenc,
+        ProcessingMode::Segments,
+    );
+    // Manifest writers may order audio and video differently. Match the actual
+    // initialization handlers before reusing the exact HLS resource declarations.
+    let mut directories = std::collections::BTreeMap::new();
+    for (relative, bytes) in common::snapshot_tree(root) {
+        if relative.ends_with("init.mp4") {
+            directories.insert(
+                initialization_handler(&bytes),
+                Path::new(&relative)
+                    .parent()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        }
+    }
+    let mut mapping = Vec::new();
+    for (relative, bytes) in common::snapshot_tree(&clear) {
+        if relative.ends_with("init.mp4") {
+            let directory = Path::new(&relative)
+                .parent()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            mapping.push((
+                directory,
+                directories[&initialization_handler(&bytes)].clone(),
+            ));
+        }
+    }
+    assert_eq!(mapping.len(), 2);
+    for (relative, bytes) in common::snapshot_tree(&clear) {
+        if !Path::new(&relative)
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("m3u8"))
+        {
+            continue;
+        }
+        let mut text = String::from_utf8(bytes).unwrap();
+        let mut relative = relative;
+        for (index, (old, _)) in mapping.iter().enumerate() {
+            let token = format!("rendition-placeholder-{index}");
+            text = text.replace(old, &token);
+            relative = relative.replace(old, &token);
+        }
+        for (index, (_, new)) in mapping.iter().enumerate() {
+            let token = format!("rendition-placeholder-{index}");
+            text = text.replace(&token, new);
+            relative = relative.replace(&token, new);
+        }
+        if text.contains("#EXTINF:") {
+            let declaration =
+                format!("#EXT-X-KEY:METHOD=SAMPLE-AES-CTR,URI=\"{URI}\",KEYFORMAT=\"identity\"\n");
+            text = text.replace("#EXT-X-MAP:", &(declaration + "#EXT-X-MAP:"));
+        }
+        common::write(&root.join(relative), text);
     }
     root.join("master.m3u8")
 }

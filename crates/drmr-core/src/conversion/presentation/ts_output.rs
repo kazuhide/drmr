@@ -227,11 +227,21 @@ impl Converter {
                     .tracks
                     .get(source.index)
                     .ok_or(ConversionError("stream-selector-mismatch"))?;
-                if track
-                    .edits
-                    .iter()
-                    .any(|edit| edit.media_time != 0 || edit.duration != 0)
-                {
+                let representable = match track.edits.as_slice() {
+                    [] => true,
+                    [edit]
+                        if edit.duration == 0
+                            && edit.rate_integer == 1
+                            && edit.rate_fraction == 0 =>
+                    {
+                        // A video's unbounded composition correction translates both
+                        // PTS and DTS. AAC priming still requires sample-level trimming.
+                        edit.media_time == 0
+                            || (track.kind == TrackKind::Video && edit.media_time > 0)
+                    }
+                    _ => false,
+                };
+                if !representable {
                     return Err(ConversionError("ts-output-presentation-not-representable"));
                 }
             }

@@ -307,7 +307,7 @@ fn decoded_comparison(
         })
     });
     let report = report.unwrap();
-    assert!(report.passed && report.checks.is_pass());
+    assert!(report.passed && report.checks.is_pass(), "{report:?}");
     assert_eq!(report.required_depth, ValidationDepth::Decoded);
     assert_eq!(
         report.decode_evidence,
@@ -739,4 +739,56 @@ fn wrong_input_key_requires_an_independent_reference(root: &Path, input: &Path, 
     } else {
         assert!(!destination.exists());
     }
+}
+
+#[test]
+fn bframe_time_corrections_keep_joint_44100_audio_in_clear_and_fairplay_ts() {
+    let root = common::private_tempdir().unwrap();
+    let original = support::bframe_transport_source(&root.path().join("original"));
+    let clear_dash = support::fmp4_source(
+        &root.path().join("clear-dash"),
+        &original,
+        OutputFormat::Dash,
+        TargetProtection::Clear,
+        ProcessingMode::Stitch,
+    );
+    let mut decoded = false;
+    for format in [OutputFormat::Dash, OutputFormat::Hls] {
+        for protection in [
+            TargetProtection::Clear,
+            TargetProtection::Cenc,
+            TargetProtection::Cbcs,
+        ] {
+            let name = format!("{format:?}-{}", protection.as_str());
+            let input = if format == OutputFormat::Hls && protection == TargetProtection::Cenc {
+                support::clock_bound_cenc_hls_source(&root.path().join(&name), &clear_dash)
+            } else {
+                support::fmp4_source(
+                    &root.path().join(&name),
+                    &clear_dash,
+                    format,
+                    protection,
+                    ProcessingMode::Segments,
+                )
+            };
+            support::assert_video_time_correction(input.parent().unwrap());
+            let keys = support::source_keys(protection);
+            for encrypted in [false, true] {
+                let (output, output_keys) = round_trip(
+                    root.path(),
+                    &format!("{name}-ts-{encrypted}"),
+                    &input,
+                    &keys,
+                    encrypted,
+                    2,
+                );
+                if encrypted && format == OutputFormat::Hls && protection == TargetProtection::Cbcs
+                {
+                    decoded_comparison(&input, &keys, &output, &output_keys);
+                    decoded = true;
+                }
+            }
+        }
+    }
+    assert!(decoded);
 }

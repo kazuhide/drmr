@@ -3,7 +3,7 @@ use super::{
     syntax::{self, Attribute, Line},
     unknown_attributes,
 };
-use crate::{CheckStatus, DiagnosticSink};
+use crate::{CheckStatus, DiagnosticSink, Profile, Rule, RuleReference};
 use crate::{
     NotCheckedReason, Span,
     uri::{ReferenceResolutionError, key_uri_identity},
@@ -80,6 +80,16 @@ pub(super) fn fingerprint(parts: &[&str]) -> [u8; 32] {
     digest.finalize().into()
 }
 
+const fn ctr_rule(id: &'static str, message: &'static str, section: &'static str) -> Rule {
+    let mut requirement = rule(id, message, section);
+    requirement.reference = RuleReference {
+        url: "https://datatracker.ietf.org/doc/html/draft-pantos-hls-rfc8216bis-22",
+        section,
+        revision: "draft-pantos-hls-rfc8216bis-22 (2026-05-01, work in progress)",
+    };
+    requirement
+}
+
 #[derive(Clone, Copy)]
 struct Effective<'a> {
     method: &'a str,
@@ -101,9 +111,10 @@ impl<'a> State<'a> {
         attributes: &[Attribute<'a>],
         line: Line<'_>,
         minimum: &mut u64,
+        profile: Profile,
         sink: &mut DiagnosticSink<'_>,
     ) {
-        validate(attributes, line, sink);
+        validate(attributes, line, profile, sink);
         let method = syntax::get(attributes, "METHOD");
         let iv = syntax::get(attributes, "IV");
         let format = syntax::get(attributes, "KEYFORMAT");
@@ -123,7 +134,7 @@ impl<'a> State<'a> {
         let state = Effective {
             method: method.value,
             missing_map_iv: method.value == "AES-128" && iv.is_none(),
-            unknown: !matches!(method.value, "AES-128" | "SAMPLE-AES"),
+            unknown: !matches!(method.value, "AES-128" | "SAMPLE-AES" | "SAMPLE-AES-CTR"),
         };
         if let Some(previous) = self
             .formats
@@ -164,6 +175,22 @@ impl<'a> State<'a> {
         }
     }
 
+    pub fn check_segment(&self, map: Option<Span>, span: Span, sink: &mut DiagnosticSink<'_>) {
+        self.check_methods(span, sink);
+        if self.methods.contains_key("SAMPLE-AES-CTR") {
+            check(
+                sink,
+                ctr_rule(
+                    "HLS-CTR-MAP",
+                    "hls-ctr-map-required",
+                    "3.1.2,4.4.4.4-4.4.4.5",
+                ),
+                map.is_some_and(|map| map.end <= span.start),
+                span,
+            );
+        }
+    }
+
     pub fn check_map(&self, span: Span, sink: &mut DiagnosticSink<'_>) {
         self.check_methods(span, sink);
         let requirement = rule("HLS-MAP-KEY-IV", "hls-encrypted-map-iv-required", "4.3.2.5");
@@ -184,6 +211,7 @@ impl<'a> State<'a> {
 pub(super) fn validate(
     attributes: &[Attribute<'_>],
     line: Line<'_>,
+    profile: Profile,
     sink: &mut DiagnosticSink<'_>,
 ) {
     unknown_attributes(
@@ -238,6 +266,21 @@ pub(super) fn validate(
         return;
     };
     if method.value == "NONE" {
+        return;
+    }
+    if method.value == "SAMPLE-AES-CTR" {
+        check(
+            sink,
+            ctr_rule("HLS-CTR-KEY", "hls-ctr-iv-not-permitted", "4.4.4.4"),
+            iv.is_none(),
+            method.span,
+        );
+        if profile == Profile::AppleVodManifest {
+            let mut requirement =
+                super::apple_rule("APPLE-HLS-CTR", "apple-hls-ctr-not-permitted", "13.11");
+            requirement.reference.revision = "retrieved 2026-10-30";
+            check(sink, requirement, false, method.span);
+        }
         return;
     }
     let known = matches!(method.value, "AES-128" | "SAMPLE-AES");

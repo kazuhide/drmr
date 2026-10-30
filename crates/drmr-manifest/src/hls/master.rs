@@ -98,6 +98,7 @@ impl<'a> Master<'a> {
                 self.references += usize::from(session_key(
                     document,
                     line,
+                    context.options.profile,
                     sink,
                     facts,
                     &mut self.session_keys,
@@ -252,6 +253,7 @@ impl<'a> Master<'a> {
 fn session_key(
     document: &Document<'_>,
     line: Line<'_>,
+    profile: Profile,
     sink: &mut DiagnosticSink<'_>,
     facts: &mut HlsFacts,
     seen: &mut BTreeSet<[u8; 32]>,
@@ -259,7 +261,7 @@ fn session_key(
     let Some(attributes) = attribute_list(line, sink) else {
         return false;
     };
-    super::keys::validate(&attributes, line, sink);
+    super::keys::validate(&attributes, line, profile, sink);
     let valid = syntax::get(&attributes, "METHOD").is_some_and(|method| method.value != "NONE")
         && syntax::get(&attributes, "URI").is_some();
     check(

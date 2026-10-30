@@ -1,4 +1,4 @@
-//! Independent RFC 8216 and explicitly selected Apple VOD manifest checks.
+//! Independent RFC 8216 checks, narrow HLS draft CTR declarations and selected Apple VOD rules.
 
 mod apple;
 mod grammar;

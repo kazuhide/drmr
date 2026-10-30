@@ -160,6 +160,7 @@ impl DashSource {
                 .resources
                 .into_iter()
                 .map(|(path, boundary)| {
+                    converter.backend.check_cancelled()?;
                     // DASH addressing retains complete coded intervals. HLS EXTINF
                     // instead describes the visible interval, including a final AAC clip.
                     let (first, end, scale) = clock.segment_presentation(&path)?;

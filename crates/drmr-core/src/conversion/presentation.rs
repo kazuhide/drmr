@@ -842,7 +842,10 @@ fn raw_audio_view<'a>(source: &'a Prepared, keys: &'a InputKeys) -> super::ts::V
         all_keys: None,
         transport: source.transport_index.is_some(),
         native: source.transport_native.as_deref(),
-        unedited: source.transport_index.is_none(),
+        // Only audio compares complete coded frames before its finite range.
+        // Video must retain its PTS/DTS composition correction from the edit list.
+        unedited: source.transport_index.is_none()
+            && source.report.tracks[0].kind == TrackKind::Audio,
     }
     .with_all_keys(keys)
 }
