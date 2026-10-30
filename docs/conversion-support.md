@@ -56,8 +56,9 @@ language and HLS selection declarations. DASH maps that sole audio rendition to
 standard language, label and author-priority fields; identical automatic player
 selection is not claimed. See [rendition metadata and its mapping](media-processing.md#multiple-qualities-and-audio-declarations).
 Metadata outside that mapping is rejected rather than discarded. A single-track fMP4 HLS source can also
-produce clear, `cenc`, or `cbcs` MP4. Combining an HLS presentation's separate
-audio and video tracks into one MP4 is outside the current profile. MPEG-TS has
+produce clear, `cenc`, or `cbcs` MP4. Combining separate fMP4 HLS audio and video
+tracks into one MP4 is outside the current profile. TS HLS can retain one video
+and one audio track in the [single-MP4 profile](#mpeg-transport-streams-to-one-mp4). MPEG-TS has
 the [narrower input profile below](#mpeg-transport-stream-input).
 
 ## URL input
@@ -166,7 +167,7 @@ Set `DRMR_CONVERSION_REPORT` to a path outside the repository to save the JSON r
 
 | Output format | Available protection | Initial profile |
 | --- | --- | --- |
-| MP4 file | Clear, `cenc`, `cbcs` | One track, or the audio and video from one qualified progressive source below |
+| MP4 file | Clear, `cenc`, `cbcs` | One track, qualified joint progressive MP4, or one video and one audio from supported TS HLS |
 | DASH directory | Clear, `cenc`, `cbcs` | Separate fragmented MP4 tracks in one static presentation |
 | HLS directory (`hls`) | Clear, `cbcs`, AES-128 | fMP4 resources and completed playlists |
 | HLS directory (`hls-ts`) | Clear, AES-128, SAMPLE-AES | Qualified TS or fragmented MP4 input; separate TS audio/video playlists when both are present |
@@ -230,11 +231,11 @@ Clear output needs no output-key section. Keep the original media and keys until
 
 ## MPEG transport stream input
 
-Completed local HLS playlists containing clear, AES-128, or SAMPLE-AES transport stream segments can produce DASH with clear, `cenc`, or `cbcs` protection, or fragmented MP4 HLS with clear, `cbcs`, or AES-128 protection. Encrypted input requires operator-supplied keys. The profile accepts one progressive H.264 video stream, one 44.1 or 48 kHz AAC-LC audio stream, or both, in a single program. Audio-only input supports DASH, fMP4 HLS, and TS output with the strict native audio timing checks described in [processing and verification](media-processing.md#mpeg-transport-stream-input). SAMPLE-AES-CTR transport streams and standalone MP4 output from this input are refused.
+Completed local HLS playlists containing clear, AES-128, or SAMPLE-AES transport stream segments can produce DASH with clear, `cenc`, or `cbcs` protection, or fragmented MP4 HLS with clear, `cbcs`, or AES-128 protection. Encrypted input requires operator-supplied keys. The profile accepts one progressive H.264 video stream, one 44.1 or 48 kHz AAC-LC audio stream, or both, in a single program. Audio-only input supports MP4, DASH, fMP4 HLS, and TS output with the strict native audio timing checks described in [processing and verification](media-processing.md#mpeg-transport-stream-input). SAMPLE-AES-CTR transport streams are refused. Standalone MP4 has the selection conditions described [below](#mpeg-transport-streams-to-one-mp4).
 
 The 1.0.1 source includes 44.1 kHz AAC support for this TS profile. The unchanged v1.0.0 archives accept only 48 kHz AAC from TS. See [installation](../README.md#install) and [release status](releases.md) when choosing a build.
 
-A supported AAC-only rendition may declare a playback end inside its final frame. drmr retains the complete encoded frame and preserves the shorter playback range in HLS or DASH. The declaration must identify one exact audio-sample boundary; ambiguous precision, clipping a nonfinal segment, or omitting a whole frame is refused. Standalone MP4 output from TS remains outside this profile. See [AAC playback boundaries](media-processing.md#playback-ending-inside-the-final-aac-frame).
+A supported AAC-only rendition may declare a playback end inside its final frame. drmr retains the complete encoded frame and preserves the shorter playback range in MP4, HLS or DASH. The declaration must identify one exact audio-sample boundary; ambiguous precision, clipping a nonfinal segment, or omitting a whole frame is refused. See [AAC playback boundaries](media-processing.md#playback-ending-inside-the-final-aac-frame).
 
 For example, create CBCS DASH from a supported local TS playlist:
 
@@ -296,6 +297,43 @@ Run it with:
 
 ```sh
 cargo test -p drmr-core --test conversion_sample_aes --locked
+```
+
+## MPEG transport streams to one MP4
+
+Use `--format mp4` with `--to clear`, `--to cenc` or `--to cbcs` to produce one
+fragmented MP4 file from qualified TS HLS. Clear, AES-128 and SAMPLE-AES inputs
+use the same known-key input checks as other TS routes. Audio only, video only,
+or one video and one audio track are supported. A single multiplexed TS
+playlist or one selected video playlist with its associated audio can supply
+the tracks. `auto` and `stitch` prepare complete tracks without decoding;
+`segments` refuses this container change. MP4 output has no HLS or DASH manifest.
+
+Restrict a master with several video qualities or audio choices to the desired
+video and associated audio before analysis. drmr refuses ambiguous selections;
+it does not choose a quality or discard tracks. A video-only media playlist
+produces video-only MP4. Supported audio-language metadata is retained, including
+equivalent `en` and `eng` spellings. HLS group identifiers, rendition names and
+automatic-selection flags describe playlist choices; they are not carried as
+MP4 player-selection declarations. Unsupported language mappings are refused.
+
+The MP4 retains all encoded samples and their absolute clocks. Standard MP4
+playback edits preserve a supported shorter final AAC range, including with
+video. The generated file can be analyzed and independently compared with the
+original TS. Those edits do not qualify an additional arbitrary-MP4 conversion
+input profile. Optional `--decode` adds complete decoded-media comparison.
+
+The regression covers all nine input/output protection pairs for video only,
+joint audio/video, audio only at 48 kHz, and audio only at 44.1 kHz. Additional
+cases check exact partial AAC endings, language mapping, reordered video,
+ambiguous-selection refusal and saved-plan integrity. The real CLI checks
+analysis, saved planning, direct and saved-plan conversion, fresh verification,
+and a named MP4/DASH output pair. These qualify the stated fixtures and profiles,
+not license acquisition or device playback.
+
+```sh
+cargo test --locked -p drmr-core --test conversion_ts_output ts_mp4 -- --nocapture
+cargo test --locked -p drmr --test conversion_ts_mp4 -- --nocapture
 ```
 
 ## MPEG transport stream output

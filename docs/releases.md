@@ -6,10 +6,12 @@ maturity is separate: check the **Pre-release** label on each
 version. A 1.x version number alone does not establish complete media or platform
 qualification. The local Web console and Desktop host remain experimental.
 
-Version 1.0.2 groups the [changelog](../CHANGELOG.md) changes since the pre-release
-updates. It uses native media checks by default, keeps source-relative output
-paths and supports processing and DASH-addressing choices. Fixed progress
-columns and aggregate task counts describe bounded parallel work;
+Version 1.0.3 adds CENC DASH DRM declarations, TS output from qualified
+fragmented MP4, and single MP4 output from TS. See the [changelog](../CHANGELOG.md) and
+[conversion profiles](conversion-support.md) for source and track restrictions.
+It retains native media checks by default, source-relative segmented output
+paths, and processing and DASH-addressing choices. Fixed progress columns and
+aggregate task counts describe bounded parallel work;
 the [measurements](performance.md) do not establish a consistent whole-command
 speedup for every added concurrency stage.
 
@@ -34,10 +36,10 @@ system and processor in the release notes:
 | macOS | Apple Silicon | `aarch64-apple-darwin` |
 | Windows | x86-64 | `x86_64-pc-windows-msvc` |
 
-CLI archive names include the version and target. For 1.0.2, they are
-`drmr-1.0.2-x86_64-unknown-linux-gnu.tar.gz`,
-`drmr-1.0.2-aarch64-apple-darwin.tar.gz` and
-`drmr-1.0.2-x86_64-pc-windows-msvc.zip`, respectively. Choose an archive actually
+CLI archive names include the version and target. For 1.0.3, they are
+`drmr-1.0.3-x86_64-unknown-linux-gnu.tar.gz`,
+`drmr-1.0.3-aarch64-apple-darwin.tar.gz` and
+`drmr-1.0.3-x86_64-pc-windows-msvc.zip`, respectively. Choose an archive actually
 listed on GitHub Releases, and download its documentation and verification
 reports from that same release. Current repository documentation can describe
 changes absent from an older archive.

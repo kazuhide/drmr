@@ -195,11 +195,8 @@ MATRIX_ROWS = (
     ("hls-ts-audio", ("Clear", "AES-128", "SAMPLE-AES")),
 )
 STANDARD_OUTPUTS = (("Clear", "cenc", "cbcs"), ("Clear", "cenc", "cbcs"),
-                    ("Clear", "cbcs", "AES-128"), ())
-MATRIX_CELLS = (STANDARD_OUTPUTS, STANDARD_OUTPUTS,
-                STANDARD_OUTPUTS, ((), ("Clear", "cenc", "cbcs"), ("Clear", "cbcs", "AES-128"),
-                                  ("Clear", "AES-128", "SAMPLE-AES")),
-                ((), ("Clear", "cenc", "cbcs"), ("Clear", "cbcs", "AES-128"), ("Clear", "AES-128", "SAMPLE-AES")))
+                    ("Clear", "cbcs", "AES-128"), ("Clear", "AES-128", "SAMPLE-AES"))
+MATRIX_CELLS = (STANDARD_OUTPUTS,) * 5
 MATRIX_FORMATS = ("mp4", "dash", "hls", "hls-ts")
 MATRIX_DESTINATIONS = ("MP4", "DASH", "HLS / fMP4", "HLS / MPEG-TS")
 MATRIX_TARGETS = {"Clear": "clear", "cenc": "cenc", "cbcs": "cbcs",
@@ -210,16 +207,14 @@ MATRIX_LOCALES = {
            "outside": "Outside profile",
            "profiles": ("Progressive or fragmented", "Fragmented MP4 tracks",
                         "Fragmented MP4 (fMP4)", "Video with optional audio", "Audio only"),
-           "recipe_inputs": ("MP4", "DASH", "HLS / fMP4", "HLS / MPEG-TS (video)", "HLS / MPEG-TS (audio only)"),
-           "recipe_link": "command example"},
+           "recipe_inputs": ("MP4", "DASH", "HLS / fMP4", "HLS / MPEG-TS (video)", "HLS / MPEG-TS (audio only)")},
     "ja": {"heading": "入力と出力の対応表", "region": "変換対応表",
            "caption": "対応する変換プロファイル", "corner": "入力 ↓ / 出力 →",
            "outside": "対象外",
            "profiles": ("プログレッシブ / フラグメント化",
                         "フラグメント化MP4トラック", "フラグメント化MP4（fMP4）",
                         "映像（音声は省略可）", "音声のみ"),
-           "recipe_inputs": ("MP4", "DASH", "HLS / fMP4", "HLS / MPEG-TS（映像）", "HLS / MPEG-TS（音声のみ）"),
-           "recipe_link": "コマンド例"},
+           "recipe_inputs": ("MP4", "DASH", "HLS / fMP4", "HLS / MPEG-TS（映像）", "HLS / MPEG-TS（音声のみ）")},
 }
 
 
@@ -312,7 +307,7 @@ def matrix_recipe_links(cell, row_index, column, protections, language):
         label = link.attrs.get("aria-label", "")
         children = [child for child in link.children if isinstance(child, Element)]
         require(link.attrs.get("href") == "guide/#" + identifier
-                and heading in label and MATRIX_LOCALES[language]["recipe_link"] in label
+                and label == heading
                 and matrix_text(link) == protection and len(children) == 1
                 and children[0].tag == ("span" if protection == "Clear" else "code")
                 and not list(children[0].descendants()), "site-matrix-recipe-link")
@@ -376,10 +371,10 @@ def validate_matrix(text, language):
                 require(matrix_text(cell) == locale["outside"] and not list(cell.descendants("code")),
                         "site-matrix-protections")
             require([matrix_text(node) for node in cell.descendants("sup")]
-                    == (["1"] if column == 0 and index in (0, 1, 2) else []), "site-matrix-notes")
-    require(len(list(section.one(id="matrix-limits").descendants("li"))) == 3, "site-matrix-notes")
-    require(len(list(table.descendants("a"))) == 45, "site-matrix-recipe-link")
-    return {"rows": 5, "output_columns": 4, "cells": 20, "caption": locale["caption"], "recipe_links": 45}
+                    == (["1"] if column == 0 else ["4"] if column == 3 and index < 3 else []), "site-matrix-notes")
+    require(len(list(section.one(id="matrix-limits").descendants("li"))) == 4, "site-matrix-notes")
+    require(len(list(table.descendants("a"))) == 60, "site-matrix-recipe-link")
+    return {"rows": 5, "output_columns": 4, "cells": 20, "caption": locale["caption"], "recipe_links": 60}
 
 
 def validate_recipe_commands(code, row, output_format, target):
@@ -387,12 +382,15 @@ def validate_recipe_commands(code, row, output_format, target):
     profiles = dict(MATRIX_ROWS).get(row)
     # Blank lines separate complete groups; they must not hide broken continuations.
     groups = re.split(r"\n[ \t]*\n", code.replace("\r\n", "\n").strip("\n"))
-    require(profiles and len(groups) == len(profiles), token)
+    require(profiles and len(groups) == 2, token)
+    profiles = ((profiles[0],), profiles[1:])
     extension = "mp4" if row == "mp4" else "mpd" if row == "dash" else "m3u8"
     output = "result.mp4" if output_format == "mp4" else "result"
     for index, profile in enumerate(profiles):
         lines = groups[index].split("\n")
-        require(len(lines) == 7 and lines[0] == f"# {profile} input", token)
+        label = " / ".join(profile)
+        clear = profile == ("Clear",)
+        require(len(lines) == 7 and lines[0] == f"# {label} input", token)
         physical = [line.lstrip() for line in lines[1:]]
         require(physical[0].endswith(" \\") and physical[2].endswith(" \\"), token)
         steps = [physical[0][:-2] + " " + physical[1], physical[2][:-2] + " " + physical[3],
@@ -404,9 +402,9 @@ def validate_recipe_commands(code, row, output_format, target):
                         for offset, line in enumerate(steps)]
         except ValueError:
             raise Failure(token) from None
-        input_keys = [] if profile == "Clear" else ["--keys-file", "keys.json"]
-        runtime_keys = [] if profile == "Clear" and target == "clear" else ["--keys-file", "keys.json"]
-        name = {"Clear": "clear", "AES-128": "aes128", "SAMPLE-AES": "sample-aes"}.get(profile, profile)
+        input_keys = [] if clear else ["--keys-file", "keys.json"]
+        runtime_keys = [] if clear and target == "clear" else ["--keys-file", "keys.json"]
+        name = "clear" if clear else "encrypted"
         url = f"https://example.com/{name}.{extension}"
         require(steps[0].startswith(f'drmr analyze "{url}" ')
                 and commands[0] == ["drmr", "analyze", url,
@@ -424,7 +422,7 @@ def validate_conversion_examples(chapter, language):
     require(len(setup) == 1 and setup[0].tag == "h3", token)
     headings = [node for node in chapter.descendants()
                 if node.attrs.get("id", "").startswith("recipe-") and node.attrs["id"] != "recipe-setup"]
-    require(len(headings) == 45 and [node.attrs.get("id") for node in headings]
+    require(len(headings) == 60 and [node.attrs.get("id") for node in headings]
             == [example[0] for example in expected], token)
     children = [node for node in chapter.children if isinstance(node, Element)]
     for heading, (identifier, label, row, output_format, target) in zip(headings, expected):

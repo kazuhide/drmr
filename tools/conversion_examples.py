@@ -33,7 +33,7 @@ PROTECTIONS = {"clear": "Clear", "cenc": "cenc", "cbcs": "cbcs",
 def routes():
     result = []
     for source in INPUTS:
-        formats = ("dash", "hls", "hls-ts") if source.startswith("hls-ts-") else ("mp4", "dash", "hls")
+        formats = ("mp4", "dash", "hls", "hls-ts")
         for output in formats:
             targets = (("clear", "hls-aes128", "hls-sample-aes") if output == "hls-ts" else
                        ("clear", "cbcs", "hls-aes128") if output == "hls" else
@@ -53,7 +53,7 @@ def commands(source, output, target, input_protection):
     if input_protection not in INPUTS[source]["protections"]:
         raise ValueError("conversion-example-input-protection")
     extension = INPUTS[source]["source"].rsplit(".", 1)[1]
-    name = {"hls-aes128": "aes128", "hls-sample-aes": "sample-aes"}.get(input_protection, input_protection)
+    name = "clear" if input_protection == "clear" else "encrypted"
     input_keys = " --keys-file keys.json" if input_protection != "clear" else ""
     runtime_keys = " --keys-file keys.json" if input_protection != "clear" or target != "clear" else ""
     destination = "result.mp4" if output == "mp4" else "result"
@@ -75,7 +75,9 @@ def markdown(locale):
         preparation_link = f"[{preparation}](#recipe-setup)"
         blocks += [f"## {heading} {{#{identifier(source, output, target)}}}", "",
                    preparation_link, "", "```sh"]
-        for protection in INPUTS[source]["protections"]:
-            blocks += [f"# {PROTECTIONS[protection]} input", commands(source, output, target, protection).rstrip(), ""]
+        profiles = INPUTS[source]["protections"]
+        for group in ((profiles[0],), profiles[1:]):
+            label = " / ".join(PROTECTIONS[protection] for protection in group)
+            blocks += [f"# {label} input", commands(source, output, target, group[0]).rstrip(), ""]
         blocks += ["```", ""]
     return "\n".join(blocks)

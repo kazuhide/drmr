@@ -130,7 +130,7 @@ test.afterEach(async ({ page }, info) => {
 
 const focusSelector = 'a[href], pre[tabindex="0"], .matrix-scroll[tabindex="0"]';
 // Fixed inventories include the intentional documentation links in each locale.
-const focusTargetCounts = { en: 82, ja: 81 };
+const focusTargetCounts = { en: 97, ja: 96 };
 
 function textWithoutNotes(node) {
   const text = value => value.nodeType === Node.TEXT_NODE ? value.textContent :
@@ -782,7 +782,7 @@ for (const locale of locales) test(`${locale.language}: core content and anchor 
   }
 });
 
-for (const locale of locales) for (const offset of [0, 15, 30]) {
+for (const locale of locales) for (let offset = 0; offset < matrixRecipes.length; offset += 15) {
   test(`${locale.language}: matrix recipes ${offset + 1}–${offset + 15} navigate without JavaScript`, async ({ browser }, info) => {
     const context = await browser.newContext({ javaScriptEnabled: false, viewport: { width: 320, height: 900 } });
     const coldFonts = locale.language === 'en' && offset === 0

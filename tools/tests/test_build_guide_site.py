@@ -21,9 +21,9 @@ class GuideBuilderTests(unittest.TestCase):
         for route, page in pages.items():
             html = page.decode()
             self.assertEqual(html.count('data-guide-chapter='), 18)
-            self.assertIn('<figure class="guide-example" aria-labelledby=ex1 data-code-language=sh>', html)
+            self.assertIn('<figure class=guide-example aria-labelledby=ex1 data-code-language=sh>', html)
             self.assertNotIn('role="group"', html)
-            self.assertIn('<caption id="table-1-title">', html)
+            self.assertIn('<caption id=table-1-title>', html)
             self.assertIn('scope=row', html)
             for chapter in builder.CHAPTER_IDS:
                 self.assertIn(f'href="#{chapter}"', html)
@@ -76,7 +76,7 @@ class GuideBuilderTests(unittest.TestCase):
             with self.subTest(target=target), self.assertRaises(ValueError):
                 builder.inline('[Bad](' + target + ')')
         output = builder.body('## MP4 → DASH / cbcs {#recipe-mp4-dash-cbcs}', 'en')
-        self.assertEqual(output, '<h3 id="recipe-mp4-dash-cbcs" tabindex=-1>MP4 → DASH / cbcs</h3>')
+        self.assertEqual(output, '<h3 id=recipe-mp4-dash-cbcs tabindex=-1>MP4 → DASH / cbcs</h3>')
 
     def test_example_generation_reads_source_even_when_an_old_bytecode_cache_looks_current(self):
         with tempfile.TemporaryDirectory() as temporary:

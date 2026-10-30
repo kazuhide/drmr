@@ -27,15 +27,15 @@ position and time; failed checks retain these samples too. Persistent clipping
 still fails. The suite covers:
 
 - English and Japanese at 320, 768, 1024 and 1440 px (eight cases): document overflow and clipped layout boxes, locally
-  hosted fonts and images, exact served asset bytes, all 81 English / 80 Japanese native Tab targets and
+  hosted fonts and images, exact served asset bytes, all 97 English / 96 Japanese native Tab targets and
   anchor navigation, rendered ARIA landmarks/headings/link names, and axe checks
   including color contrast. Both violations and incomplete checks must be empty.
   The five named code groups retain their full command text in both rendered
   accessibility trees. The first main section is a five-input-profile by four-output-format
   semantic table. Exact row/column headers, all 20 output cells, input protection
   qualifications and linked notes are checked independently of the HTML.
-  All 45 supported output-protection tokens link to their exact guide recipe;
-  unavailable cells have no recipe links. Focused matrix links also undergo
+  All 60 supported output-protection tokens link to their exact guide recipe;
+  the linked notes state profile restrictions. Focused matrix links also undergo
   point hit-testing so sticky input headers cannot cover their rendered boxes.
   Output links have atomic layout boxes. Only keyboard-focused links define a
   horizontal snap position; scrollport padding keeps them beside the sticky
@@ -68,12 +68,14 @@ still fails. The suite covers:
   language (two cases). The
   loopback job checks both `/` and the project `/drmr/` mount; the published job
   checks only `/drmr/`.
-- Six separate cases activate all 45 matrix links in each language at the project
+- Eight separate cases activate all 60 matrix links in each language at the project
   mount with JavaScript disabled. Each case covers fifteen distinct recipes,
   retaining the same thirty-second case budget. Native Tab/Enter activates the
   first recipe of each batch; the remaining links use actual link clicks. Each destination
   must expose its exact focusable heading, setup link and complete four-step
-  command example with matching output format, protection and saved plan.
+  command example for both Clear and encrypted input, with matching output format,
+  protection and saved plan. Input schemes with identical commands share one
+  explicitly labeled group; the Clear group omits unnecessary key arguments.
   The served guide hash must match the workflow source. A 320px viewport image
   records each batch's first native recipe destination before further guide interaction,
   with unchanged heading geometry and complete source metadata.

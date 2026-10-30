@@ -121,6 +121,14 @@ runtime settings, generated declarations, and independent library checks.
 
 The generic `convert` command accepts qualified local MP4, fragmented MP4 DASH/HLS, and MPEG transport stream HLS profiles, including encrypted input. Transport stream input can be clear, AES-128, or SAMPLE-AES with supplied keys and initialization vectors. See [conversion support](docs/conversion-support.md) for restrictions and tested routes.
 
+Qualified TS HLS can also become one fragmented MP4 file with clear, `cenc`
+or `cbcs` protection. Select at most one video and one audio rendition before
+conversion; a master with several video qualities is refused for this output.
+Qualified fragmented MP4, DASH and fMP4 HLS can produce clear, AES-128 or
+FairPlay SAMPLE-AES TS HLS. Container changes use `auto` or `stitch` processing.
+See [input profiles and output limits](docs/conversion-support.md) before
+choosing the tracks and protection.
+
 Subtitle tracks and arbitrary track selection are outside the common conversion profile. Live input, discontinuities, and other unsupported manifest or codec profiles are refused.
 
 drmr packages supplied media and signaling. It does not provide a DRM license server.

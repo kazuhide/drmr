@@ -1,7 +1,7 @@
 ---
 title: ユーザーガイド
 updated: 2026-10-30
-version: 1.0.2
+version: 1.0.3
 ---
 
 # 1. はじめに
@@ -94,7 +94,7 @@ Widevine、PlayReady、FairPlay は、鍵の取得や利用条件、プレーヤ
 
 暗号方式の変換、シグナリングの整合性確認、ライセンス取得、実機再生はそれぞれ別の確認事項です。メディアの検証に成功しても、対象機器でそのコンテナ形式・コーデック・暗号方式・DRM の組み合わせを再生できるとは限りません。サービスで配信する前に、実際に使うライセンスサーバーと機器で確認してください。
 
-`cens` と `cbc1` は解析で識別できる場合がありますが、現在の変換先ではありません。対応表の「対象外」は drmr の現在の実装・検証範囲を表し、その形式で技術的に実現不可能という意味ではありません。
+`cens` と `cbc1` は解析で識別できる場合がありますが、現在の変換先ではありません。対応表は現在の実装・検証範囲を示します。記載のない組み合わせが、形式として技術的に実現不可能とは限りません。
 
 # 3. 入力と出力の対応表
 
@@ -106,13 +106,13 @@ Widevine、PlayReady、FairPlay は、鍵の取得や利用条件、プレーヤ
 
 | 入力 | MP4 出力 | DASH 出力 | fMP4 HLS 出力 | TS HLS 出力 |
 | --- | --- | --- | --- | --- |
-| MP4 | clear / cenc / cbcs。複数トラックは条件付き | clear / cenc / cbcs | clear / cbcs / AES-128 | 対象外 |
-| DASH・fMP4 | clear / cenc / cbcs。単一トラックのみ | clear / cenc / cbcs | clear / cbcs / AES-128 | 対象外 |
-| HLS・fMP4 | clear / cenc / cbcs。単一トラックのみ | clear / cenc / cbcs | clear / cbcs / AES-128 | 対象外 |
-| HLS・TS、映像あり | 対象外 | clear / cenc / cbcs | clear / cbcs / AES-128 | clear / AES-128 / SAMPLE-AES |
-| HLS・TS、音声のみ | 対象外 | clear / cenc / cbcs | clear / cbcs / AES-128 | clear / AES-128 / SAMPLE-AES |
+| MP4 | clear / cenc / cbcs。複数トラックは条件付き | clear / cenc / cbcs | clear / cbcs / AES-128 | clear / AES-128 / SAMPLE-AES。フラグメント化入力のみ |
+| DASH・fMP4 | clear / cenc / cbcs。単一トラックのみ | clear / cenc / cbcs | clear / cbcs / AES-128 | clear / AES-128 / SAMPLE-AES |
+| HLS・fMP4 | clear / cenc / cbcs。単一トラックのみ | clear / cenc / cbcs | clear / cbcs / AES-128 | clear / AES-128 / SAMPLE-AES |
+| HLS・TS、映像あり | clear / cenc / cbcs。映像一つと音声一つまで | clear / cenc / cbcs | clear / cbcs / AES-128 | clear / AES-128 / SAMPLE-AES |
+| HLS・TS、音声のみ | clear / cenc / cbcs | clear / cenc / cbcs | clear / cbcs / AES-128 | clear / AES-128 / SAMPLE-AES |
 
-MP4 に映像と音声をまとめた出力は、同じプログレッシブ MP4 の対応トラックを保持する、後述の有限音声範囲プロファイルに限ります。DASH/HLS の別々のトラックや異なるファイルを一つの MP4 に組み合わせる機能ではありません。
+MP4 に複数トラックを格納する入力は、対応するプログレッシブ MP4、または映像・音声を一つずつまで含む HLS TS です。DASH・fMP4 HLS の別トラックや異なる入力ファイルの結合には対応しません。
 
 ## HLS の入力暗号方式
 
@@ -125,13 +125,13 @@ fMP4 メディアプレイリストは一つの音声または映像トラック
 
 ## 出力一覧で DRM を明示する場合
 
-下表は `auto`・`stitch` の入力条件です。この経路では既存の DRM 初期化情報を含む入力を拒否します。`segments` では、対応する clear または既知の鍵を持つ暗号化 fMP4 から、下表の DRM を指定した fMP4 DASH/HLS を作成できます。TS からは TS FairPlay を作成できます。入力と出力のコンテナ形式は同じにします。
+DASH と fMP4 HLS の DRM 情報を `auto`・`stitch` で生成する場合は、対応する Clear 入力を使い、既存の DRM 初期化情報を含む入力は拒否します。TS FairPlay は対応する TS とフラグメント化 MP4 を使えます。暗号化入力には既知の鍵が必要です。`segments` では、対応する Clear または暗号化 fMP4 から下表の DRM を持つ fMP4 DASH/HLS を作成し、TS から TS FairPlay を作成できます。この場合はコンテナ形式を変えません。
 
 | 出力一覧の format と target | DRM システム | auto・stitch の入力 |
 | --- | --- | --- |
-| `dash`、`cbcs` | Widevine、PlayReady、または両方 | 対応する clear HLS/TS または clear MP4 |
+| `dash`、`cenc` または `cbcs` | Widevine、PlayReady、または両方 | 対応する clear HLS/TS または clear MP4 |
 | `hls`、`cbcs` | FairPlay | 対応する clear HLS/TS または clear MP4 |
-| `hls-ts`、`hls-sample-aes` | FairPlay | 対応する clear HLS/TS |
+| `hls-ts`、`hls-sample-aes` | FairPlay | 対応する TS またはフラグメント化 MP4。暗号化入力には既知の鍵が必要 |
 
 `hls` のコンテナ形式は fMP4、`hls-ts` は TS です。DASH と組み合わせる HLS をどちらか一方にすることも、両方を出力することもできます。各出力には別々の名前と鍵設定を指定します。DRM と暗号方式の組み合わせは上表の範囲に限られます。
 
@@ -155,15 +155,27 @@ Rust で入力を所有者専用の作業ファイルにコピーし、各サン
 
 ## TS の入力条件
 
-TS 入力の対象は配信内容が確定した HLS です。番組構成が一つに固定されている必要があります。映像はプログレッシブ H.264 を一つ、音声は 44.1 kHz または 48 kHz の AAC-LC を一つまで含められます。同じ条件なら、音声のみの入力から DASH、fMP4 HLS、TS を出力することもできます。
+TS 入力の対象は配信内容が確定した HLS です。番組構成が一つに固定されている必要があります。映像はプログレッシブ H.264 を一つ、音声は 44.1 kHz または 48 kHz の AAC-LC を一つまで含められます。同じ条件なら、音声のみの入力から MP4、DASH、fMP4 HLS、TS を出力することもできます。
 
 TS パケットは 188 バイトです。映像の復号設定を表す SPS/PPS は途中で変更できません。AAC は 7 バイトの ADTS ヘッダーを使い、チェックサムを持たず、一単位に音声フレームを一つ含む必要があります。サンプルレートとチャンネル構成も途中で変更できません。複数番組、設定変更、壊れたパケット、時刻カウンターの周回、不連続、インターレース映像、未対応の記述子などは拒否します。
 
-音声のみのプレイリストでは、最終区間の `EXTINF` が最後の AAC フレームの途中で終わる場合もあります。宣言の精度から再生する音声サンプル数を一つに決められる場合は、符号化された最終フレームをすべて残し、指定された再生範囲を HLS・DASH 出力に引き継ぎます。精度不足で複数の範囲が当てはまる指定、途中区間の短縮、丸ごと一フレーム以上を除く指定は拒否します。別の音声プレイリストを映像に組み合わせることはできますが、映像・音声を多重化したプレイリストでは音声だけの短縮範囲を宣言できません。この編集形式は HLS・DASH のマニフェストと組み合わせて検証します。同じ編集を持つ単一 MP4 の入力・出力は、独立した検証経路をまだ実装していないため拒否します。
+音声のみのプレイリストでは、最終区間の `EXTINF` が最後の AAC フレームの途中で終わる場合もあります。宣言の精度から再生する音声サンプル数を一つに決められる場合は、符号化された最終フレームをすべて残し、指定された再生範囲を MP4・HLS・DASH 出力に引き継ぎます。精度不足で複数の範囲が当てはまる指定、途中区間の短縮、丸ごと一フレーム以上を除く指定は拒否します。別の音声プレイリストを映像に組み合わせることはできますが、映像・音声を多重化したプレイリストでは音声だけの短縮範囲を宣言できません。TS から MP4 へ変換するときは、映像と音声をまとめる場合も含め、同じ再生範囲を MP4 の編集情報に書き込みます。生成した MP4 は解析と独立検証に対応します。この編集情報を持つ MP4 を別の変換の入力にする処理は、現在の対応範囲に含みません。
 
 SAMPLE-AES 入力では暗号方式を途中で変更できません。鍵形式は `identity` または `com.apple.streamingkeydelivery` の一つで、指定する形式のバージョンは 1 です。異なる鍵形式の同時宣言は拒否します。非ゼロの音声初期遅延も対象外です。
 
 TS 出力で映像と音声がある場合は、それぞれ別の TS プレイリストと、それを関連付けるマスタープレイリストを作ります。一つの TS セグメント内に両方を多重化する出力は、現在の実装では作りません。
+
+## フラグメント化 MP4 から TS への変換
+
+フラグメント化 MP4 ファイル、DASH、fMP4 HLS から Clear・AES-128・SAMPLE-AES の TS を作れます。暗号化入力には既知の鍵が必要です。`auto`・`stitch` はトラックをまとめてから再セグメント化し、`segments` はこのコンテナ変換を拒否します。Rust が全フレーム、時刻、映像と音声の関係を照合します。
+
+MP4 の編集情報で音声の初期遅延を再生から除く指定は、この TS 出力では表現できず、`ts-output-presentation-not-representable` で拒否します。TS 由来の fMP4 にある、最後の AAC フレーム内で終わる対応範囲は、出力プレイリストへ引き継ぎます。
+
+## TS から一つの MP4 への変換
+
+音声のみ、映像のみ、映像と音声が一つずつの TS を、デコードせず MP4 に格納できます。符号化済みのサンプル、時刻、対応する AAC の最終再生範囲を保持します。複数画質のマスターは使う映像と関連する音声に絞ってから解析してください。映像だけのプレイリストを使うと、映像だけの MP4 を作ります。
+
+対応する音声言語は保持し、`en` と `eng` のような同じ言語の表記を対応付けます。HLS のグループ ID、名前、自動選択の指定はプレイリストの情報で、MP4 の選択宣言にはなりません。未対応の言語や、複数映像からの曖昧な選択は拒否します。
 
 ## 共通の対象外と上限
 
@@ -360,7 +372,11 @@ FairPlay 向け TS SAMPLE-AES 出力には、関連付けられた明示 IV も�
 }
 ```
 
-Widevine の PSSH は、DASH 出力の `kid` に合った完全な PSSH box を十六進または Base64 で渡します。drmr は内容を検査し、PlayReady の情報は指定した KID とライセンス URL から生成します。FairPlay は明示的な選択と `hls_key_uri` からプレイリストの鍵宣言を生成します。実行時に選ぶ DRM の集合が計画と一致しなければ拒否します。ライセンスサービスやプレイリストに書かれた鍵 URI には接続しません。
+Widevine の PSSH は DASH 出力の `kid` に合った完全な PSSH box を十六進または Base64 で渡します。drmr が内容を検査し、暗号方式が含まれる場合は出力の `cenc` または `cbcs` と照合します。
+
+PlayReady の情報には出力の KID とライセンス URL を含めます。CENC ではバージョン 4.1.0.0 の AESCTR ヘッダーを使い、出力鍵によるチェックサムを計算します。CBCS はバージョン 4.3.0.0 の AESCBC ヘッダーで、このチェックサムを含めません。
+
+FairPlay は明示的な選択と `hls_key_uri` からプレイリストの鍵宣言を生成します。実行時に選ぶ DRM の集合が計画と一致しなければ拒否します。ライセンスサービスやプレイリストに書かれた鍵 URI には接続しません。
 
 FairPlay の TS 出力を `hls-ts` と名付ける場合は、`outputs` の HLS 用メンバーを次の形に置き換えます。
 
@@ -688,7 +704,7 @@ SAMPLE-AES TS は入力・出力の両方に対応しています。これらは
 
 ## PlayReady の明示シグナリング
 
-`auto`・`stitch` では、対応する clear MP4 から CBCS DASH を作る場合に使えます。`segments` の入力条件は第3章を参照してください。次の signaling を持つ出力設定を使い、鍵はご自身の値へ置き換えてください。
+`auto`・`stitch` では、対応する Clear MP4 から CENC または CBCS の DASH を作る場合に使えます。`segments` の入力条件は第3章を参照してください。次の signaling を持つ出力設定を使い、鍵はご自身の値へ置き換えてください。
 
 ```json
 {
@@ -845,7 +861,7 @@ drmr convert "https://example.com/vod/master.m3u8" \
 
 ## 変換例の準備と鍵ファイル {#recipe-setup}
 
-対応表の出力方式から例を開き、入力の暗号化方式に合う**4コマンドの組を一つ選んで**実行します。ほかの組は別の入力向けです。macOS/Linux などの POSIX シェル用で、行末の `\` は同じコマンドの続きです。`&&` で失敗時に止め、ファイルを介して処理をつなぎます。`|` は標準出力を渡す仕組みです。`https://example.com` の URL は差し替えてください。
+対応表の出力方式から例を開き、入力の暗号化方式に合う**4コマンドの組を一つ選んで**実行します。Clear 入力と暗号化入力の例は分けています。記載した暗号化方式でコマンドが同じ場合は一つの例にまとめているので、入力方式に合う鍵設定を使ってください。macOS/Linux などの POSIX シェル用で、行末の `\` は同じコマンドの続きです。`&&` で失敗時に止め、ファイルを介して処理をつなぎます。`|` は標準出力を渡す仕組みです。`https://example.com` の URL は差し替えてください。
 
 所有者だけがアクセスできる既存の作業ディレクトリで実行します。入力を保存する `src`、`plan.json`、`result`（MP4 は `result.mp4`）は新規作成のため、同名のものがない場所を選びます。`mkdir` や `cd` は不要です。再実行時は各パスを揃えて変更するか、別の作業場所を使います。取得条件は `analyze` に `--fetch-policy config/fetch.json` を追加します。[設定例](#url-input)を参照してください。
 
@@ -853,7 +869,7 @@ drmr convert "https://example.com/vod/master.m3u8" \
 
 CENC/CBCS 入力は `input.keys`、AES-128 と TS SAMPLE-AES は `input.hls_keys` に絶対鍵 URI と必要な IV を設定します。cenc/cbcs 出力は `output.kid` と `output.key`、HLS はさらに `output.hls_key_uri` が必要です。他の出力項目は第5章に例があります。入力鍵と出力鍵は別の値にできます。鍵 URI やライセンス URL には接続しません。
 
-入力は[第3章の対応条件](#supported-profiles)を満たすものとします。MP4・DASH・fMP4 HLS の例は映像1トラックを想定しています。TS 映像は音声を含められ、音声のみの TS は 44.1 kHz または 48 kHz の AAC-LC が対象です。映像・音声を含む TS 出力は別プレイリストになります。
+入力は[第3章の対応条件](#supported-profiles)を満たすものとします。MP4・DASH・fMP4 HLS の例は映像1トラックを想定しています。MP4 から TS への変換には、前述の TS 出力条件を満たすフラグメント化 MP4 を使います。TS から MP4 への変換は映像一つと音声一つまでで、複数画質のマスターは使う映像と関連する音声に絞ります。TS 映像は音声を含められ、音声のみの TS は 44.1 kHz または 48 kHz の AAC-LC が対象です。映像・音声を含む TS 出力は別プレイリストになります。
 
 FairPlay HLS や Widevine/PlayReady DASH の情報を明示する場合は、[第6章の複数出力の手順と対応条件](#inspect-plan)を使います。
 
@@ -1651,7 +1667,7 @@ Windows では例えば `--packager-bin 'C:\media-tools\packager.exe'` と指定
 | `--route PROFILE` | 確認するツールの組み合わせ。既定は all |
 | `--decode` | 完全デコードに必要なツールも確認する。既定は通常変換の要件のみ |
 
-PROFILE は `all`、`progressive-mp4`、`fragmented-mp4`、`dash-presentation`、`fmp4-hls-presentation`、`mpeg-ts-hls`、`mpeg-ts-sample-aes-hls`、`mpeg-ts-hls-ts`、`mpeg-ts-dash`、`fmp4-segments`、`mpeg-ts-segments` から選びます。
+PROFILE は `all`、`progressive-mp4`、`fragmented-mp4`、`dash-presentation`、`fmp4-hls-presentation`、`fmp4-hls-ts`、`mpeg-ts-hls`、`mpeg-ts-sample-aes-hls`、`mpeg-ts-hls-ts`、`mpeg-ts-dash`、`fmp4-segments`、`mpeg-ts-segments` から選びます。
 
 ## analyze
 

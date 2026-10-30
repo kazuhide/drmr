@@ -338,10 +338,10 @@ test('conversion facts unify MP4 and distinguish TS video and TS audio-only rout
   assert.equal(matrixRows.flatMap(row => row.output).length, 20);
   assert.deepEqual(matrixRows[0].input, ['Clear', 'cenc', 'cbcs']);
   assert.deepEqual(matrixRows[2].input, ['Clear', 'cenc', 'cbcs', 'AES-128']);
-  assert.deepEqual(matrixRows[0].output, [['Clear', 'cenc', 'cbcs'], ['Clear', 'cenc', 'cbcs'], ['Clear', 'cbcs', 'AES-128'], []]);
-  assert.deepEqual(matrixRows[3].output.slice(0, 2), [[], ['Clear', 'cenc', 'cbcs']]);
-  assert.deepEqual(matrixRows[4].output, [[], ['Clear', 'cenc', 'cbcs'], ['Clear', 'cbcs', 'AES-128'], ['Clear', 'AES-128', 'SAMPLE-AES']]);
-  for (const index of [0, 1, 2]) assert.deepEqual(matrixRows[index].output[3], []);
+  assert.deepEqual(matrixRows[0].output, [['Clear', 'cenc', 'cbcs'], ['Clear', 'cenc', 'cbcs'], ['Clear', 'cbcs', 'AES-128'], ['Clear', 'AES-128', 'SAMPLE-AES']]);
+  assert.deepEqual(matrixRows[3].output.slice(0, 2), [['Clear', 'cenc', 'cbcs'], ['Clear', 'cenc', 'cbcs']]);
+  assert.deepEqual(matrixRows[4].output, [['Clear', 'cenc', 'cbcs'], ['Clear', 'cenc', 'cbcs'], ['Clear', 'cbcs', 'AES-128'], ['Clear', 'AES-128', 'SAMPLE-AES']]);
+  for (const index of [0, 1, 2]) assert.deepEqual(matrixRows[index].output[3], ['Clear', 'AES-128', 'SAMPLE-AES']);
 });
 
 test('matrix bounds refuse page overflow, clipped cells and unanchored row headers', () => {
@@ -523,12 +523,12 @@ test('nested guide routes and generation inputs belong to the exact payload cont
 });
 
 test('each supported protection token has one stable recipe identity and unavailable cells have none', () => {
-  assert.equal(matrixRecipes.length, 45);
-  assert.equal(new Set(matrixRecipes.map(recipe => recipe.id)).size, 45);
+  assert.equal(matrixRecipes.length, 60);
+  assert.equal(new Set(matrixRecipes.map(recipe => recipe.id)).size, 60);
   assert.equal(matrixRecipes[0].id, 'recipe-mp4-mp4-clear');
   assert.equal(matrixRecipes.at(-1).id, 'recipe-hls-ts-audio-hls-ts-hls-sample-aes');
   for (const row of matrixRows) {
-    assert.equal(matrixRecipes.filter(recipe => recipe.row === row.id).length, 9);
+    assert.equal(matrixRecipes.filter(recipe => recipe.row === row.id).length, 12);
     for (const [column, labels] of row.output.entries()) {
       assert.deepEqual(matrixRecipes.filter(recipe => recipe.row === row.id && recipe.column === column)
         .map(recipe => recipe.label), labels);
@@ -540,10 +540,12 @@ function recipeSample(recipe = matrixRecipes.find(value => value.id === 'recipe-
   const extension = recipe.row === 'mp4' ? 'mp4' : recipe.row === 'dash' ? 'mpd' : 'm3u8';
   const profiles = recipe.row.startsWith('hls-ts-') ? ['Clear', 'AES-128', 'SAMPLE-AES']
     : recipe.row === 'hls-fmp4' ? ['Clear', 'cenc', 'cbcs', 'AES-128'] : ['Clear', 'cenc', 'cbcs'];
-  const code = profiles.map(profile => {
-    const name = { Clear: 'clear', 'AES-128': 'aes128', 'SAMPLE-AES': 'sample-aes' }[profile] ?? profile;
-    const inputKeys = profile === 'Clear' ? '' : ' --keys-file keys.json';
-    const runtimeKeys = profile === 'Clear' && recipe.target === 'clear' ? '' : ' --keys-file keys.json';
+  const code = [[profiles[0]], profiles.slice(1)].map(group => {
+    const profile = group.join(' / ');
+    const clear = group.length === 1 && group[0] === 'Clear';
+    const name = clear ? 'clear' : 'encrypted';
+    const inputKeys = clear ? '' : ' --keys-file keys.json';
+    const runtimeKeys = clear && recipe.target === 'clear' ? '' : ' --keys-file keys.json';
     const output = recipe.format === 'mp4' ? 'result.mp4' : 'result';
     return [`# ${profile} input`, `drmr analyze "https://example.com/${name}.${extension}" \\`,
       `  --download-dir src${inputKeys} &&`,
@@ -604,7 +606,7 @@ test('each recipe includes all supported input protection groups in order exactl
     const good = recipeSample(expected);
     requireRecipe(good, expected);
     const groups = good.code.trimEnd().split('\n\n');
-    assert.deepEqual(groups.map(group => group.split('\n')[0]), profiles[expected.row].map(profile => `# ${profile} input`));
+    assert.deepEqual(groups.map(group => group.split('\n')[0]), [[profiles[expected.row][0]], profiles[expected.row].slice(1)].map(group => `# ${group.join(' / ')} input`));
     for (let index = 0; index < groups.length; index++) {
       const changes = [groups.filter((_, current) => current !== index), [...groups, groups[index]],
         groups.map((group, current) => current === index ? group.replace(/^# .+ input/, '# cbc1 input') : group)];

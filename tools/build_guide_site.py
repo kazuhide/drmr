@@ -176,7 +176,7 @@ def body(source, locale):
         output.append("</section>")
     # Compact only actual tags; literal code and all visible text are unchanged.
     tags = re.compile(r'<[a-z][^<>]*>')
-    attributes = re.compile(r'(aria-labelledby|scope|tabindex|data-code-language|lang|hreflang)="([A-Za-z0-9_-]+)"')
+    attributes = re.compile(r'(id|class|aria-labelledby|scope|tabindex|data-code-language|data-guide-chapter|lang|hreflang)="([A-Za-z0-9_-]+)"')
     return tags.sub(lambda tag: attributes.sub(r'\1=\2', tag[0]), "".join(output))
 
 
