@@ -1074,11 +1074,6 @@ impl Converter {
         {
             eligible_formats.retain(|format| *format != OutputFormat::Mp4);
         }
-        if original.format == InputFormat::Mp4 && declared_audio {
-            // Canonical terminal AAC edits can be analyzed and compared independently.
-            // Repackaging this standalone input remains a separate qualified route.
-            eligible_formats.clear();
-        }
         let verification = self.validate_prepared_sources(&prepared, input.input_keys)?;
         if !verification.passed {
             return Err(ConversionError("source-media-verification-failed"));
@@ -1152,6 +1147,15 @@ impl Converter {
         keys: &InputKeys,
     ) -> Result<bool, ConversionError> {
         for track in prepared.iter().filter(|track| track.clock.is_some()) {
+            if track.audio_presentation.is_some() {
+                self.backend.native_validate_mp4_with_clock(
+                    &track.media,
+                    track.index,
+                    Some(super::keys::ProbeKeys::All(keys)),
+                    track.clock,
+                )?;
+                continue;
+            }
             match self.backend.native_validate_mp4(
                 &track.media,
                 track.index,
@@ -1523,6 +1527,7 @@ impl Converter {
             let source = raw_audio_view(a, source_keys);
             let result = raw_audio_view(b, result_keys);
             let mut proof = if source.transport
+                && !result.transport
                 && b.playlist_reference.is_none()
                 && !b.dash_reference
             {
@@ -2686,20 +2691,15 @@ impl Converter {
         };
         let input_report = self.inspect_input(request.input)?;
         let prepared = self.prepare_conversion_source(&input, work.path())?;
-        if input_report.format == InputFormat::Mp4
-            && prepared
-                .iter()
-                .any(|source| source.audio_presentation.is_some())
-        {
-            return Err(ConversionError("audio-presentation-range-not-supported"));
-        }
         let command = self.using_prepared_output(&request, &prepared, input_report.format)?;
         let transport = prepared.iter().any(|p| p.transport_index.is_some());
         let sample_transport = prepared.iter().any(|p| p.transport_sample);
         if request.format == OutputFormat::HlsTs {
             return command.convert_transport_output(&request, prepared, input_report, &work);
         }
-        if transport && request.format == OutputFormat::Mp4 {
+        if request.format == OutputFormat::Mp4
+            && (transport || ts_mp4::canonical_tracks(&prepared, input_report.format))
+        {
             validate_prepared_output(&request, &prepared, transport)?;
             return command.convert_transport_mp4(&request, prepared, input_report, &work);
         }

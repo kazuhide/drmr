@@ -320,8 +320,10 @@ MP4 player-selection declarations. Unsupported language mappings are refused.
 The MP4 retains all encoded samples and their absolute clocks. Standard MP4
 playback edits preserve a supported shorter final AAC range, including with
 video. The generated file can be analyzed and independently compared with the
-original TS. Those edits do not qualify an additional arbitrary-MP4 conversion
-input profile. Optional `--decode` adds complete decoded-media comparison.
+original TS. The qualified canonical edits can also enter DASH or fMP4 HLS
+conversion, and audio-only input can be re-encrypted as MP4. Every edit is bound
+to all coded AAC frames and absolute clocks before conversion; this does not
+admit arbitrary edit lists. Optional `--decode` adds complete decoded-media comparison.
 
 The regression covers all nine input/output protection pairs for video only,
 joint audio/video, audio only at 48 kHz, and audio only at 44.1 kHz. Additional

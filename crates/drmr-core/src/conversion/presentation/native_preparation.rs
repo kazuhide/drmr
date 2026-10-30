@@ -143,7 +143,7 @@ impl Converter {
         use super::super::{audio, progressive};
         use crate::inspection::OutputFormat;
         if declared_audio {
-            return Ok(false);
+            return Ok(super::ts_mp4::canonical_tracks(prepared, original.format));
         }
         if original.format == InputFormat::Mp4 {
             let first = &prepared[0];

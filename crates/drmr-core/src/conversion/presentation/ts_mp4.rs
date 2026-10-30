@@ -135,6 +135,34 @@ pub(super) fn supported_tracks(prepared: &[Prepared]) -> bool {
             })
 }
 
+pub(super) fn canonical_tracks(prepared: &[Prepared], format: inspection::InputFormat) -> bool {
+    !prepared.is_empty()
+        && (prepared.len() == 1 || (format == inspection::InputFormat::Mp4 && prepared.len() == 2))
+        && prepared.iter().all(|track| {
+            track.transport_index.is_none()
+                && track.index == 0
+                && matches!(
+                    track.report.tracks[0].kind,
+                    TrackKind::Audio | TrackKind::Video
+                )
+        })
+        && prepared
+            .iter()
+            .filter(|track| track.audio_presentation.is_some())
+            .count()
+            == 1
+        && [TrackKind::Video, TrackKind::Audio]
+            .into_iter()
+            .all(|kind| {
+                prepared
+                    .iter()
+                    .filter(|track| track.report.tracks[0].kind == kind)
+                    .count()
+                    <= 1
+            })
+        && supported_metadata(prepared)
+}
+
 impl Converter {
     fn transport_mp4_parts(
         &self,
@@ -145,11 +173,29 @@ impl Converter {
         self.run_tracks(prepared.len(), |index| {
             let source = &prepared[index];
             let part = directory.join(format!("track-{index}.mp4"));
-            if request.target == TargetProtection::Clear {
-                copy_private(&source.media, &part)?;
-            } else {
+            let clear = directory.join(format!("clear-{index}.mp4"));
+            let media = if source.key_id.is_some() {
                 self.backend.package_stream(
                     &source.media,
+                    source.index,
+                    &clear,
+                    Some(request.input_keys),
+                    None,
+                )?;
+                &clear
+            } else {
+                &source.media
+            };
+            if request.target == TargetProtection::Clear {
+                if source.transport_index.is_none() && source.key_id.is_none() {
+                    self.backend
+                        .package_stream(media, source.index, &part, None, None)?;
+                } else {
+                    copy_private(media, &part)?;
+                }
+            } else {
+                self.backend.package_stream(
+                    media,
                     0,
                     &part,
                     None,
@@ -164,15 +210,8 @@ impl Converter {
             if let Some(range) = source.audio_presentation {
                 super::super::audio_presentation::restore(&part, range, &self.backend.stop)?;
             }
-            if source.report.tracks[0].kind == TrackKind::Audio {
-                write_language(
-                    &part,
-                    source
-                        .metadata
-                        .audio
-                        .as_ref()
-                        .map_or("und", |audio| audio.language.as_str()),
-                )?;
+            if let Some(audio) = &source.metadata.audio {
+                write_language(&part, &audio.language)?;
             }
             Ok(part)
         })
@@ -185,7 +224,8 @@ impl Converter {
         input: Inspection,
         owner: &super::super::files::Stage,
     ) -> Result<ConversionReport, ConversionError> {
-        if !supported_tracks(&prepared) {
+        let transport = supported_tracks(&prepared);
+        if !transport && !canonical_tracks(&prepared, input.format) {
             return Err(ConversionError(
                 "mp4-requires-one-video-and-audio-selection",
             ));
@@ -258,15 +298,24 @@ impl Converter {
         }
         self.backend.checkpoint(&[owner, &work]);
         self.publish(&work, &candidate, &destination)?;
+        let preparation = if transport {
+            inspection::InputPreparation::MpegTsDemux
+        } else {
+            match input.format {
+                inspection::InputFormat::Mp4 => inspection::InputPreparation::CompleteFile,
+                inspection::InputFormat::Dash => inspection::InputPreparation::LocalDashResources,
+                inspection::InputFormat::Hls => inspection::InputPreparation::LocalHlsResources,
+            }
+        };
         Ok(ConversionReport {
             schema_version: 2,
             input,
             output: actual,
             verification,
-            processing: Some(self.backend.processing(
-                inspection::ProcessingRouteId::FragmentedMp4,
-                inspection::InputPreparation::MpegTsDemux,
-            )),
+            processing: Some(
+                self.backend
+                    .processing(inspection::ProcessingRouteId::FragmentedMp4, preparation),
+            ),
         })
     }
 }
