@@ -204,6 +204,7 @@ impl Converter {
                 language(&audio.language)?;
             }
         }
+        let destination = super::destination(request.output)?;
         prepared.sort_by_key(|p| super::kind_order(p.report.tracks[0].kind));
         let work = workspace()?;
         let parts = self.transport_mp4_parts(&prepared, request, work.path())?;
@@ -256,7 +257,7 @@ impl Converter {
             return Err(ConversionError("output-protection-mismatch"));
         }
         self.backend.checkpoint(&[owner, &work]);
-        self.publish(&work, &candidate, request.output)?;
+        self.publish(&work, &candidate, &destination)?;
         Ok(ConversionReport {
             schema_version: 2,
             input,
