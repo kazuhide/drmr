@@ -378,7 +378,7 @@ fn cold_sample_and_transport_bundle_verification_fits_one_cpu_one_gib() {
                 .and_then(serde_json::Value::as_u64)
         })
         .collect::<Vec<_>>();
-    assert!(!estimates.is_empty());
+    assert_ne!(estimates, [] as [u64; 0]);
     let unknown_decode = Workload::default().estimated_child_bytes(
         drmr_core::toolrun::MAX_CAPTURE_BYTES,
         drmr_core::toolrun::DEFAULT_STDERR_BYTES,
