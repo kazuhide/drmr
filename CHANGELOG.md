@@ -19,9 +19,9 @@ remain unchanged pre-releases.
   rows, without individual rendition rows. Refresh ordinary terminal frames
   at most once per second, including phase and output-state changes; show
   final success, failure and cancellation immediately.
-- Redraw progress in a temporary screen on terminals with known screen-switch
-  support to fix stale rows after resizing. Restore the prior screen/history
-  before final output; use plain milestones otherwise.
+- Keep terminal progress below the command in the existing screen. Preserve
+  earlier output; after resizing, keep the old snapshot in history and start
+  a fresh inline view. Clear only owned progress rows before final output.
 - Use Shaka's serial job manager to avoid lost completion notifications.
   Keep Rust worker pools and independent output conversions concurrent.
 

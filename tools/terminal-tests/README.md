@@ -11,7 +11,7 @@ slots exist. Failure returns a tool error after the same six-second delay.
 
 A saved bundle plan produces encrypted DASH and clear HLS outputs using stitch
 processing. This shared-preparation route supplies the pipeline estimates and
-rendition bars checked by the regression.
+aggregate output rows checked by the regression.
 
 ```sh
 npm ci --ignore-scripts
@@ -23,15 +23,22 @@ DRMR_CONSOLE_BINARY=/path/to/drmr TERMINAL_REPORT_ROOT=/temporary/evidence npm r
 The PTY begins at 120 columns, changes to 80, 40 and 300 columns, and returns to
 120 columns immediately after reading part of a new dashboard header. This
 places a resize inside an old-width paint without depending on the scheduler to
-interrupt an application write. The output side has automatic newline conversion
-disabled, so the CLI must emit the carriage returns it needs.
+interrupt an application write. Three cases disable automatic newline conversion,
+so the CLI must emit the carriage returns it needs. The `NO_COLOR` success case
+enables newline conversion to check the normal terminal-driver behavior as well.
 
 The pinned official `@xterm/headless` engine receives every recorded byte in its
 original read order. Each write callback completes before the next write or
 resize. Complete paints require the two output parents in order, their known
 formats once processing starts, and the matching source state. They also verify
-one header, ASCII bars and their starting column. The entire primary-screen
-transcript must contain the preserved history and the matching footer. For the
+one header, ASCII bars and their starting column. The dashboard stays below the
+existing command in the primary screen. Screen switching, screen erasure and
+absolute cursor positioning are rejected. Every control boundary must preserve
+the earlier history and command. Width changes may retain a previous complete
+paint in scrollback; the next paint starts below it. When its geometry is stable,
+the last live frame is cleared before the matching footer. A resize during the
+last paint may retain that paint rather than erase rows whose positions have
+become uncertain. For the
 controlled cancellation/failure phase, exactly three stopped-summary rows follow:
 Source checked, DASH stopped, then the second output not started. Indented,
 duplicated, reordered or live rows are rejected, including residue erased later.

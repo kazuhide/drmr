@@ -479,8 +479,9 @@ fn terminal_outcomes_bypass_the_readable_snapshot_interval() {
         let text = String::from_utf8(out).unwrap();
         assert!(text.contains(&format!("{status} verify")), "{text}");
         assert!(
-            text.rfind("\x1b[?1049l").unwrap() < text.find(&format!("{status} verify")).unwrap(),
-            "terminal must restore before the final status: {text:?}"
+            text.rfind("\x1b[?2026l\r\n").unwrap()
+                < text.find(&format!("{status} verify")).unwrap(),
+            "inline rows must finish before the final status: {text:?}"
         );
         assert_eq!(
             text.contains("Finished verify"),

@@ -2,25 +2,36 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { replayCapture } from './replay.mjs';
 
-const paint = '\x1b[?2026h\x1b[H\x1b[2Jdrmr convert elapsed 1.0s\r\nSource Ready\r\nOverall      [----------]\r\n1 DASH fMP4  [----------] Waiting\r\n2 HLS fMP4   [----------] Waiting\x1b[?2026l';
+const paint = '\x1b[?2026h\rdrmr convert elapsed 1.0s\r\nSource Ready\r\nOverall      [----------]\r\n1 DASH fMP4  [----------] Waiting\r\n2 HLS fMP4   [----------] Waiting\r\n\x1b[?2026l';
+const up = rows => `\x1b[${rows}F`;
+const clear = rows => '\x1b[?2026h' + up(rows) + '\r\x1b[2K\r\n'.repeat(rows) + up(rows) + '\x1b[?2026l';
+const paints = (value, rows = 5) => value + up(rows) + value + up(rows) + value + clear(rows);
 function capture(body) {
   const raw = Buffer.from(body);
   return { columns: 120, rows: 24, outcome: 'success', raw: raw.toString('base64'),
     events: [{ kind: 'write', offset: 0, length: raw.length, elapsed_seconds: 0 }] };
 }
-const healthy = '\r\n\x1b[?1049h' + paint.repeat(3) + '\x1b[?1049lFinished convert in 1.0s\r\n';
+const healthy = paints(paint) + 'Finished convert in 1.0s\r\n';
 
-test('complete alternate-screen paints preserve history and restore the terminal', async () => {
-  assert.equal((await replayCapture(capture(healthy))).passed, true);
+test('inline paints remain below the command and preserve primary-screen history', async () => {
+  const result = await replayCapture(capture(healthy));
+  assert.equal(result.passed, true);
+  assert.equal(result.assertions.dashboard_below_command, true);
+  assert.equal(result.assertions.no_alternate_screen, true);
 });
-test('inline rows left above the result are refused', async () => {
+test('incomplete unframed rows left above the result are refused', async () => {
   const result = await replayCapture(capture('drmr convert\r\nSource Ready\r\nOverall [----------]\r\nFinished convert in 1.0s'));
-  assert.equal(result.assertions.final_dashboard_clear, false);
+  assert.equal(result.assertions.final_dashboard_cleanup_safe, false);
 });
 test('overwriting normal-screen history is refused', async () => {
   const result = await replayCapture(capture('\x1b[H\x1b[2J' + healthy));
   assert.equal(result.assertions.original_history_preserved, false);
 });
+for (const control of ['\x1b[?1049h', '\x1b[?47h', '\x1b[?1047h', '\x1b[2J', '\x1b[3J', '\x1b[H', '\x1b[1;1f']) {
+  test(`screen switching or absolute screen reset is refused: ${JSON.stringify(control)}`, async () => {
+    assert.equal((await replayCapture(capture(control + healthy))).passed, false);
+  });
+}
 test('a hidden cursor at completion is refused', async () => {
   const result = await replayCapture(capture(healthy + '\x1b[?25l'));
   assert.equal(result.assertions.final_cursor_visible, false);
@@ -42,6 +53,38 @@ test('resize within a split paint is evaluated after its final delimiter', async
   const result = await replayCapture(value);
   assert.equal(result.passed, true);
   assert.equal(result.frames.length, 3);
+});
+test('a width change preserves the previous paint and restarts below it', async () => {
+  const narrow = '\x1b[?2026h\rdrmr convert elapsed 1.0s\r\nSource Ready\r\nOverall work\r\n1 DASH fMP4 Waiting\r\n2 HLS fMP4 Waiting\r\n\x1b[?2026l';
+  const body = paint + '\r\n' + narrow + up(5) + narrow + clear(5) + 'Finished convert in 1.0s\r\n';
+  const value = capture(body);
+  value.events = [
+    { kind: 'write', offset: 0, length: Buffer.byteLength(paint), elapsed_seconds: 0 },
+    { kind: 'resize', offset: Buffer.byteLength(paint), columns: 40, rows: 8, elapsed_seconds: 1 },
+    { kind: 'write', offset: Buffer.byteLength(paint), length: Buffer.byteLength(body) - Buffer.byteLength(paint), elapsed_seconds: 2 },
+  ];
+  const result = await replayCapture(value);
+  assert.equal(result.passed, true);
+  assert.equal(result.assertions.original_history_preserved, true);
+  assert.equal(result.frames[1].header_row > result.frames[0].header_row, true);
+});
+test('leaving the last live frame above the footer is refused', async () => {
+  const body = paint + up(5) + paint + up(5) + paint + '\x1b[?2026h\x1b[?2026lFinished convert in 1.0s\r\n';
+  assert.equal((await replayCapture(capture(body))).assertions.final_dashboard_cleanup_safe, false);
+});
+test('a resize inside the final paint retains uncertain rows without erasing history', async () => {
+  const body = paint + up(5) + paint + up(5) + paint + '\x1b[?2026h\x1b[?2026l\r\nFinished convert in 1.0s\r\n';
+  const value = capture(body);
+  value.require_mid_draw = true;
+  const offset = body.lastIndexOf('drmr convert') + 6;
+  value.events = [
+    { kind: 'write', offset: 0, length: offset, elapsed_seconds: 0 },
+    { kind: 'resize', offset, columns: 80, rows: 12, elapsed_seconds: 1 },
+    { kind: 'write', offset, length: Buffer.byteLength(body) - offset, elapsed_seconds: 2 },
+  ];
+  const result = await replayCapture(value);
+  assert.equal(result.passed, true);
+  assert.equal(result.assertions.original_history_preserved, true);
 });
 test('non-ASCII progress bar contents are refused', async () => {
   const result = await replayCapture(capture(healthy.replaceAll('[----------]', '[████------]')));
@@ -83,7 +126,7 @@ const stopped = 'Source       Checked\r\n1 DASH fMP4  Stopped\r\n2 Output     No
 function stoppedCapture(tail = stopped, outcome = 'cancel') {
   const footer = outcome === 'cancel' ? 'Cancelled convert in 4.0s | cancelled' :
     'Failed convert in 6.0s | media-tool-unavailable-or-timeout';
-  const value = capture('\r\n\x1b[?1049h' + blockedPaint.repeat(3) + '\x1b[?1049l' + footer + '\r\n' + tail);
+  const value = capture(paints(blockedPaint) + footer + '\r\n' + tail);
   value.outcome = outcome;
   value.error_code = outcome === 'cancel' ? 'cancelled' : 'media-tool-unavailable-or-timeout';
   return value;
@@ -111,9 +154,9 @@ for (const [name, tail] of [
 }
 test('a source-phase stop allows only Source, before output parents are introduced', async () => {
   const value = stoppedCapture('Source       Stopped\r\n');
-  const sourcePaint = '\x1b[?2026h\x1b[H\x1b[2Jdrmr convert elapsed 1.0s\r\nSource Preparing source media\r\nOverall      [----------]\x1b[?2026l';
-  const body = '\r\n\x1b[?1049h' + sourcePaint.repeat(3) +
-    '\x1b[?1049lCancelled convert in 4.0s | cancelled\r\nSource       Stopped\r\n';
+  const sourcePaint = '\x1b[?2026h\rdrmr convert elapsed 1.0s\r\nSource Preparing source media\r\nOverall      [----------]\r\n\x1b[?2026l';
+  const body = paints(sourcePaint, 3) +
+    'Cancelled convert in 4.0s | cancelled\r\nSource       Stopped\r\n';
   Object.assign(value, capture(body), { outcome: 'cancel', stop_phase: 'source', error_code: 'cancelled' });
   assert.equal((await replayCapture(value)).passed, true);
   const extra = Buffer.from(body + '1 Output     Not started\r\n');

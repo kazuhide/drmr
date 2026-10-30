@@ -177,7 +177,7 @@ impl Write for Interrupted {
 }
 
 #[test]
-fn failed_screen_restore_blocks_results_and_late_paints_until_recovery() {
+fn failed_inline_cleanup_blocks_results_and_late_paints_until_recovery() {
     for flush in [false, true] {
         let mut stream = Interrupted::default();
         let progress = stream.progress("convert");
@@ -192,7 +192,7 @@ fn failed_screen_restore_blocks_results_and_late_paints_until_recovery() {
         let mut called = false;
         let failed = progress.write_result(|| {
             called = true;
-            writeln!(stream, "Result must not be written before restoration")
+            writeln!(stream, "Result must not be written before inline cleanup")
         });
         assert!(failed.is_err());
         assert!(!called, "a failed handoff must never invoke its writer");
@@ -218,8 +218,8 @@ fn failed_screen_restore_blocks_results_and_late_paints_until_recovery() {
         assert!(called);
         let restored = stream.terminal.text();
         let result_start = restored.find("Recovered result").unwrap();
-        assert!(restored.find("\x1b[?1049l").unwrap() < result_start);
-        assert_eq!(restored.matches("\x1b[?1049l").count(), 1);
+        assert!(restored.find("\x1b[?2026l\r\n").unwrap() < result_start);
+        assert_eq!(restored.matches("\x1b[?2026l\r\n").count(), 1);
         progress.finish();
         drop(progress);
         assert!(!stream.terminal.text()[result_start..].contains('\x1b'));
@@ -241,7 +241,7 @@ fn failed_server_handoff_preserves_the_error_and_suppresses_late_paints() {
     progress.server_handoff().unwrap();
     progress.server_address("127.0.0.1:3030".parse().unwrap());
     let restored = stream.terminal.text();
-    assert!(restored.find("\x1b[?1049l").unwrap() < restored.find("Running on").unwrap());
+    assert!(restored.find("\x1b[?2026l\r\n").unwrap() < restored.find("Running on").unwrap());
     let end = stream.terminal.snapshot().len();
     drop(progress);
     assert_eq!(stream.terminal.snapshot().len(), end);

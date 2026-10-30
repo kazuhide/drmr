@@ -1,4 +1,4 @@
-//! Exercise the actual output stream with independent primary and alternate buffers.
+//! Exercise the actual output stream with preserved command history and inline rows.
 use super::*;
 use crate::progress::terminal::LiveTerminal;
 
@@ -7,6 +7,7 @@ const PRIOR_LOG: &str = "Existing log text";
 #[derive(Debug)]
 struct Buffer {
     lines: Vec<Vec<char>>,
+    history: Vec<Vec<char>>,
     x: usize,
     y: usize,
     wrap: bool,
@@ -15,6 +16,7 @@ impl Buffer {
     fn new(width: usize, height: usize) -> Self {
         Self {
             lines: vec![vec![' '; width]; height],
+            history: Vec::new(),
             x: 0,
             y: 0,
             wrap: false,
@@ -34,7 +36,8 @@ impl Buffer {
     fn down(&mut self, width: usize, height: usize) {
         self.y += 1;
         if self.y >= height {
-            self.lines.remove(0);
+            let line = self.lines.remove(0);
+            self.history.push(line);
             self.lines.push(vec![' '; width]);
             self.y = height - 1;
         }
@@ -72,31 +75,19 @@ impl Cursor {
 
     fn control(&mut self, parameters: &str, command: char) {
         match (parameters, command) {
-            ("?1049", 'h') => {
-                assert!(self.alternate.is_none(), "alternate view entered twice");
-                self.alternate = Some(Buffer::new(self.width, self.height));
-            }
-            ("?1049", 'l') => {
-                assert!(self.alternate.take().is_some(), "unowned alternate exit");
-            }
+            ("?1049", _) => panic!("inline progress switched screens"),
             ("?2026", 'h') => self.synchronized = true,
             ("?2026", 'l') => self.synchronized = false,
-            (_, 'H') => {
-                let mut coordinates = parameters
-                    .split(';')
-                    .map(|value| value.parse::<usize>().unwrap_or(1).saturating_sub(1));
-                let y = coordinates.next().unwrap_or(0).min(self.height - 1);
-                let x = coordinates.next().unwrap_or(0).min(self.width - 1);
+            (_, 'H' | 'J') => panic!("inline progress changed the full screen"),
+            (_, 'A') => {
+                let lines = parameters.parse::<usize>().unwrap_or(1);
                 let active = self.active();
-                active.x = x;
-                active.y = y;
+                active.y = active.y.saturating_sub(lines);
                 active.wrap = false;
             }
-            ("2", 'J') => {
-                assert!(self.alternate.is_some(), "primary history was erased");
-                for line in &mut self.active().lines {
-                    line.fill(' ');
-                }
+            ("2", 'K') => {
+                let active = self.active();
+                active.lines[active.y].fill(' ');
             }
             _ => panic!("unexpected output control: {parameters}{command}"),
         }
@@ -195,12 +186,12 @@ impl Terminal {
     }
 
     fn primary(&self) -> Vec<String> {
-        self.0
-            .lock()
-            .unwrap()
+        let state = self.0.lock().unwrap();
+        state
             .primary
-            .lines
+            .history
             .iter()
+            .chain(state.primary.lines.iter())
             .map(|line| line.iter().collect::<String>().trim_end().to_owned())
             .filter(|line| !line.is_empty())
             .collect()
@@ -256,11 +247,11 @@ fn terminal_frame_starts_each_row_at_column_zero_after_a_partial_log_line() {
             progress.mark("configuration");
             let labels = terminal.labels();
             assert_ne!(labels.len(), 0);
-            assert_eq!(labels[0].2, 0, "the live view starts at its own origin");
+            assert_eq!(labels[0].2, 1, "the live view starts below previous output");
             assert!(
                 labels
                     .iter()
-                    .all(|(_, x, _, alternate)| *x == 0 && *alternate),
+                    .all(|(_, x, _, alternate)| *x == 0 && !*alternate),
                 "{width} {onlcr} {labels:?}"
             );
             progress.finish();
@@ -311,7 +302,7 @@ fn terminal_rows_keep_their_origin_after_a_log_and_redraw() {
     assert!(
         labels[before..]
             .iter()
-            .all(|(_, x, _, alternate)| *x == 0 && *alternate),
+            .all(|(_, x, _, alternate)| *x == 0 && !*alternate),
         "{labels:?}"
     );
     render(
@@ -324,7 +315,7 @@ fn terminal_rows_keep_their_origin_after_a_log_and_redraw() {
 }
 
 #[test]
-fn resize_during_a_partial_frame_restores_history_before_every_result_outcome() {
+fn resize_during_a_partial_frame_preserves_history_before_every_result_outcome() {
     for onlcr in [false, true] {
         for (code, status) in [
             (None, "Finished"),
@@ -338,6 +329,12 @@ fn resize_during_a_partial_frame_restores_history_before_every_result_outcome() 
             let progress = progress(&terminal, 120);
             progress.mark("configuration");
             assert_eq!(terminal.0.lock().unwrap().resize_count, 1);
+            progress
+                .inner
+                .terminal
+                .as_ref()
+                .unwrap()
+                .resize_for_test(40, 8);
             progress.begin_result().unwrap();
             assert!(terminal.restored());
             writeln!(terminal.clone(), "Command result is visible.").unwrap();
@@ -362,12 +359,8 @@ fn resize_during_a_partial_frame_restores_history_before_every_result_outcome() 
                     .any(|line| line.starts_with(&format!("{status} convert"))),
                 "{primary:?}"
             );
-            assert!(
-                primary.iter().all(|line| !line.starts_with("drmr ")
-                    && !line.starts_with("Source")
-                    && !line.starts_with("Overall")),
-                "{primary:?}"
-            );
+            // Resizing leaves the old snapshot in history rather than guessing
+            // which reflowed rows can safely be erased.
             assert!(terminal.restored());
         }
     }

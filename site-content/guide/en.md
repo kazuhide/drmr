@@ -1,6 +1,6 @@
 ---
 title: User guide
-updated: 2026-10-29
+updated: 2026-10-30
 version: 1.0.2
 ---
 
@@ -1333,7 +1333,7 @@ drmr analyze original.mp4 --metadata-only --json --progress json \
 drmr analyze original.mp4 --metadata-only --progress off
 ```
 
-Terminals with known screen-switch support use a temporary screen, redrawn on resize; prior screen/history is hidden, then restored before final output. Command/time, `Source` acquisition/checks, `Overall` phase/ETA and outputs use fixed label/bar/detail columns. Source/output rows show task counts; `Checked` stays until publication. Updates, including phase/output-state changes, run at most once a second. Final success/failure/cancellation is immediate. Bars need 60 columns; details need space. No internal notices/tool names. Other terminals/redirection use plain milestones/time. Final checks overlap publication; completion follows commit.
+Supported terminals update progress rows below the command, keeping prior logs. Resizing leaves the previous view in history and starts new rows. Live rows clear before final output. Command/time, `Source` acquisition/checks, `Overall` phase/ETA and outputs use fixed label/bar/detail columns. Source/output rows show task counts; `Checked` stays until publication. Updates, including phase/output-state changes, run at most once a second. Final success/failure/cancellation is immediate. Bars need 60 columns; details need space. No internal notices/tool names. Other terminals/redirection use plain milestones/time. Final checks overlap publication; completion follows commit.
 
 Labels identify source copies/checks, clear preparation, output comparison and independent checks. Batch-local Rust task counts show `active` (started/unfinished, including CPU/memory waits), `waiting` (not started), completed/total and `stopped` (unsuccessful exit, not corrupt media). They are not CPU usage, Shaka jobs or track percentages.
 
