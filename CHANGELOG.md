@@ -5,19 +5,20 @@ for installation, stable interfaces and versioning.
 
 ## [Unreleased]
 
-## [1.0.2] - 2026-10-29
+## [1.0.2] - 2026-10-30
 
 CLI release for the supported media profiles, with native validation,
-bounded parallel processing and clearer rendition progress. The Web console
+bounded parallel processing and readable output summaries. The Web console
 and Desktop host remain experimental. Published v1.0.0 and v1.0.1 archives
 remain unchanged pre-releases.
 
 ### Fixed
 
 - Keep progress bars in fixed columns when task descriptions, counts,
-  estimates or log lines change. Show observed per-batch rendition/track
-  states in stable numbered rows, retain hidden rows in structured progress,
-  and avoid estimated per-track percentages for opaque work.
+  estimates or log lines change. Summarize task counts in source and output
+  rows, without individual rendition rows. Refresh ordinary terminal frames
+  at most once per second, including phase and output-state changes; show
+  final success, failure and cancellation immediately.
 - Redraw progress in a temporary screen on terminals with known screen-switch
   support to fix stale rows after resizing. Restore the prior screen/history
   before final output; use plain milestones otherwise.

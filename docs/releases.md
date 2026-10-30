@@ -9,7 +9,7 @@ qualification. The local Web console and Desktop host remain experimental.
 Version 1.0.2 groups the [changelog](../CHANGELOG.md) changes since the pre-release
 updates. It uses native media checks by default, keeps source-relative output
 paths and supports processing and DASH-addressing choices. Fixed progress
-columns and observed rendition task states describe bounded parallel work;
+columns and aggregate task counts describe bounded parallel work;
 the [measurements](performance.md) do not establish a consistent whole-command
 speedup for every added concurrency stage.
 
