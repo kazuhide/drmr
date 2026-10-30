@@ -289,6 +289,14 @@ impl Converter {
         self.validate_signaling_input(&request, Some(admitted.qualified))?;
         validate_output(&request)?;
         validate_prepared_output(&request, &shared.prepared, true)?;
+        if request.format == OutputFormat::Mp4 {
+            return self.convert_transport_mp4(
+                &request,
+                shared.prepared.clone(),
+                shared.input.clone(),
+                &shared.work,
+            );
+        }
         self.validate_complete_clock_output(&request, &shared.prepared)?;
         let command =
             self.using_prepared_output(&request, &shared.prepared, shared.input.format)?;

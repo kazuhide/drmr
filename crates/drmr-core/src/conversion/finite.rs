@@ -10,6 +10,8 @@ use std::{
     path::Path,
 };
 mod fragment;
+mod tracks;
+pub(super) use tracks::{combine_parts, split_parts};
 pub(super) mod manifest;
 const BAD: ConversionError = ConversionError("presentation-window-not-supported");
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

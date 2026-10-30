@@ -4,6 +4,9 @@ use super::*;
 use num_rational::Ratio;
 use sha2::{Digest as _, Sha256};
 
+#[path = "ts_audio_window/mp4.rs"]
+mod mp4;
+
 const RAW_FRAMES: usize = 432;
 const RAW_SAMPLES: usize = RAW_FRAMES * 1024;
 const FINAL_PRESENTED_SAMPLES: usize = 240;
@@ -1001,7 +1004,7 @@ fn partial_aac_final_one_and_1023_samples_keep_exact_global_sample_endpoints() {
 }
 
 #[test]
-fn standalone_partial_audio_mp4_inputs_and_outputs_are_refused_without_side_effects() {
+fn standalone_partial_audio_mp4_is_analyzed_and_verified_without_qualifying_repackaging() {
     use drmr_core::conversion::{VerificationRequest, VerificationSource};
     let root = drmr_core::native::private_tempdir().unwrap();
     let (source, _) = audio_sources_at_rate(root.path(), Some(44_100));
@@ -1019,14 +1022,15 @@ fn standalone_partial_audio_mp4_inputs_and_outputs_are_refused_without_side_effe
     let before = common::snapshot_tree(root.path());
     let empty = InputKeys::default();
     let hls = HlsInputKeys::default();
-    refuse_code(
-        &converter().analyze_source(VerificationSource {
+    let admitted = converter()
+        .analyze_source(VerificationSource {
             input: &mp4,
             input_keys: &empty,
             hls_keys: &hls,
-        }),
-        "audio-presentation-range-not-supported",
-    );
+        })
+        .unwrap();
+    assert!(admitted.verification.passed);
+    assert_eq!(admitted.eligible_formats, []);
     for (format, code) in [
         (OutputFormat::Hls, "audio-presentation-range-not-supported"),
         (OutputFormat::Dash, "audio-presentation-range-not-supported"),
@@ -1044,41 +1048,36 @@ fn standalone_partial_audio_mp4_inputs_and_outputs_are_refused_without_side_effe
             &mp4,
             &output,
             format,
-            "audio-presentation-range-not-supported",
+            "execution-plan-not-supported",
             code,
         );
     }
     let manifest = prepared.join("manifest.mpd");
     for (reference, result) in [(&mp4, &manifest), (&source, &mp4)] {
-        refuse_code(
-            &converter().verify(VerificationRequest {
-                source: VerificationSource {
-                    input: reference,
-                    input_keys: &empty,
-                    hls_keys: &hls,
-                },
-                output: VerificationSource {
-                    input: result,
-                    input_keys: &empty,
-                    hls_keys: &hls,
-                },
-            }),
-            "audio-presentation-range-not-supported",
+        all_checks(
+            &converter()
+                .verify(VerificationRequest {
+                    source: VerificationSource {
+                        input: reference,
+                        input_keys: &empty,
+                        hls_keys: &hls,
+                    },
+                    output: VerificationSource {
+                        input: result,
+                        input_keys: &empty,
+                        hls_keys: &hls,
+                    },
+                })
+                .unwrap(),
         );
     }
-    for (label, input, code) in [
-        ("ts", &source, "ts-audio-only-timing-proof-not-supported"),
-        ("dash", &manifest, "audio-presentation-range-not-supported"),
-    ] {
-        let output = root.path().join(format!("refused-output-{label}.mp4"));
-        refuse_clear_plan_and_conversion(
-            input,
-            &output,
-            OutputFormat::Mp4,
-            "execution-plan-not-supported",
-            code,
-        );
-    }
+    refuse_clear_plan_and_conversion(
+        &manifest,
+        &root.path().join("refused-output-dash.mp4"),
+        OutputFormat::Mp4,
+        "execution-plan-not-supported",
+        "audio-presentation-range-not-supported",
+    );
     assert_eq!(common::snapshot_tree(root.path()), before);
 }
 

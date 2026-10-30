@@ -14,6 +14,7 @@ mod signaling_tests;
 mod source_work_tests;
 #[cfg(test)]
 mod staging_tests;
+mod ts_mp4;
 mod ts_output;
 use super::{
     ContentKey, ConversionError, ConversionReport, Converter, HlsOutputKey, InputKeys, LocalTrack,
@@ -1040,41 +1041,14 @@ impl Converter {
         let declared_audio = prepared
             .iter()
             .any(|track| track.audio_presentation.is_some());
-        if !declared_audio && original.format == InputFormat::Mp4 {
-            let first = &prepared[0];
-            let report = inspection::inspect(&first.media)
-                .map_err(|_| ConversionError("invalid-input-media"))?;
-            if super::finite::has_audio(&first.media)? && !audio::movie(&first.media)?.fragmented {
-                let finite = match purpose {
-                    SourceValidationPurpose::Conversion => {
-                        super::progressive::validate_input(&first.media, &report, input.input_keys)?
-                    }
-                    SourceValidationPurpose::Verification => {
-                        super::progressive::verification_input(
-                            &first.media,
-                            &report,
-                            input.input_keys,
-                        )?
-                    }
-                };
-                if finite {
-                    self.progressive_codecs(
-                        &first.media,
-                        &report,
-                        (report.protection != Protection::Clear)
-                            .then_some(super::keys::ProbeKeys::All(input.input_keys)),
-                    )?;
-                    eligible_formats.push(OutputFormat::Mp4);
-                }
-            } else if prepared.len() == 1 {
-                eligible_formats.push(OutputFormat::Mp4);
-            }
-        } else if !declared_audio
-            && actual_format != OutputFormat::HlsTs
-            && prepared.len() == 1
-            && prepared[0].metadata.audio.is_none()
-            && prepared[0].metadata.audio_group.is_none()
-        {
+        if self.standalone_mp4_eligible(
+            &input,
+            &original,
+            &prepared,
+            actual_format,
+            declared_audio,
+            purpose,
+        )? {
             eligible_formats.push(OutputFormat::Mp4);
         }
         if metadata::dash_representable(&prepared) {
@@ -1090,11 +1064,20 @@ impl Converter {
         }
         if actual_format == OutputFormat::HlsTs || ts_output::fragmented_sources(&prepared)? {
             eligible_formats.push(OutputFormat::HlsTs);
+            if ts_mp4::supported_tracks(&prepared) && ts_mp4::supported_metadata(&prepared) {
+                eligible_formats.push(OutputFormat::Mp4);
+            }
         }
         if eligible_formats.contains(&OutputFormat::Mp4)
+            && actual_format != OutputFormat::HlsTs
             && !self.standalone_clocks_supported(&prepared, input.input_keys)?
         {
             eligible_formats.retain(|format| *format != OutputFormat::Mp4);
+        }
+        if original.format == InputFormat::Mp4 && declared_audio {
+            // Canonical terminal AAC edits can be analyzed and compared independently.
+            // Repackaging this standalone input remains a separate qualified route.
+            eligible_formats.clear();
         }
         let verification = self.validate_prepared_sources(&prepared, input.input_keys)?;
         if !verification.passed {
@@ -1241,10 +1224,10 @@ fn qualified_layout_tracks(
         .enumerate()
         .map(|(ordinal, track)| super::layout::QualifiedTrack {
             kind: track.report.tracks[0].kind,
-            selector: if format == InputFormat::Dash {
-                ordinal
-            } else {
+            selector: if format == InputFormat::Hls {
                 track.transport_index.unwrap_or(track.index)
+            } else {
+                ordinal
             },
         })
         .collect()
@@ -1539,7 +1522,15 @@ impl Converter {
             )?;
             let source = raw_audio_view(a, source_keys);
             let result = raw_audio_view(b, result_keys);
-            let mut proof = self.backend.verify_transport(source, result)?;
+            let mut proof = if source.transport
+                && b.playlist_reference.is_none()
+                && !b.dash_reference
+            {
+                self.backend
+                    .verify_transport_mp4(source, result, &ts_mp4::declared_language(a)?)?
+            } else {
+                self.backend.verify_transport(source, result)?
+            };
             let range_equal = self
                 .backend
                 .verify_audio_presentation(source, result, first, second)?;
@@ -1565,40 +1556,39 @@ impl Converter {
             };
         }
         if let Some(index) = a.transport_index {
-            if b.playlist_reference.is_none() && !b.dash_reference {
-                return Err(ConversionError(
-                    "ts-verification-output-profile-not-supported",
-                ));
-            }
             let (result_input, result_key) = b.playlist_reference.as_ref().map_or_else(
                 || (&b.source, key_for(b, result_keys)),
                 |playlist| (playlist, None),
             );
-            return self.backend.verify_transport(
-                super::ts::View {
-                    input: &a.source,
-                    metadata: &a.source,
-                    index,
-                    key: None,
-                    all_keys: None,
-                    transport: true,
-                    native: a.transport_native.as_deref(),
-                    unedited: false,
-                }
-                .with_all_keys(source_keys),
-                super::ts::View {
-                    input: result_input,
-                    // This HLS decoder reads its private key URI. MP4/DASH
-                    // discovery instead needs the complete track-key dictionary.
-                    metadata: result_input,
-                    index: b.index,
-                    key: result_key,
-                    all_keys: b.playlist_reference.is_none().then_some(result_keys),
-                    transport: false,
-                    native: None,
-                    unedited: false,
-                },
-            );
+            let source = super::ts::View {
+                input: &a.source,
+                metadata: &a.source,
+                index,
+                key: None,
+                all_keys: None,
+                transport: true,
+                native: a.transport_native.as_deref(),
+                unedited: false,
+            }
+            .with_all_keys(source_keys);
+            let result = super::ts::View {
+                input: result_input,
+                // This HLS decoder reads its private key URI. MP4/DASH
+                // discovery instead needs the complete track-key dictionary.
+                metadata: result_input,
+                index: b.index,
+                key: result_key,
+                all_keys: b.playlist_reference.is_none().then_some(result_keys),
+                transport: false,
+                native: None,
+                unedited: false,
+            };
+            return if b.playlist_reference.is_none() && !b.dash_reference {
+                self.backend
+                    .verify_transport_mp4(source, result, &ts_mp4::declared_language(a)?)
+            } else {
+                self.backend.verify_transport(source, result)
+            };
         }
         let a_view = StreamView::new(&a.source, a.index, key_for(a, source_keys))
             .with_metadata(&a.media)
@@ -1632,7 +1622,15 @@ impl Converter {
         }
         result = self.match_presentations(&source, result, source_keys, result_keys)?;
         for (a, b) in source.iter().zip(&result) {
-            metadata::pair(&a.metadata, &b.metadata)?;
+            if a.transport_index.is_some()
+                && b.transport_index.is_none()
+                && b.playlist_reference.is_none()
+                && !b.dash_reference
+            {
+                ts_mp4::metadata_pair(a, b, &self.backend, result_keys)?;
+            } else {
+                metadata::pair(&a.metadata, &b.metadata)?;
+            }
         }
         let weights: Option<Vec<_>> = self.backend.activity.as_ref().and_then(|_| {
             source
@@ -1923,9 +1921,6 @@ fn prepare_presentation_mode(
         inspection::inspect(input.input).map_err(|_| ConversionError("invalid-input-media"))?;
     match report.format {
         InputFormat::Mp4 => {
-            if super::audio_presentation::read_claim(input.input)?.is_some() {
-                return Err(ConversionError("audio-presentation-range-not-supported"));
-            }
             let path = stage.join("source.mp4");
             copy_private(input.input, &path)?;
             let actual =
@@ -1933,6 +1928,8 @@ fn prepare_presentation_mode(
             if actual.tracks.is_empty() || actual.tracks.len() > 64 {
                 return Err(ConversionError("track-count-limit"));
             }
+            let track_views =
+                ts_mp4::complete_track_views(&path, stage, backend, actual.tracks.len())?;
             let progress = backend.preparation();
             if let Some(progress) = progress {
                 progress.begin(actual.tracks.len(), super::media_progress::Unit::Tracks);
@@ -1947,8 +1944,15 @@ fn prepare_presentation_mode(
                     if let Some(task) = &task {
                         task.describe(track.kind, None);
                     }
-                    let prepared =
-                        prepare_for(&path, index, track.kind, input.input_keys, purpose)?;
+                    let (selected, selector) = track_views
+                        .as_ref()
+                        .map_or((&path, index), |views| (&views[index], 0));
+                    let mut prepared =
+                        prepare_for(selected, selector, track.kind, input.input_keys, purpose)?;
+                    if actual.tracks.len() == 1 || track_views.is_some() {
+                        prepared.clock = manifested_clock(selected, backend)?;
+                        bind_audio_presentation(&mut prepared, backend, input.input_keys, stage)?;
+                    }
                     if let Some(progress) = progress {
                         progress.completed(index);
                     }
@@ -2313,21 +2317,13 @@ fn validate_prepared_output(
     transport: bool,
 ) -> Result<(), ConversionError> {
     if transport
-        && request.format == OutputFormat::Mp4
-        && !prepared
-            .iter()
-            .any(|p| p.report.tracks[0].kind == TrackKind::Video)
-    {
-        return Err(ConversionError("ts-audio-only-timing-proof-not-supported"));
-    }
-    if transport
         && !matches!(
             (request.format, request.target),
             (
                 OutputFormat::Hls,
                 TargetProtection::Clear | TargetProtection::Cbcs | TargetProtection::HlsAes128
             ) | (
-                OutputFormat::Dash,
+                OutputFormat::Dash | OutputFormat::Mp4,
                 TargetProtection::Clear | TargetProtection::Cenc | TargetProtection::Cbcs
             )
         )
@@ -2349,6 +2345,7 @@ fn validate_prepared_output(
         ));
     }
     if request.format == OutputFormat::Mp4
+        && !transport
         && prepared
             .iter()
             .any(|p| p.metadata.audio.is_some() || p.metadata.audio_group.is_some())
@@ -2688,22 +2685,23 @@ impl Converter {
             hls_keys: request.hls_input_keys,
         };
         let input_report = self.inspect_input(request.input)?;
-        let preparation = self
-            .backend
-            .scope(super::measurement::Phase::InputPreparation);
-        let prepared = prepare_presentation(
-            &input,
-            work.path(),
-            &self.backend,
-            self.maximum_workers,
-            SourceValidationPurpose::Conversion,
-        )?;
-        drop(preparation);
+        let prepared = self.prepare_conversion_source(&input, work.path())?;
+        if input_report.format == InputFormat::Mp4
+            && prepared
+                .iter()
+                .any(|source| source.audio_presentation.is_some())
+        {
+            return Err(ConversionError("audio-presentation-range-not-supported"));
+        }
         let command = self.using_prepared_output(&request, &prepared, input_report.format)?;
         let transport = prepared.iter().any(|p| p.transport_index.is_some());
         let sample_transport = prepared.iter().any(|p| p.transport_sample);
         if request.format == OutputFormat::HlsTs {
             return command.convert_transport_output(&request, prepared, input_report, &work);
+        }
+        if transport && request.format == OutputFormat::Mp4 {
+            validate_prepared_output(&request, &prepared, transport)?;
+            return command.convert_transport_mp4(&request, prepared, input_report, &work);
         }
         validate_prepared_output(&request, &prepared, transport)?;
         self.validate_complete_clock_output(&request, &prepared)?;
@@ -2770,6 +2768,23 @@ impl Converter {
             });
         }
         Ok(report)
+    }
+
+    fn prepare_conversion_source(
+        &self,
+        input: &VerificationSource<'_>,
+        directory: &Path,
+    ) -> Result<Vec<Prepared>, ConversionError> {
+        let _preparation = self
+            .backend
+            .scope(super::measurement::Phase::InputPreparation);
+        prepare_presentation(
+            input,
+            directory,
+            &self.backend,
+            self.maximum_workers,
+            SourceValidationPurpose::Conversion,
+        )
     }
 
     fn using_prepared_output(

@@ -730,13 +730,31 @@ impl Backend {
                 result_clock,
             );
         }
-        self.verify_transport_decoded(source, result)
+        self.verify_transport_decoded(source, result, None)
+    }
+    /// A standalone MP4 stores the validated HLS language in its media header.
+    /// The transport stream's native language remains undetermined; every other
+    /// probed field and the independently checked media remain exact.
+    pub(in crate::conversion) fn verify_transport_mp4(
+        &self,
+        source: View<'_>,
+        result: View<'_>,
+        language: &str,
+    ) -> Result<VerificationReport, ConversionError> {
+        if !source.transport || result.transport {
+            return Err(ConversionError("ts-original-evidence-required"));
+        }
+        if self.validation_depth == super::ValidationDepth::Native {
+            return self.native_verify_transport(source, result);
+        }
+        self.verify_transport_decoded(source, result, Some(language))
     }
 
     fn verify_transport_decoded(
         &self,
         source: View<'_>,
         result: View<'_>,
+        language: Option<&str>,
     ) -> Result<VerificationReport, ConversionError> {
         let mut a = self.profile_stream_keys_options(
             source.input,
@@ -750,6 +768,14 @@ impl Backend {
             result.probe_keys(),
             result.unedited,
         )?;
+        if let Some(language) = language {
+            if a["language"].as_str().unwrap_or("und") != "und"
+                || b["language"].as_str().unwrap_or("und") != language
+            {
+                return Err(ConversionError("presentation-metadata-mismatch"));
+            }
+            a["language"] = b["language"].clone();
+        }
         let config_a = self.transport_config(source, &a)?;
         let config_b = self.transport_config(result, &b)?;
         let units_a = self.access_units(source, &a, config_a.clone())?;

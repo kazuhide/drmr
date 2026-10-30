@@ -10,6 +10,8 @@ mod common;
 mod lifecycle;
 #[path = "support/ts_output_negatives.rs"]
 mod negatives;
+#[path = "support/ts_mp4.rs"]
+mod ts_mp4;
 // The SAMPLE-AES test binary owns the shared encryption oracle's checks.
 macro_rules! sample_aes_fixture_checks {
     ($checks:item) => {};
