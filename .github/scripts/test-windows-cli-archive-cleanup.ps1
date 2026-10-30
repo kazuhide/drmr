@@ -253,6 +253,16 @@ else:
     module.private_write(root / 'qualification.json', b'{"success":false}')
 temporary = root / 'temp'
 temporary.mkdir()
+if mode == 'success':
+    guard_check = temporary / 'decoder-guard-check'
+    guard_check.mkdir()
+    selected = ('import sys, unittest; sys.path.insert(0, sys.argv[1]); '
+                'suite = unittest.defaultTestLoader.loadTestsFromName('
+                '"test_release_roundtrip.ReleaseMatrix.test_conversion_runner_cannot_execute_external_decoders"); '
+                'result = unittest.TextTestRunner(verbosity=2).run(suite); '
+                'sys.exit(not (result.wasSuccessful() and result.testsRun == 1 and not result.skipped))')
+    module.Runner(guard_check).run([sys.executable, '-B', '-W', 'error::ResourceWarning',
+                                   '-c', selected, str(helper.parent / 'tests')], 'headless-decoder-guards', 120)
 if mode != 'reparse-refusal':
     private = temporary / 'private'
     private.mkdir()
@@ -281,7 +291,7 @@ Publish-FixtureStage 'report-checked'
 if ($context.mode -eq 'reparse-refusal') {
     New-Item -ItemType Junction -Path (Join-Path $PSScriptRoot 'temp/escape') -Target $context.external | Out-Null
 }
-@{ ordinary_sid = $identity.User.Value; private_acl_checked = ($context.mode -ne 'report-type-refusal'); private_acl_regression_checked = ($context.mode -eq 'success') } |
+@{ ordinary_sid = $identity.User.Value; private_acl_checked = ($context.mode -ne 'report-type-refusal'); private_acl_regression_checked = ($context.mode -eq 'success'); decoder_guards_checked = ($context.mode -eq 'success') } |
     ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $PSScriptRoot 'public-check.json')
 Publish-FixtureStage 'proof-written'
 # These failures occur after genuine production ACL creation, before owner cleanup.
@@ -311,6 +321,8 @@ Publish-FixtureStage 'complete'
             Assert-ArchiveCleanupTest (($process.ExitCode -ne 0) -eq $expectedFailure) 'The fixture failed at the wrong stage'
             if ($mode -eq 'success') {
                 Assert-ArchiveCleanupTest $proof.private_acl_regression_checked 'The owner-only ACL regression was not checked'
+                Assert-ArchiveCleanupTest ($proof.decoder_guards_checked -eq $true) 'The headless decoder guard regression was not checked'
+                Write-Output 'Headless decoder guard regression passed: one real test as an ordinary user'
                 Write-Output 'Private ACL regression passed: helper 2 positive / 2 foreign-owner refusals; documentation 6 positive / 6 foreign-owner refusals'
             }
             if ($mode -ne 'report-type-refusal') {

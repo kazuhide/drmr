@@ -117,12 +117,15 @@ export async function replayCapture(capture) {
   let consumed = 0, resizedDuringPaint = false, transaction = null, closedBase = null;
   let lastFrameClosedSafely = false, resizedInTransaction = false;
   let geometry = 0, previousPaint = null, priorFramesReplaced = true;
+  let reflowedNormal = null;
   try {
     await write(history.join('\r\n') + '\r\n');
     for (const event of capture.events) {
       if (event.offset !== consumed) throw new Error('capture-byte-order');
       if (event.kind === 'resize') {
-        if (event.columns !== terminal.cols || event.rows !== terminal.rows) {
+        const changed = event.columns !== terminal.cols || event.rows !== terminal.rows;
+        const ownedBeforeResize = previousPaint && sameRows(allNormalRows(), reflowedNormal ?? previousPaint.normal);
+        if (changed) {
           geometry++;
           if (synchronized) {
             resizedDuringPaint = true;
@@ -130,6 +133,15 @@ export async function replayCapture(capture) {
           }
         }
         terminal.resize(event.columns, event.rows);
+        if (changed && !closedBase) {
+          if (synchronized) reflowedNormal = null;
+          else if (previousPaint) {
+            // Native shrink can clip the cursor's line. Observe that reflow only
+            // when no unowned output appeared after the last complete paint.
+            if (!ownedBeforeResize) priorFramesReplaced = false;
+            reflowedNormal = ownedBeforeResize ? allNormalRows() : null;
+          }
+        }
       } else if (event.kind === 'write') {
         const end = consumed + event.length;
         if (end > raw.length) throw new Error('capture-byte-length');
@@ -158,8 +170,9 @@ export async function replayCapture(capture) {
               // Ordinary redraws replace the previous owned frame. Its rows may
               // join history only at a recorded geometry-change boundary.
               priorFramesReplaced &&= sameRows(prefix, previousPaint?.prefix ?? history) ||
-                Boolean(mayRetain && sameRows(prefix, previousPaint.normal));
+                Boolean(mayRetain && sameRows(prefix, reflowedNormal ?? previousPaint.normal));
               previousPaint = { prefix, normal, geometry, uncertain: resizedInTransaction };
+              reflowedNormal = null;
               frames.push({ offset: boundary, elapsed_seconds: event.elapsed_seconds, ...current });
             } else if (frames.length && !closedBase) {
               closedBase = allNormalRows();
@@ -168,7 +181,8 @@ export async function replayCapture(capture) {
               // Keeping that complete paint is safer than erasing prior history.
               const mayRetain = geometry !== previousPaint.geometry || previousPaint.uncertain;
               lastFrameClosedSafely = sameRows(closedBase, previousPaint.prefix) ||
-                (mayRetain && sameRows(closedBase, previousPaint.normal));
+                (mayRetain && sameRows(closedBase, reflowedNormal ?? previousPaint.normal));
+              reflowedNormal = null;
             }
             transaction = null;
           }
