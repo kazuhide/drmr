@@ -303,10 +303,11 @@ def terminate(process):
 
 
 class Runner:
-    def __init__(self, workspace, secrets=()):
+    def __init__(self, workspace, secrets=(), cancel_event=None):
         self.workspace = workspace
         self.secrets = tuple(secrets)
         self.stages = []
+        self.cancel_event = cancel_event
         self.environment = {key: value for key, value in os.environ.items() if not key.startswith("DRMR_")}
         temporary = workspace / "temporary"
         temporary.mkdir(mode=0o700)
@@ -324,6 +325,7 @@ class Runner:
                 raise Refusal("command-unavailable", stage) from None
             try:
                 while True:
+                    require(self.cancel_event is None or not self.cancel_event.is_set(), "command-cancelled")
                     require(max(os.fstat(stdout.fileno()).st_size, os.fstat(stderr.fileno()).st_size) <= MAX_OUTPUT,
                             "command-output-limit")
                     status = process.poll()

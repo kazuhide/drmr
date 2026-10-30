@@ -192,3 +192,67 @@ in the workflow to succeed for the same source.
 The existing v1.0.0 assets and their original 11-stage reports are unchanged.
 These additional checks apply to newly built CI archives; they do not qualify the
 old release archives for 44.1 kHz input.
+
+## Release-only round-trip qualification
+
+The manual release workflow additionally runs the extracted Linux, macOS and
+Windows CLI archives through the documented input/output matrix. It reuses the
+archives and their 18-stage reports from successful CI for the exact tagged main
+commit. It does not rebuild the CLI or rerun the ordinary platform regression
+suites. Publication assembly requires all three native round-trip reports;
+staging the archives alone produces an explicitly unqualified input packet.
+
+The test generates short fixtures from the attributed ten-second Big Buck Bunny
+clip once per native job, then reuses each source graph. HLS/DASH segments target
+two seconds. The five layouts are H.264 video with B-frames, AAC audio at 44.1 kHz,
+AAC audio at 48 kHz, and one video plus one audio track at each sample rate. The
+audio fixtures declare only 240 presented samples in their final complete AAC
+frame. Every coded sample, its clock, the visible playback range, and metadata
+representable by both containers must survive conversion. HLS selection-group
+attributes have no MP4 equivalent; this test does not claim to preserve them in
+MP4 files. Language labels use the documented semantic mapping, such as `en` to
+the MP4 code `eng`.
+The joint HLS source uses the shared mapping's `default-audio-group`, audio name
+`Main`, language `en`, `DEFAULT=NO` and `AUTOSELECT=YES`. These fixture values are
+recorded in the report. A round trip through DASH does not promise to restore
+arbitrary original HLS selection groups or player selection attributes; see
+[metadata preservation](media-processing.md#multiple-qualities-and-audio-declarations).
+
+Each matrix cell expands to the input protection schemes and qualified track
+layouts. The matrix uses automatic processing and default DASH `SegmentTemplate`
+references; separate regressions cover other processing and addressing options.
+The report contains 780 explicit records:
+
+| Records per native archive | Required check |
+| --- | --- |
+| 648 reversible cases | Convert A → B, independently verify B against A, convert B → A, independently verify the return leg, and compare final A directly with original A |
+| 54 input-only HLS/fMP4 `cenc` cases | Convert and independently verify the supported forward direction; HLS/fMP4 `cenc` has no output target |
+| 36 joint MP4 → DASH/HLS cases | Convert and independently verify the forward direction; the reverse joint DASH/HLS → MP4 layout is not qualified |
+| 42 joint DASH/HLS → MP4 conditions | Explicitly record the single-track MP4 output restriction rather than report a successful conversion |
+
+These are codec and layout conditions, not a claim that every possible input
+bitstream is supported. Multiple video qualities are not silently selected for
+one MP4 output. The separate CENC HLS input fixture reuses verified CENC DASH
+initialization data and sample fragments with equivalent HLS declarations, then
+undergoes a fresh native comparison against its source.
+
+Independent workers run within a fixed resource limit and each CLI invocation
+uses one media worker. Completed case outputs are removed after their evidence
+has been collected. FFmpeg and FFprobe are used to generate and check fixtures;
+the conversion matrix itself uses native complete-media verification without
+`--decode`. Matrix workers receive an absolute Packager path and a tool search
+path containing only failing FFmpeg/FFprobe guards. A native preflight checks
+that both guards refuse execution, so an unintended external inspection or
+decoding fallback cannot qualify. The existing 18-stage archive qualification retains its separate
+decoded checks. Neither report establishes DRM license acquisition or device
+playback.
+
+The `cli-release-roundtrip-TARGET.json` assets bind the source commit and tree,
+archive and binary hashes, native executable header and reported version,
+attributed fixture hash, generated source graphs, and the exact matrix case
+identities. They distinguish complete, failed, not checked and unqualified
+records. Missing reports, incomplete native proofs, unexpected case counts or
+mismatched identities block publication assembly. The reports themselves are
+included in the release manifest and `SHA256SUMS`. Test keys use temporary
+owner-protected files; reports contain allowlisted evidence rather than keys,
+source addresses or raw command output.

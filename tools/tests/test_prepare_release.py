@@ -12,6 +12,10 @@ import tempfile
 import unittest
 import zipfile
 from unittest.mock import Mock, patch
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import roundtrip_reports
 
 SPEC = importlib.util.spec_from_file_location("prepare_release", Path(__file__).resolve().parents[1] / "prepare_release.py")
 PREPARE = importlib.util.module_from_spec(SPEC)
@@ -169,8 +173,66 @@ class ReleasePacket(unittest.TestCase):
     def git(self, *args):
         return subprocess.run(["git", *args], cwd=self.root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout.decode().strip()
 
-    def prepare(self):
-        return PREPARE.prepare(self.root, "v1.0.0", self.output, "example/drmr", self.client)
+    def prepare(self, qualified=False):
+        return PREPARE.prepare(self.root, "v1.0.0", self.output, "example/drmr", self.client,
+                               roundtrip_reports=self.home / "roundtrips" if qualified else None,
+                               native_inputs_only=not qualified)
+
+    def roundtrip_reports(self):
+        directory = self.home / "roundtrips"
+        directory.mkdir()
+        for _, artifact, target, _ in PREPARE.TARGETS:
+            archive = json.loads(dict(self.client.entries[artifact])["cli-archive-verification.json"])
+            value = roundtrip_reports.complete(PREPARE.ROUNDTRIP, self.head, self.tree, target, "1.0.0",
+                                               archive["archive_sha256"], archive["binaries"]["drmr"]["sha256"])
+            (directory / ("cli-release-roundtrip-" + target + ".json")).write_text(json.dumps(value), encoding="utf-8")
+        return directory
+
+    def test_unqualified_input_packet_is_explicitly_not_publication_ready(self):
+        result = self.prepare()
+        manifest = json.loads((self.output / "release-manifest.json").read_text())
+        self.assertFalse(result["publication_ready"])
+        self.assertFalse(manifest["publication_ready"])
+        self.assertEqual(manifest["kind"], "native-cli-roundtrip-inputs")
+
+    def test_assembly_requires_a_release_report_or_explicit_input_staging(self):
+        with self.assertRaisesRegex(PREPARE.Failure, "^roundtrip-reports-required$"):
+            PREPARE.prepare(self.root, "v1.0.0", self.output, "example/drmr", self.client)
+        self.assertFalse(self.output.exists())
+
+    def test_qualified_packet_contains_and_checksums_all_three_matrix_reports(self):
+        self.roundtrip_reports()
+        result = self.prepare(qualified=True)
+        manifest = json.loads((self.output / "release-manifest.json").read_text())
+        self.assertTrue(result["publication_ready"])
+        self.assertEqual(manifest["kind"], "verified-cli-release")
+        self.assertTrue(manifest["publication_ready"])
+        self.assertEqual(len(list(self.output.iterdir())), 15)
+        checksums = (self.output / "SHA256SUMS").read_text()
+        for asset in manifest["assets"]:
+            report = asset["roundtrip_report"]
+            self.assertEqual(PREPARE.digest(self.output / report["filename"]), report["sha256"])
+            self.assertIn(report["sha256"] + "  " + report["filename"], checksums)
+
+    def test_missing_stale_or_partial_roundtrip_reports_block_assembly(self):
+        directory = self.roundtrip_reports()
+        target = PREPARE.TARGETS[0][2]
+        path = directory / ("cli-release-roundtrip-" + target + ".json")
+        original = path.read_bytes()
+        mutations = [lambda value: value.update(source_head="f" * 40),
+                     lambda value: value["records"].pop(),
+                     lambda value: value["counts"].update(complete=737),
+                     lambda value: value["records"][0].update(status="not-checked")]
+        for change in mutations:
+            value = json.loads(original)
+            change(value)
+            path.write_text(json.dumps(value), encoding="utf-8")
+            with self.assertRaises(PREPARE.Failure):
+                self.prepare(qualified=True)
+            self.assertFalse(self.output.exists())
+        path.unlink()
+        with self.assertRaisesRegex(PREPARE.Failure, "roundtrip-report-missing-or-invalid"):
+            self.prepare(qualified=True)
 
     def refuse(self, token=None):
         with self.assertRaises(PREPARE.CHECK.Failure) as context:
@@ -575,7 +637,7 @@ class ReleasePacket(unittest.TestCase):
 
     def test_output_inside_source_is_refused(self):
         with self.assertRaisesRegex(PREPARE.Failure, "output-must-be-outside-source"):
-            PREPARE.prepare(self.root, "v1.0.0", self.root / "release", "example/drmr", self.client)
+            PREPARE.prepare(self.root, "v1.0.0", self.root / "release", "example/drmr", self.client, native_inputs_only=True)
 
     def test_output_appearing_during_assembly_is_preserved(self):
         count = [0]
@@ -645,7 +707,7 @@ class ReadOnlyGitHub(unittest.TestCase):
             with self.subTest(kind=kind.__name__):
                 output = io.StringIO()
                 with patch.object(PREPARE, "GitHub"), patch.object(PREPARE, "prepare", side_effect=kind("private fixture path")), contextlib.redirect_stdout(output):
-                    status = PREPARE.main(["--tag", "v1.0.0", "--output", "private-fixture"])
+                    status = PREPARE.main(["--tag", "v1.0.0", "--output", "private-fixture", "--native-inputs-only"])
                 self.assertEqual(status, 1)
                 self.assertEqual(json.loads(output.getvalue()), {"schema_version": 1, "success": False, "error": "artifact-archive-invalid", "publication_performed": False})
 

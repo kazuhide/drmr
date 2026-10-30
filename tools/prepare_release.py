@@ -6,7 +6,9 @@ read access. This command never creates tags or releases, changes settings, or
 executes downloaded binaries. It accepts only current-main push qualification
 for the exact clean local release tag. All five latest runs and attempts must
 succeed; the three CLI artifacts must contain matching archive and native-media
-proof. Output is a new directory outside the source checkout.
+proof. Release packets additionally require complete native round-trip reports
+for all targets. --native-inputs-only stages an explicitly unqualified packet
+for those native jobs. Output is a new directory outside the source checkout.
 """
 import argparse
 import datetime
@@ -41,6 +43,7 @@ def module(name):
 CHECK = module("check_release")
 VERIFY = module("verify_archive")
 EVIDENCE = module("media_evidence")
+ROUNDTRIP = module("roundtrip_contract")
 COMPRESSED_ERRORS = (EOFError, tarfile.TarError, zipfile.BadZipFile, zlib.error, NotImplementedError)
 ARCHIVE_ERRORS = (VERIFY.Failure, OSError, ValueError, TypeError, KeyError) + COMPRESSED_ERRORS
 WORKFLOWS = ("ci.yml", "windows.yml", "container.yml", "advisories.yml", "pages.yml")
@@ -51,6 +54,7 @@ TARGETS = (
 )
 MAX_JSON = 4 * 1024 * 1024
 MAX_REPORT = 2 * 1024 * 1024
+MAX_ROUNDTRIP_REPORT = 16 * 1024 * 1024
 MAX_ARTIFACT = 512 * 1024 * 1024
 MAX_ROWS = 1000
 STAGES = ("version", "doctor", "fixture-probe", "fixture-video", "prepared-video-probe", "fixture-segments",
@@ -447,7 +451,8 @@ def release_notes(root, version):
     return notes + "\n"
 
 
-def prepare(root, tag, output, repository, client):
+def prepare(root, tag, output, repository, client, roundtrip_reports=None, native_inputs_only=False):
+    require((roundtrip_reports is not None) != bool(native_inputs_only), "roundtrip-reports-required")
     require(isinstance(repository, str) and re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) is not None
             and all(part not in (".", "..") for part in repository.split("/")), "repository-invalid")
     root = Path(root).resolve()
@@ -487,13 +492,29 @@ def prepare(root, tag, output, repository, client):
             media_report = "cli-media-qualification-" + target + ".json"
             write_json(payload / archive_report, archive_proof)
             write_json(payload / media_report, media)
-            inventory.append({"filename": filename, "target": target, "sha256": archive_hash, "bytes": archive.stat().st_size,
+            entry = {"filename": filename, "target": target, "sha256": archive_hash, "bytes": archive.stat().st_size,
                               "binary_sha256": binary_hash, "workflow_run_id": run["id"], "run_attempt": run["run_attempt"],
                               "artifact_id": artifact["id"], "artifact_sha256": artifact["digest"][7:],
                               "archive_report": {"filename": archive_report, "sha256": digest(payload / archive_report)},
-                              "media_report": {"filename": media_report, "sha256": digest(payload / media_report)}})
+                              "media_report": {"filename": media_report, "sha256": digest(payload / media_report)}}
+            if not native_inputs_only:
+                report_name = "cli-release-roundtrip-" + target + ".json"
+                path = Path(roundtrip_reports) / report_name
+                require(not path.is_symlink() and path.is_file() and 0 < path.stat().st_size <= MAX_ROUNDTRIP_REPORT,
+                        "roundtrip-report-missing-or-invalid")
+                raw = path.read_bytes()
+                require(len(raw) <= MAX_ROUNDTRIP_REPORT, "roundtrip-report-missing-or-invalid")
+                roundtrip = load_json(raw)
+                try:
+                    ROUNDTRIP.validate(roundtrip, head, tree, target, identity["version"], archive_hash, binary_hash)
+                except ROUNDTRIP.Failure as error:
+                    raise Failure(str(error)) from None
+                write_json(payload / report_name, roundtrip)
+                entry["roundtrip_report"] = {"filename": report_name, "sha256": digest(payload / report_name)}
+            inventory.append(entry)
         notes = release_notes(root, identity["version"])
-        manifest = {"schema_version": 1, "kind": "verified-cli-release", "repository": repository, "tag": tag,
+        manifest = {"schema_version": 1, "kind": "native-cli-roundtrip-inputs" if native_inputs_only else "verified-cli-release",
+                    "publication_ready": not native_inputs_only, "repository": repository, "tag": tag,
                     "version": identity["version"], "source_head": head, "source_tree": tree,
                     "workflow_runs": [pin(selected[name]) for name in WORKFLOWS], "assets": inventory}
         write_json(payload / "release-manifest.json", manifest)
@@ -513,7 +534,8 @@ def prepare(root, tag, output, repository, client):
             path.rename(promoted.path / path.name)
         success = True
         return {"schema_version": 1, "success": True, "tag": tag, "version": identity["version"],
-                "source_head": head, "source_tree": tree, "archives": len(inventory), "publication_performed": False}
+                "source_head": head, "source_tree": tree, "archives": len(inventory),
+                "publication_ready": not native_inputs_only, "publication_performed": False}
     finally:
         try:
             if promoted is not None and not success:
@@ -533,9 +555,13 @@ def main(argv=None):
     parser.add_argument("--output", type=Path, required=True, help="Create a new release packet outside the checkout")
     parser.add_argument("--root", type=Path, default=ROOT)
     parser.add_argument("--repository", default="kazuhide/drmr")
+    qualification = parser.add_mutually_exclusive_group(required=True)
+    qualification.add_argument("--native-inputs-only", action="store_true", help="Stage CI archives for native round-trip jobs; not a release")
+    qualification.add_argument("--roundtrip-reports", type=Path, help="Require complete native round-trip reports for all targets")
     try:
         args = parser.parse_args(argv)
-        report = prepare(args.root, args.tag, args.output, args.repository, GitHub())
+        report = prepare(args.root, args.tag, args.output, args.repository, GitHub(),
+                         roundtrip_reports=args.roundtrip_reports, native_inputs_only=args.native_inputs_only)
     except CHECK.Failure as error:
         report = {"schema_version": 1, "success": False, "error": str(error), "publication_performed": False}
     except COMPRESSED_ERRORS:
