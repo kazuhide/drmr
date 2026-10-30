@@ -30,36 +30,18 @@ pub(super) fn complete_track_views(
     backend: &super::super::backend::Backend,
     tracks: usize,
 ) -> Result<Option<Vec<std::path::PathBuf>>, ConversionError> {
-    if !(1..=2).contains(&tracks) {
+    if tracks != 2 || !super::super::audio::movie(path)?.fragmented {
         return Ok(None);
     }
-    let ids = {
-        let metadata = super::super::audio::movie(path)?;
-        if !metadata.fragmented {
-            return Ok(None);
-        }
-        super::super::native_media::metadata_track_ids(&metadata.bytes)?
-    };
-    if ids.len() != tracks {
-        return Err(ConversionError("native-mp4-invalid"));
-    }
-    if tracks == 1 {
-        if ids[0] == 1 {
-            return Ok(None);
-        }
-        return super::super::finite::split_parts(path, directory, &backend.stop).map(Some);
-    }
-    let nondense_ids = ids != [1, 2];
     let movie = super::super::native_media::inspect(path, &backend.stop)?;
     let needs_views = movie.fragmented
         && movie.tracks.len() == 2
-        && (nondense_ids
-            || movie.tracks.iter().any(|track| {
-                track.edits.len() == 2
-                    || (track.codec == *b"mp4a"
-                        && track.timescale == 90_000
-                        && track.sample_entry_metadata.sample_rate == Some(44_100))
-            }));
+        && movie.tracks.iter().any(|track| {
+            track.edits.len() == 2
+                || (track.codec == *b"mp4a"
+                    && track.timescale == 90_000
+                    && track.sample_entry_metadata.sample_rate == Some(44_100))
+        });
     if needs_views {
         super::super::finite::split_parts(path, directory, &backend.stop).map(Some)
     } else {

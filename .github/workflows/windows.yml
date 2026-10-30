@@ -46,6 +46,10 @@ jobs:
       - name: Check vendored source bytes before native compilation
         run: python -W error::ResourceWarning -m unittest discover -s tools/tests -p test_verify_private_fs.py -v
 
+      - name: Check headless decoder-guard startup before native compilation
+        timeout-minutes: 2
+        run: python -W error::ResourceWarning -m unittest discover -s tools/tests -p test_release_roundtrip.py -k conversion_runner_cannot_execute_external_decoders -v
+
       - name: Check archive owner cleanup with real private Windows ACLs
         run: ./.github/scripts/test-windows-cli-archive-cleanup.ps1
 

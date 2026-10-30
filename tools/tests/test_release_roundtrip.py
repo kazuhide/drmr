@@ -127,6 +127,11 @@ class ReleaseMatrix(unittest.TestCase):
             check = operation / "check"
             check.mkdir()
             executor.check_decoder_guards(check)
+            # Launch-control setup must fail outside the accepted guard refusal.
+            with patch.object(ROUNDTRIP.SUPPORT, "headless_windows_errors",
+                              side_effect=ROUNDTRIP.SUPPORT.Refusal("command-unavailable")):
+                with self.assertRaises(ROUNDTRIP.SUPPORT.Refusal):
+                    executor.check_decoder_guards(check)
 
     def test_partial_audio_duration_preserves_sample_derived_f64(self):
         for rate in (44100, 48000):

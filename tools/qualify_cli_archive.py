@@ -302,8 +302,27 @@ def terminate(process):
     raise Refusal("command-cleanup-unconfirmed")
 
 
+def headless_windows_errors():
+    """Return loader errors to headless callers and their children without dialogs."""
+    if os.name != "nt":
+        return
+    import ctypes
+    try:
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.GetErrorMode.argtypes = []
+        kernel.GetErrorMode.restype = ctypes.c_uint
+        kernel.SetErrorMode.argtypes = [ctypes.c_uint]
+        kernel.SetErrorMode.restype = ctypes.c_uint
+        # Every runner uses the same process-wide flags; children inherit them.
+        # Preserve existing flags and leave alignment-fault handling unchanged.
+        kernel.SetErrorMode(kernel.GetErrorMode() | 0x0001 | 0x0002 | 0x8000)
+    except (AttributeError, OSError):
+        raise Refusal("command-unavailable") from None
+
+
 class Runner:
     def __init__(self, workspace, secrets=(), cancel_event=None):
+        headless_windows_errors()
         self.workspace = workspace
         self.secrets = tuple(secrets)
         self.stages = []

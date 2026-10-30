@@ -128,6 +128,18 @@ placement. See
 [retaining source directories](source-layout.md) for retained downloads,
 generated filenames and the supported source-relative output layout.
 
+### Private track identifiers
+
+Each conversion job prepares its tracks in a separate owner-only working directory. This prevents one job from removing temporary files while another job checks that directory. A track identifier names a track within an MP4 file. Before packaging fragmented MP4 with nonsequential identifiers, drmr creates a private compatibility copy and assigns identifiers in the original track order: 1 for a single track, or 1, 2 and so on for multiple tracks.
+
+The copy changes identifier fields and recognized matching index references without rebuilding the fragments. It preserves sample bytes, byte positions, timestamps, encryption metadata and playback ranges. This avoids a verified crash in the tested Linux x86-64 Shaka Packager 3.8.0 binary when a single-track fragmented file retains identifier 2. Native analysis and independent verification retain their existing input rules; this tool-specific copy is prepared only when packaging.
+
+### Absolute fragment positions
+
+Some fragmented MP4 files locate media using absolute byte positions within the file. Native analysis and verification accept this layout when its samples and clocks pass the existing checks. In the tested AAC fixture, the Linux x86-64 Shaka Packager 3.8.0 binary changed encoded sample bytes during normalization for DASH and TS output, including with a single track already numbered 1.
+
+Conversion detects that mismatch and returns `source-normalization-verification-failed` before publishing a result. Native validation of the original remains available. This fixture is outside the qualified conversion cases for that tool build; see the [release qualification scope](releases.md). A successful tool exit alone does not establish matching media.
+
 ## Finite audio presentation windows
 
 A progressive MP4 stores sample locations and playback edits together. An audio edit can select a finite range of decoded samples, excluding encoder warm-up at the start and padding at the end. Copying every compressed packet is insufficient: losing that edit can add audible samples without changing any packet payload or timestamp.
@@ -312,8 +324,6 @@ For fMP4 HLS, DASH and standalone fragmented MP4, the final initialization metad
 HLS declarations are calculated from the output's own playback bounds. DASH keeps the complete coded timing and writes the selected reference form; its common period covers the maximum presented end across all tracks, including when audio ends before video. A nominal template must satisfy the additional timing proof in [DASH references](dash-addressing.md). TS output records the shortened range in the final playlist declaration. Fresh verification independently reconstructs the output range and compares all coded media and the independently established native playback bounds. `--decode` also compares complete raw and presented PCM samples. This does not establish DRM-device playback or general support for arbitrary MP4 edits.
 
 A complete standalone fragmented MP4 with this qualified canonical edit layout supports analysis, independent verification, and conversion to qualified DASH, fMP4 HLS or TS outputs. It can contain one audio track and optional video; audio-only input can also be re-encrypted as MP4. Each accepted edit must match all original coded frames, absolute clocks, exact playback ends and supported language metadata. This is not admission of arbitrary edit lists. Progressive MP4 and edits that exclude initial decoder warm-up samples remain outside the TS output profile; see [TS output conditions](conversion-support.md#mpeg-transport-stream-output).
-
-Each selected track is prepared in its own private directory so one parallel job cannot remove files while another job checks that directory. A temporary single-track fragmented MP4 uses track ID 1 consistently in its initialization and every fragment. A track ID identifies a track within that file. Keeping ID 2 in this one-track fragmented view was verified to crash the tested Linux x86-64 Shaka Packager 3.8.0 binary; consistent IDs let the same media pass. The renumbering preserves sample bytes, timestamps, encryption metadata and playback ranges.
 
 Creating a transport stream from a progressive MP4 can itself change audio trimming or padding. This route proves identity to the supplied transport-stream presentation, not to an earlier file from which it was created. All existing staged-size, resource-budget, timeout, cancellation, and confirmed-process-cleanup limits still apply. Access-unit evidence is streamed with an 8 MiB per-packet limit and a charged 64 MiB reader bound; a malformed, oversized, incomplete, or unsuccessful read fails rather than returning a partial proof.
 

@@ -59,12 +59,14 @@ fn pssh(target: TargetProtection, kid: &str) -> String {
     )
 }
 fn operator_keys(
-    root: &Path,
+    _media_root: &Path,
     name: &str,
     target: TargetProtection,
     format: OutputFormat,
 ) -> key_file::OperatorKeys {
-    let path = root.join(format!("{name}-keys.json"));
+    // Media cells may inherit media ACLs; key files need their own strict parent.
+    let private = common::private_tempdir().unwrap();
+    let path = private.path().join(format!("{name}-keys.json"));
     let mut output = serde_json::json!({"kid":KID,"key":KEY,"signaling":{
         "system":"multi-drm","widevine_pssh":pssh(target,KID),"playready_license_url":LICENSE,
         "fairplay":target == TargetProtection::Cbcs && format == OutputFormat::Hls
@@ -80,7 +82,9 @@ fn operator_keys(
                 .as_bytes(),
         )
         .unwrap();
-    key_file::read(&path).unwrap()
+    let keys = key_file::read(&path).unwrap();
+    drop(private);
+    keys
 }
 fn source(root: &Path) -> PathBuf {
     drmr_core::native::create_media_dir_all(root).unwrap();

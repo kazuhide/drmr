@@ -122,7 +122,8 @@ class GitHub:
 
     def request(self, endpoint, destination, maximum):
         arguments = ["gh", "api", "--hostname", "github.com", "--method", "GET",
-                     "-H", "Accept: application/vnd.github+json", "-H", "X-GitHub-Api-Version: 2022-11-28", endpoint]
+                     "-H", "Accept: application/vnd.github+json", "-H", "X-GitHub-Api-Version: 2022-11-28",
+                     "-H", "Cache-Control: no-cache", endpoint]
         environment = dict(os.environ, GH_PROMPT_DISABLED="1", GH_NO_UPDATE_NOTIFIER="1")
         process = None
         try:

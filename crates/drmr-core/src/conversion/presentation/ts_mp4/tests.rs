@@ -96,7 +96,7 @@ fn converter() -> Converter {
 }
 
 #[test]
-fn singleton_id_one_keeps_the_fast_path_and_other_ids_get_private_views() {
+fn native_singleton_admission_does_not_depend_on_private_tool_track_ids() {
     let owner = crate::native::private_tempdir().unwrap();
     let source = fixture(owner.path(), 1);
     let directory = owner.path().join("views");
@@ -113,7 +113,15 @@ fn singleton_id_one_keeps_the_fast_path_and_other_ids_get_private_views() {
         .is_none()
     );
     assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 0);
-    let original = rebind_ids(&source, &[2]);
+    let mut original = rebind_ids(&source, &[2]);
+    // The native reader admits implicit first-traf bases; tool compatibility must not narrow it.
+    for node in crate::mp4::walk(&crate::mp4::parse_boxes(&original).unwrap()) {
+        if node.kind() == *b"tfhd" {
+            let at = node.header.offset + node.header.header_size;
+            original[at + 1] &= !2;
+        }
+    }
+    std::fs::write(&source, &original).unwrap();
     let samples = sample_hashes(&source);
     let views = complete_track_views(
         &source,
@@ -121,17 +129,15 @@ fn singleton_id_one_keeps_the_fast_path_and_other_ids_get_private_views() {
         &command.backend,
         inspection::inspect(&source).unwrap().tracks.len(),
     )
-    .unwrap()
-    .expect("an admitted fragmented singleton with ID2 needs a private ID1 view");
-    assert_eq!(views.len(), 1);
-    let movie = native_media::inspect(&views[0], &command.backend.stop).unwrap();
-    assert_eq!(movie.tracks[0].track_id, 1);
-    assert_eq!(sample_hashes(&views[0]), samples);
+    .unwrap();
+    assert!(views.is_none());
+    assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 0);
+    assert_eq!(sample_hashes(&source), samples);
     assert_eq!(std::fs::read(&source).unwrap(), original);
 }
 
 #[test]
-fn nondense_joint_ids_get_independently_bound_private_views() {
+fn generic_joint_track_ids_do_not_force_finite_profile_isolation() {
     let owner = crate::native::private_tempdir().unwrap();
     let source = fixture(owner.path(), 2);
     let original = rebind_ids(&source, &[7, 42]);
@@ -145,15 +151,10 @@ fn nondense_joint_ids_get_independently_bound_private_views() {
         &command.backend,
         inspection::inspect(&source).unwrap().tracks.len(),
     )
-    .unwrap()
-    .expect("nondense joint IDs need private views");
-    assert_eq!(views.len(), 2);
-    for (index, view) in views.iter().enumerate() {
-        let movie = native_media::inspect(view, &command.backend.stop).unwrap();
-        assert_eq!(movie.tracks.len(), 1);
-        assert_eq!(movie.tracks[0].track_id, 1);
-        assert_eq!(sample_hashes(view)[0], samples[index]);
-    }
+    .unwrap();
+    assert!(views.is_none());
+    assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 0);
+    assert_eq!(sample_hashes(&source), samples);
     assert_eq!(std::fs::read(&source).unwrap(), original);
 }
 

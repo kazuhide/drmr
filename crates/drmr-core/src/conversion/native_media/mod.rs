@@ -26,6 +26,8 @@ mod progressive;
 mod progressive_copy;
 pub(in crate::conversion) use progressive_copy::copy_progressive;
 mod read;
+mod track_ids;
+pub(in crate::conversion) use track_ids::canonicalize_tool_ids;
 mod sample_window;
 mod segment;
 mod write;
@@ -292,7 +294,7 @@ fn catalogue(
 }
 
 /// Read real IDs from the bounded moov retained by `audio::movie`, without sample scanning.
-/// This selects private views; complete source admission remains mandatory afterward.
+/// This selects tool-only compatibility copies; source admission remains unchanged.
 pub(super) fn metadata_track_ids(bytes: &[u8]) -> Result<Vec<u32>, ConversionError> {
     if bytes.len() > MAX_METADATA_BYTES {
         return Err(ConversionError("resource-budget"));

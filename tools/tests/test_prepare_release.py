@@ -683,6 +683,7 @@ class ReadOnlyGitHub(unittest.TestCase):
         with patch.dict(PREPARE.os.environ, {"GH_TOKEN": "fixture-token"}), patch.object(PREPARE.subprocess, "Popen", side_effect=start):
             self.assertEqual(PREPARE.GitHub().json("repos/example/drmr/git/ref/heads/main"), {"fixture": True})
         self.assertEqual(calls[0][:7], ["gh", "api", "--hostname", "github.com", "--method", "GET", "-H"])
+        self.assertIn("Cache-Control: no-cache", calls[0])
         self.assertNotIn("fixture-token", " ".join(calls[0]))
 
     def test_client_bounds_the_response_before_json_parsing(self):

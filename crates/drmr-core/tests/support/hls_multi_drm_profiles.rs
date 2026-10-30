@@ -298,7 +298,12 @@ fn refuse_opaque_before_tools(
     .with_processing(mode);
     let empty = InputKeys::default();
     let hls = HlsInputKeys::default();
-    let label = format!("{:?}-{mode:?}-{resolution}-{decode}", input.extension());
+    let extension = input
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .expect("fixture manifest extension");
+    let label = format!("{extension}-{mode:?}-{resolution}-{decode}");
+    drmr_core::native::validate_windows_relative_path(&label).unwrap();
     let output = root.join(format!("refused-{label}"));
     let systems = keys.signaling.as_ref().unwrap().systems();
     assert_eq!(
