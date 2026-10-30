@@ -17,14 +17,14 @@ const KID: &str = "00112233445566778899aabbccddeeff";
 const KEY: &str = "ffeeddccbbaa99887766554433221100";
 
 struct Fixture {
-    owner: crate::native::PrivateTempDir,
+    owner: crate::conversion::files::Stage,
     initialization: PathBuf,
     resources: Vec<PathBuf>,
     expected: AudioPresentation,
 }
 impl Fixture {
     fn new(converter: &Converter) -> Self {
-        let owner = crate::native::private_tempdir().unwrap();
+        let owner = crate::conversion::files::Stage::new(None).unwrap();
         let source = tests::short_audio_transport(owner.path());
         let stop = Stop::new();
         let mut scanner = crate::conversion::ts::NativeScanner::new();
