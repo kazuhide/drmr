@@ -344,13 +344,82 @@ fn direct_sample_bundle_normalizes_clear_tracks_once() {
 
 #[test]
 fn sample_and_transport_encrypted_outputs_publish_and_verify_as_one_bundle() {
+    checked_sample_and_transport_bundle(converter);
+}
+
+#[test]
+fn cold_sample_and_transport_bundle_verification_fits_one_cpu_one_gib() {
+    use drmr_core::resources::{Limiter, Workload};
+    let limiter = Arc::new(Limiter::new(1, 1024 * 1024 * 1024));
+    let records = Arc::new(Collector::default());
+    let calls = std::sync::atomic::AtomicUsize::new(0);
+    // Each phase gets a fresh runner/workload; only the actual allocation is shared.
+    let (root, plan, keys) = checked_sample_and_transport_bundle(|| {
+        let phase = calls.fetch_add(1, Ordering::SeqCst);
+        let sink: Arc<dyn Sink> = if phase == 2 {
+            records.clone()
+        } else {
+            Arc::new(NoSink)
+        };
+        Converter::new(
+            Arc::new(ToolRunner::new(Arc::new(Secrets::new()), sink).with_limiter(limiter.clone())),
+            "packager",
+            "ffmpeg",
+        )
+        .with_decode(true)
+    });
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
+    let cold_budgets = records.records();
+    let estimates = cold_budgets
+        .iter()
+        .filter(|r| r.get("message").and_then(serde_json::Value::as_str) == Some("resource-budget"))
+        .filter_map(|r| {
+            r.get("estimated_child_bytes")
+                .and_then(serde_json::Value::as_u64)
+        })
+        .collect::<Vec<_>>();
+    assert!(!estimates.is_empty());
+    let unknown_decode = Workload::default().estimated_child_bytes(
+        drmr_core::toolrun::MAX_CAPTURE_BYTES,
+        drmr_core::toolrun::DEFAULT_STDERR_BYTES,
+    );
+    assert!(
+        estimates.iter().all(|bytes| *bytes < unknown_decode),
+        "verified small tracks must replace the unknown 4K estimate"
+    );
+    let before = common::snapshot_tree(root.path());
+    let insufficient = Converter::new(
+        Arc::new(
+            ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink))
+                .with_limiter(Arc::new(Limiter::new(1, 192 * 1024 * 1024))),
+        ),
+        "packager",
+        "ffmpeg",
+    )
+    .with_decode(true);
+    let refused =
+        insufficient.verify_bundle_plan(&plan, &keys, &ManifestValidationTools::default());
+    assert_eq!(
+        refused.err(),
+        Some(drmr_core::conversion::ConversionError("resource-budget"))
+    );
+    assert_eq!(common::snapshot_tree(root.path()), before);
+}
+
+fn checked_sample_and_transport_bundle(
+    command: impl Fn() -> Converter,
+) -> (
+    drmr_core::native::PrivateTempDir,
+    plan::bundle::BundlePlan,
+    key_file::BundleOperatorKeys,
+) {
     let root = drmr_core::native::private_tempdir().unwrap();
     let source = root.path().join("source");
     let input = transport(&source);
     let original = common::snapshot_tree(&source);
     let keys = keys(root.path());
     let outputs = outputs();
-    let plan = converter()
+    let plan = command()
         .create_bundle_plan(BundlePlanRequest {
             input: VerificationSource {
                 input: &input,
@@ -362,13 +431,9 @@ fn sample_and_transport_encrypted_outputs_publish_and_verify_as_one_bundle() {
         })
         .unwrap();
     let tools = ManifestValidationTools::default();
-    let converted = converter()
-        .execute_bundle_plan(&plan, &keys, &tools)
-        .unwrap();
+    let converted = command().execute_bundle_plan(&plan, &keys, &tools).unwrap();
     assert_eq!(converted.outputs.len(), outputs.len());
-    let verified = converter()
-        .verify_bundle_plan(&plan, &keys, &tools)
-        .unwrap();
+    let verified = command().verify_bundle_plan(&plan, &keys, &tools).unwrap();
     assert!(verified.passed && verified.source_unchanged);
     assert_eq!(verified.outputs.len(), outputs.len());
     for (result, intent) in converted.outputs.iter().zip(&outputs) {
@@ -402,6 +467,7 @@ fn sample_and_transport_encrypted_outputs_publish_and_verify_as_one_bundle() {
         common::names_with_prefix(root.path(), ".drmr-convert-"),
         Vec::<String>::new()
     );
+    (root, plan, keys)
 }
 
 fn single_transport_plan(id: &str, target: TargetProtection) {

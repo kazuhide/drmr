@@ -223,6 +223,7 @@ impl Backend {
             return Err(ConversionError("ts-stream-count-mismatch"));
         }
         let mut streams = Vec::new();
+        let mut pixels = 0_u64;
         for (index, track) in admission.tracks.iter().enumerate() {
             self.check_cancelled()?;
             let anchor = native
@@ -232,16 +233,28 @@ impl Backend {
             let metadata = anchor.metadata()?;
             let timing = anchor.timing()?;
             let evidence = anchor.evidence()?;
-            let kind_matches = matches!(
-                (track.kind, metadata),
-                (TrackKind::Video, canonical::TrackMetadata::Video(_))
-                    | (TrackKind::Audio, canonical::TrackMetadata::Audio { .. })
-            );
+            let dimensions = match (track.kind, &metadata) {
+                (TrackKind::Video, canonical::TrackMetadata::Video(video)) => {
+                    Some(u64::from(video.coded_width).saturating_mul(u64::from(video.coded_height)))
+                }
+                (TrackKind::Audio, canonical::TrackMetadata::Audio { .. }) => Some(0),
+                _ => None,
+            };
+            let kind_matches = dimensions.is_some();
             if !kind_matches || timing.count != evidence.count || anchor.count != evidence.count {
                 return Err(ConversionError("invalid-ts-streams"));
             }
+            pixels = pixels.max(dimensions.ok_or(ConversionError("invalid-ts-streams"))?);
             streams.push((index, track.kind));
         }
+        self.check_cancelled()?;
+        // Register only complete, validated access-unit metadata. Use coded dimensions,
+        // not a potentially much smaller visible crop; the unknown input window remains 32 MiB.
+        self.runner.register_workload(crate::resources::Workload {
+            max_pixels: Some(pixels),
+            input_buffer_bytes: None,
+            tracks: streams.len(),
+        });
         Ok(streams)
     }
     pub fn transport_streams(
@@ -959,6 +972,90 @@ pub(super) fn check_duration_ratio(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validated_native_transport_registers_coded_dimensions_after_complete_binding() {
+        use crate::{
+            events::NoSink,
+            toolrun::{Secrets, ToolRunner},
+        };
+        let owner = crate::native::private_tempdir().unwrap();
+        let source = owner.path().join("source.ts");
+        let clip =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/clip.mp4");
+        assert!(
+            std::process::Command::new("ffmpeg")
+                .args(["-v", "error", "-nostdin", "-i"])
+                .arg(clip)
+                .args([
+                    "-map", "0:v:0", "-map", "0:a:0", "-c", "copy", "-f", "mpegts"
+                ])
+                .arg(&source)
+                .output()
+                .unwrap()
+                .status
+                .success(),
+            "licensed transport fixture generation failed"
+        );
+        let mut scanner = NativeScanner::new();
+        scanner
+            .segment(&source, &crate::concurrency::Stop::new())
+            .unwrap();
+        let (mut admission, native) = scanner.finish().unwrap();
+        let native: BTreeMap<_, _> = native
+            .into_iter()
+            .map(|(pid, value)| (pid, Arc::new(value)))
+            .collect();
+        let mut coded = 0;
+        let mut visible = 0;
+        for anchor in native.values() {
+            if let canonical::TrackMetadata::Video(metadata) = anchor.metadata().unwrap() {
+                coded =
+                    coded.max(u64::from(metadata.coded_width) * u64::from(metadata.coded_height));
+                visible = visible.max(u64::from(metadata.width) * u64::from(metadata.height));
+            }
+        }
+        assert!(
+            coded > visible && visible > 0,
+            "fixture must exercise cropped coded dimensions"
+        );
+        let command = super::super::Converter::new(
+            Arc::new(ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink))),
+            "unused",
+            "unused",
+        );
+        command
+            .backend
+            .native_transport_streams(&admission, &native)
+            .unwrap();
+        let workload = command
+            .backend
+            .runner
+            .registered_workload()
+            .expect("validated dimensions must reach the shared command");
+        assert_eq!(workload.max_pixels, Some(coded));
+        assert_eq!(workload.tracks, admission.tracks.len());
+        assert!(
+            workload.input_buffer_bytes.is_none(),
+            "the 32 MiB unknown input window remains conservative"
+        );
+        let invalid = super::super::Converter::new(
+            Arc::new(ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink))),
+            "unused",
+            "unused",
+        );
+        admission.tracks.last_mut().unwrap().kind = TrackKind::Unknown;
+        assert!(
+            invalid
+                .backend
+                .native_transport_streams(&admission, &native)
+                .is_err()
+        );
+        assert!(
+            invalid.backend.runner.registered_workload().is_none(),
+            "one invalid later track must not register partial dimensions"
+        );
+    }
 
     #[test]
     fn views_keep_every_mp4_key_without_changing_original_transport_key_selection() {

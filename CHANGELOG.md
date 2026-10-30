@@ -5,7 +5,7 @@ for installation, stable interfaces and versioning.
 
 ## [Unreleased]
 
-## [1.0.3] - 2026-10-30
+## [1.0.3] - 2026-10-31
 
 Extend the qualified output profiles while retaining native media verification
 and the existing CLI workflow. Web and Desktop remain experimental.
@@ -38,6 +38,8 @@ and the existing CLI workflow. Web and Desktop remain experimental.
 
 ### Fixed
 
+- Use validated MPEG-TS frame dimensions when sizing independent bundle
+  verification, so small inputs can be checked within their memory budget.
 - Describe HLS selections containing one video and one audio track as conditional
   MP4 planning candidates. Execution still validates the actual container,
   tracks, clocks and presentation windows.
