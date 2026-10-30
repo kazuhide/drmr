@@ -258,3 +258,76 @@ fn canonical_joint_mp4_reinput_keeps_language_and_complete_audio_video() {
         assert_eq!(inspection.tracks.len(), 2);
     }
 }
+
+#[test]
+fn canonical_mp4_returns_to_ts_with_exact_44100_and_48000_audio_and_optional_video() {
+    for profile in [AAC_44100, AAC_48000] {
+        let root = drmr_core::native::private_tempdir().unwrap();
+        let input = root.path().join("input");
+        drmr_core::native::create_media_dir_all(&input).unwrap();
+        let audio = audio_sources_at_rate(&input.join("audio"), Some(profile.rate)).0;
+        shorten_final_declaration(&audio, profile);
+        shaka_source(&input.join("video"), "video", false);
+        let master = input.join("master.m3u8");
+        // HLS selection values match generated defaults; MP4 does not store those declarations.
+        std::fs::write(&master, "#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"default-audio-group\",NAME=\"stream_1\",LANGUAGE=\"en\",DEFAULT=NO,AUTOSELECT=YES,CHANNELS=\"2\",URI=\"audio/clear/media.m3u8\"\n#EXT-X-STREAM-INF:BANDWIDTH=1000000,RESOLUTION=320x180,AUDIO=\"default-audio-group\"\nvideo/media.m3u8\n").unwrap();
+        let before = common::snapshot_tree(&input);
+        let command = native_window_converter("packager");
+        let empty = InputKeys::default();
+        let hls = HlsInputKeys::default();
+        for (layout, source) in [("audio", &audio), ("joint", &master)] {
+            for target in PROTECTIONS {
+                let label = format!("{layout}-{}", target.as_str());
+                let mp4 = root.path().join(format!("{label}.mp4"));
+                convert(&command, source, &mp4, &empty, OutputFormat::Mp4, target);
+                let protected = keys(target);
+                let output = root.path().join(format!("ts-{label}"));
+                command
+                    .create_execution_plan(ExecutionPlanRequest {
+                        input: VerificationSource {
+                            input: &mp4,
+                            input_keys: &protected,
+                            hls_keys: &hls,
+                        },
+                        output: &output,
+                        format: Some(OutputFormat::HlsTs),
+                        target: TargetProtection::Clear,
+                    })
+                    .unwrap();
+                convert(
+                    &command,
+                    &mp4,
+                    &output,
+                    &protected,
+                    OutputFormat::HlsTs,
+                    TargetProtection::Clear,
+                );
+                let result = output.join("master.m3u8");
+                let proof = command
+                    .verify(VerificationRequest {
+                        source: VerificationSource {
+                            input: source,
+                            input_keys: &empty,
+                            hls_keys: &hls,
+                        },
+                        output: VerificationSource {
+                            input: &result,
+                            input_keys: &empty,
+                            hls_keys: &hls,
+                        },
+                    })
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "{} {label}: {}; source: {}; result: {}",
+                            profile.rate,
+                            error.0,
+                            std::fs::read_to_string(source).unwrap(),
+                            std::fs::read_to_string(&result).unwrap()
+                        )
+                    });
+                assert_native_window_proof(&proof);
+            }
+        }
+        assert_eq!(common::snapshot_tree(&input), before);
+    }
+}
