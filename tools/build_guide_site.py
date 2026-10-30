@@ -98,7 +98,7 @@ def body(source, locale):
             if end == len(lines) or end == i + 1:
                 raise ValueError("guide-code-fence")
             example += 1
-            label = f"ex{example}"
+            label = f"e{example}"
             code = escape("\n".join(lines[i + 1:end]) + "\n", quote=False)
             # A conjunction followed by whitespace cannot begin an HTML character reference.
             code = re.sub(r"&amp;&amp;(?=\s)", "&&", code)
@@ -140,7 +140,7 @@ def body(source, locale):
                     not all(re.fullmatch(r":?-{3,}:?", cell) for cell in rows[1])):
                 raise ValueError("guide-table-shape")
             table += 1
-            label = f"table-{table}-title"
+            label = f"t{table}"
             output.append(f'<div class="guide-table-scroll" role="region" aria-labelledby="{label}" tabindex="0">'
                           f'<table><caption id="{label}">{inline(heading)} — {labels["table"]} {table}</caption><thead><tr>'
                           + "".join('<th scope="col">' + inline(cell) + "</th>" for cell in rows[0])
@@ -174,10 +174,24 @@ def body(source, locale):
         output.append("<p>" + inline(" ".join(paragraph)) + "</p>")
     if chapter:
         output.append("</section>")
+    return compact_body("".join(output))
+
+
+def compact_body(markup):
+    # Only generated optional end tags from the HTML syntax are omitted.
+    # https://html.spec.whatwg.org/multipage/syntax.html#optional-tags
+    endings = {
+        "th": r"<(?:th\b|td\b|/tr>)", "td": r"<(?:th\b|td\b|/tr>)",
+        "tr": r"<(?:tr\b|/thead>|/tbody>)", "thead": r"<tbody\b",
+        "tbody": r"</table>", "li": r"<(?:li\b|/ul>|/ol>)",
+        "p": r"<(?:h[23]\b|figure\b|div\b|ol\b|ul\b|p\b|/section>)",
+    }
+    for tag, following in endings.items():
+        markup = re.sub("</" + tag + ">(?=" + following + ")", "", markup)
     # Compact only actual tags; literal code and all visible text are unchanged.
     tags = re.compile(r'<[a-z][^<>]*>')
-    attributes = re.compile(r'(id|class|aria-labelledby|scope|tabindex|data-code-language|data-guide-chapter|lang|hreflang)="([A-Za-z0-9_-]+)"')
-    return tags.sub(lambda tag: attributes.sub(r'\1=\2', tag[0]), "".join(output))
+    attributes = re.compile(r'(id|class|aria-labelledby|scope|tabindex|data-code-language|data-guide-chapter|lang|hreflang|href)="([A-Za-z0-9_./:#%+-]+)"')
+    return tags.sub(lambda tag: attributes.sub(r'\1=\2', tag[0]), markup)
 
 
 def expand_examples(source, locale, repository_root):

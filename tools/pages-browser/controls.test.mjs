@@ -338,9 +338,9 @@ test('conversion facts unify MP4 and distinguish TS video and TS audio-only rout
   assert.equal(matrixRows.flatMap(row => row.output).length, 20);
   assert.deepEqual(matrixRows[0].input, ['Clear', 'cenc', 'cbcs']);
   assert.deepEqual(matrixRows[2].input, ['Clear', 'cenc', 'cbcs', 'AES-128']);
-  assert.deepEqual(matrixRows[0].output, [['Clear', 'cenc', 'cbcs'], ['Clear', 'cenc', 'cbcs'], ['Clear', 'cbcs', 'AES-128'], ['Clear', 'AES-128', 'SAMPLE-AES']]);
+  assert.deepEqual(matrixRows[0].output, [['Clear', 'cenc', 'cbcs'], ['Clear', 'cenc', 'cbcs'], ['Clear', 'cenc', 'cbcs', 'AES-128'], ['Clear', 'AES-128', 'SAMPLE-AES']]);
   assert.deepEqual(matrixRows[3].output.slice(0, 2), [['Clear', 'cenc', 'cbcs'], ['Clear', 'cenc', 'cbcs']]);
-  assert.deepEqual(matrixRows[4].output, [['Clear', 'cenc', 'cbcs'], ['Clear', 'cenc', 'cbcs'], ['Clear', 'cbcs', 'AES-128'], ['Clear', 'AES-128', 'SAMPLE-AES']]);
+  assert.deepEqual(matrixRows[4].output, [['Clear', 'cenc', 'cbcs'], ['Clear', 'cenc', 'cbcs'], ['Clear', 'cenc', 'cbcs', 'AES-128'], ['Clear', 'AES-128', 'SAMPLE-AES']]);
   for (const index of [0, 1, 2]) assert.deepEqual(matrixRows[index].output[3], ['Clear', 'AES-128', 'SAMPLE-AES']);
 });
 
@@ -523,12 +523,12 @@ test('nested guide routes and generation inputs belong to the exact payload cont
 });
 
 test('each supported protection token has one stable recipe identity and unavailable cells have none', () => {
-  assert.equal(matrixRecipes.length, 60);
-  assert.equal(new Set(matrixRecipes.map(recipe => recipe.id)).size, 60);
+  assert.equal(matrixRecipes.length, 65);
+  assert.equal(new Set(matrixRecipes.map(recipe => recipe.id)).size, 65);
   assert.equal(matrixRecipes[0].id, 'recipe-mp4-mp4-clear');
   assert.equal(matrixRecipes.at(-1).id, 'recipe-hls-ts-audio-hls-ts-hls-sample-aes');
   for (const row of matrixRows) {
-    assert.equal(matrixRecipes.filter(recipe => recipe.row === row.id).length, 12);
+    assert.equal(matrixRecipes.filter(recipe => recipe.row === row.id).length, 13);
     for (const [column, labels] of row.output.entries()) {
       assert.deepEqual(matrixRecipes.filter(recipe => recipe.row === row.id && recipe.column === column)
         .map(recipe => recipe.label), labels);

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 
 // Reviewed public profile facts, independent of the rendered HTML.
-const standard = [['Clear', 'cenc', 'cbcs'], ['Clear', 'cenc', 'cbcs'], ['Clear', 'cbcs', 'AES-128'], ['Clear', 'AES-128', 'SAMPLE-AES']];
+const standard = [['Clear', 'cenc', 'cbcs'], ['Clear', 'cenc', 'cbcs'], ['Clear', 'cenc', 'cbcs', 'AES-128'], ['Clear', 'AES-128', 'SAMPLE-AES']];
 export const matrixColumns = ['MP4', 'DASH', 'HLS fMP4', 'HLS MPEG-TS'];
 export const matrixRows = [
   { id: 'mp4', format: 'MP4', input: ['Clear', 'cenc', 'cbcs'], output: standard },

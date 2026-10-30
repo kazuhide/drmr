@@ -34,7 +34,7 @@ still fails. The suite covers:
   accessibility trees. The first main section is a five-input-profile by four-output-format
   semantic table. Exact row/column headers, all 20 output cells, input protection
   qualifications and linked notes are checked independently of the HTML.
-  All 60 supported output-protection tokens link to their exact guide recipe;
+  All 65 supported output-protection tokens link to their exact guide recipe;
   the linked notes state profile restrictions. Focused matrix links also undergo
   point hit-testing so sticky input headers cannot cover their rendered boxes.
   Output links have atomic layout boxes. Only keyboard-focused links define a
@@ -68,7 +68,7 @@ still fails. The suite covers:
   language (two cases). The
   loopback job checks both `/` and the project `/drmr/` mount; the published job
   checks only `/drmr/`.
-- Eight separate cases activate all 60 matrix links in each language at the project
+- Eight separate cases activate all 65 matrix links in each language at the project
   mount with JavaScript disabled. Each case covers fifteen distinct recipes,
   retaining the same thirty-second case budget. Native Tab/Enter activates the
   first recipe of each batch; the remaining links use actual link clicks. Each destination

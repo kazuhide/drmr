@@ -195,7 +195,7 @@ MATRIX_ROWS = (
     ("hls-ts-audio", ("Clear", "AES-128", "SAMPLE-AES")),
 )
 STANDARD_OUTPUTS = (("Clear", "cenc", "cbcs"), ("Clear", "cenc", "cbcs"),
-                    ("Clear", "cbcs", "AES-128"), ("Clear", "AES-128", "SAMPLE-AES"))
+                    ("Clear", "cenc", "cbcs", "AES-128"), ("Clear", "AES-128", "SAMPLE-AES"))
 MATRIX_CELLS = (STANDARD_OUTPUTS,) * 5
 MATRIX_FORMATS = ("mp4", "dash", "hls", "hls-ts")
 MATRIX_DESTINATIONS = ("MP4", "DASH", "HLS / fMP4", "HLS / MPEG-TS")
@@ -265,6 +265,19 @@ class MatrixMarkup(HTMLParser):
         require(len(self.stack) == 1, "site-conversion-matrix")
 
     def handle_starttag(self, tag, attrs):
+        # Mirror only the optional end tags emitted by the bounded guide builder.
+        # https://html.spec.whatwg.org/multipage/syntax.html#optional-tags
+        cells = {("th", "tr"), ("td", "tr")}
+        if tag in ("th", "td"):
+            self.finish_optional(cells)
+        elif tag == "tr":
+            self.finish_optional(cells | {("tr", "thead"), ("tr", "tbody")})
+        elif tag == "tbody":
+            self.finish_optional(cells | {("tr", "thead"), ("thead", "table")})
+        elif tag == "li":
+            self.finish_optional({("li", "ol"), ("li", "ul")})
+        if tag in ("h2", "h3", "figure", "div", "ol", "ul", "p"):
+            self.finish_optional({("p", "section")})
         node = Element(tag, attrs)
         self.stack[-1].children.append(node)
         if tag not in self.VOID:
@@ -276,8 +289,23 @@ class MatrixMarkup(HTMLParser):
             self.handle_endtag(tag)
 
     def handle_endtag(self, tag):
+        cells = {("th", "tr"), ("td", "tr")}
+        if tag == "tr":
+            self.finish_optional(cells)
+        elif tag in ("thead", "tbody"):
+            self.finish_optional(cells | {("tr", tag)})
+        elif tag == "table":
+            self.finish_optional(cells | {("tr", "tbody"), ("tbody", "table")})
+        elif tag in ("ul", "ol"):
+            self.finish_optional({("li", tag)})
+        elif tag == "section":
+            self.finish_optional({("p", "section")})
         require(len(self.stack) > 1 and self.stack[-1].tag == tag, "site-conversion-matrix")
         self.stack.pop()
+
+    def finish_optional(self, pairs):
+        while len(self.stack) > 1 and (self.stack[-1].tag, self.stack[-2].tag) in pairs:
+            self.stack.pop()
 
     def handle_data(self, data):
         self.stack[-1].children.append(data)
@@ -373,8 +401,8 @@ def validate_matrix(text, language):
             require([matrix_text(node) for node in cell.descendants("sup")]
                     == (["1"] if column == 0 else ["4"] if column == 3 and index < 3 else []), "site-matrix-notes")
     require(len(list(section.one(id="matrix-limits").descendants("li"))) == 4, "site-matrix-notes")
-    require(len(list(table.descendants("a"))) == 60, "site-matrix-recipe-link")
-    return {"rows": 5, "output_columns": 4, "cells": 20, "caption": locale["caption"], "recipe_links": 60}
+    require(len(list(table.descendants("a"))) == 65, "site-matrix-recipe-link")
+    return {"rows": 5, "output_columns": 4, "cells": 20, "caption": locale["caption"], "recipe_links": 65}
 
 
 def validate_recipe_commands(code, row, output_format, target):
@@ -422,7 +450,7 @@ def validate_conversion_examples(chapter, language):
     require(len(setup) == 1 and setup[0].tag == "h3", token)
     headings = [node for node in chapter.descendants()
                 if node.attrs.get("id", "").startswith("recipe-") and node.attrs["id"] != "recipe-setup"]
-    require(len(headings) == 60 and [node.attrs.get("id") for node in headings]
+    require(len(headings) == 65 and [node.attrs.get("id") for node in headings]
             == [example[0] for example in expected], token)
     children = [node for node in chapter.children if isinstance(node, Element)]
     for heading, (identifier, label, row, output_format, target) in zip(headings, expected):
@@ -468,7 +496,7 @@ def validate_guide(text, language):
     examples = list(article.descendants("figure"))
     require(examples, "site-guide-code")
     for index, example in enumerate(examples, 1):
-        label = "ex" + str(index)
+        label = "e" + str(index)
         require(example.attrs.get("class") == "guide-example" and "role" not in example.attrs
                 and example.attrs.get("aria-labelledby") == label
                 and example.attrs.get("data-code-language") in ("sh", "bash", "powershell", "json", "text")
@@ -478,7 +506,7 @@ def validate_guide(text, language):
     tables = list(article.descendants("table"))
     require(tables, "site-guide-table")
     for index, table in enumerate(tables, 1):
-        label = "table-" + str(index) + "-title"
+        label = "t" + str(index)
         require(matrix_text(table.one("caption", id=label)), "site-guide-table")
         wrappers = [node for node in article.descendants("div") if node.attrs.get("aria-labelledby") == label]
         require(len(wrappers) == 1 and wrappers[0].attrs.get("class") == "guide-table-scroll"

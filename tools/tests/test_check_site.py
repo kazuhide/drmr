@@ -26,7 +26,7 @@ def recipe_fixture(language="en", first_example=1):
     }
     formats = (("mp4", "MP4", ("clear", "cenc", "cbcs")),
                ("dash", "DASH", ("clear", "cenc", "cbcs")),
-               ("hls", "HLS / fMP4", ("clear", "cbcs", "hls-aes128")),
+               ("hls", "HLS / fMP4", ("clear", "cenc", "cbcs", "hls-aes128")),
                ("hls-ts", "HLS / MPEG-TS", ("clear", "hls-aes128", "hls-sample-aes")))
     rows = ("mp4", "dash", "hls-fmp4", "hls-ts-video", "hls-ts-audio")
     protection_labels = {"clear": "Clear", "cenc": "cenc", "cbcs": "cbcs",
@@ -62,11 +62,38 @@ def recipe_fixture(language="en", first_example=1):
                 code = "\n\n".join(groups)
                 content.append('<h3 id="' + identifier + '" tabindex="-1">' + heading + '</h3>'
                                '<p><a href="#recipe-setup">Prepare the key configuration</a></p>'
-                               '<figure class="guide-example" data-code-language="sh" aria-labelledby="ex' + str(example) + '">'
-                               '<figcaption id="ex' + str(example) + '">Complete URL conversion example</figcaption>'
+                               '<figure class="guide-example" data-code-language="sh" aria-labelledby="e' + str(example) + '">'
+                               '<figcaption id="e' + str(example) + '">Complete URL conversion example</figcaption>'
                                '<pre tabindex="0"><code>' + escape(code) + '</code></pre></figure>')
                 example += 1
     return "".join(content)
+
+
+class OptionalGuideEndings(unittest.TestCase):
+    def test_only_generated_optional_endings_reconstruct_the_same_tree(self):
+        explicit = ('<section><p>Before.</p><p>After.</p><ol><li>One</li><li>Two</li></ol>'
+                    '<table><thead><tr><th>A</th><th>B</th></tr></thead>'
+                    '<tbody><tr><th>C</th><td>D</td></tr><tr><th>E</th><td>F</td></tr></tbody></table>'
+                    '<p>Final.</p></section>')
+        compact = ('<section><p>Before.<p>After.<ol><li>One<li>Two</ol>'
+                   '<table><thead><tr><th>A<th>B<tbody><tr><th>C<td>D<tr><th>E<td>F</table>'
+                   '<p>Final.</section>')
+
+        def tree(node):
+            if isinstance(node, str):
+                return node
+            return node.tag, node.attrs, [tree(child) for child in node.children]
+
+        self.assertEqual(tree(CHECK.MatrixMarkup(explicit).root), tree(CHECK.MatrixMarkup(compact).root))
+
+    def test_other_missing_endings_and_cross_parent_closures_remain_refused(self):
+        for markup in ('<section><p><strong>Missing</section>', '<ul><li>Wrong parent</ol>',
+                       '<table><thead><tr><th>Missing tbody</table>',
+                       '<section><p><a href="#x">Missing link ending<p>Other</section>',
+                       '<div><p>Omission outside the emitted parent</div>',
+                       '<table><tbody><tr><td><code>Missing code ending</table>'):
+            with self.subTest(markup=markup), self.assertRaises(CHECK.Failure):
+                CHECK.MatrixMarkup(markup)
 
 
 class Site(unittest.TestCase):
@@ -437,7 +464,9 @@ class Site(unittest.TestCase):
                 source.write_bytes((source.read_text(encoding="utf-8") +
                                   "\n[CLI chapter details](" + reference + ")\n").encode("utf-8"))
                 self.regenerate_guide_fixture()
-                self.assertIn('href="' + reference + '"', (self.site / output).read_text(encoding="utf-8"))
+                page = CHECK.Page()
+                page.feed((self.site / output).read_text(encoding="utf-8"))
+                self.assertIn(('a', 'href', reference), page.references)
                 self.assertEqual(self.check()["guides"][output]["chapters"], 18)
 
     def test_regeneration_does_not_waive_portable_chapter_url_boundaries(self):
@@ -458,7 +487,9 @@ class Site(unittest.TestCase):
                 with self.subTest(language=language, reference=reference):
                     source.write_bytes((original + "\n[Chapter details](" + reference + ")\n").encode("utf-8"))
                     self.regenerate_guide_fixture()
-                    self.assertIn('href="' + reference + '"', (self.site / output).read_text(encoding="utf-8"))
+                    page = CHECK.Page()
+                    page.feed((self.site / output).read_text(encoding="utf-8"))
+                    self.assertIn(('a', 'href', reference), page.references)
                     with self.assertRaisesRegex(CHECK.Failure, "site-guide-reference"):
                         self.check()
             source.write_bytes(original.encode("utf-8"))
@@ -494,7 +525,7 @@ class ConversionMatrix(unittest.TestCase):
                    ["プログレッシブ / フラグメント化", "フラグメント化MP4トラック", "フラグメント化MP4（fMP4）", "映像（音声は省略可）", "音声のみ"]),
         }
         heading, region, caption, corner, outside, profiles = labels[language]
-        standard = ["Clear/cenc/cbcs", "Clear/cenc/cbcs", "Clear/cbcs/AES-128", "Clear/AES-128/SAMPLE-AES"]
+        standard = ["Clear/cenc/cbcs", "Clear/cenc/cbcs", "Clear/cenc/cbcs/AES-128", "Clear/AES-128/SAMPLE-AES"]
         rows = [
             ("mp4", "MP4", "Clear/cenc/cbcs", standard),
             ("dash", "DASH", "Clear/cenc/cbcs", standard),
@@ -539,7 +570,7 @@ class ConversionMatrix(unittest.TestCase):
             with self.subTest(language=language):
                 result = CHECK.validate_matrix(self.fixture(language), language)
                 self.assertEqual((result["rows"], result["output_columns"], result["cells"]), (5, 4, 20))
-                self.assertEqual(result["recipe_links"], 60)
+                self.assertEqual(result["recipe_links"], 65)
 
     def test_each_output_protection_links_only_to_its_own_conversion_example(self):
         for language in ("en", "ja"):
@@ -642,11 +673,11 @@ class GuideMarkup(unittest.TestCase):
         for name in CHECK.GUIDE_CHAPTERS:
             body = "<p>Complete chapter content with a bounded, meaningful explanation.</p>"
             if name == "introduction":
-                body += ('<figure class="guide-example" data-code-language="sh" aria-labelledby="ex1">'
-                         '<figcaption id="ex1">Read media metadata</figcaption>'
+                body += ('<figure class="guide-example" data-code-language="sh" aria-labelledby="e1">'
+                         '<figcaption id="e1">Read media metadata</figcaption>'
                          '<pre tabindex="0"><code>drmr analyze source.mp4 --metadata-only</code></pre></figure>'
-                         '<div class="guide-table-scroll" role="region" aria-labelledby="table-1-title" tabindex="0">'
-                         '<table><caption id="table-1-title">Known profiles</caption><thead><tr><th scope="col">Input</th></tr></thead>'
+                         '<div class="guide-table-scroll" role="region" aria-labelledby="t1" tabindex="0">'
+                         '<table><caption id="t1">Known profiles</caption><thead><tr><th scope="col">Input</th></tr></thead>'
                          '<tbody><tr><th scope="row">MP4</th></tr></tbody></table></div>')
             if name == "url-input":
                 body += recipe_fixture(language, first_example=2)
@@ -677,10 +708,10 @@ class GuideMarkup(unittest.TestCase):
     def test_missing_chapters_code_labels_and_table_scopes_remain_refused(self):
         original = self.fixture()
         self.assertEqual(CHECK.validate_guide(original, "en"),
-                         {"chapters": 18, "code_examples": 61, "tables": 1, "conversion_examples": 60})
+                         {"chapters": 18, "code_examples": 66, "tables": 1, "conversion_examples": 65})
         for old, new in [('data-guide-chapter="verification"', 'data-guide-chapter="missing"'),
                          ('href="#verification"', 'href="#missing"'), ('tabindex="0"', ''),
-                         ('aria-labelledby="ex1"', ''), ('data-code-language="sh"', 'data-code-language="unknown"'), ('scope="row"', '')]:
+                         ('aria-labelledby="e1"', ''), ('data-code-language="sh"', 'data-code-language="unknown"'), ('scope="row"', '')]:
             with self.subTest(old=old), self.assertRaises(CHECK.Failure):
                 CHECK.validate_guide(original.replace(old, new, 1), "en")
 
@@ -733,7 +764,7 @@ class ConversionExamples(unittest.TestCase):
     def test_all_supported_examples_have_complete_url_to_independent_verification_flow(self):
         for language in ("en", "ja"):
             with self.subTest(language=language):
-                self.assertEqual(self.check(recipe_fixture(language), language), 60)
+                self.assertEqual(self.check(recipe_fixture(language), language), 65)
 
     def test_missing_extra_duplicate_or_unfocusable_recipe_heading_is_refused(self):
         original = recipe_fixture()
