@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { source, liveMode, requireCi, publicOrigin, localOrigin } from './source.mjs';
+import { locales } from './locales.mjs';
+import { matrixRecipeBatches } from './recipes.mjs';
 
 // Browser execution is authorized in GitHub Actions only, not on a local host.
 const live = liveMode(process.env.PAGES_LIVE);
@@ -33,7 +35,7 @@ export default defineConfig({
     mode: live ? 'published' : 'loopback',
     languages: ['en', 'ja'],
     suite: 'landing',
-    browserCases: 19,
+    browserCases: locales.length * (4 + 1 + matrixRecipeBatches.length) + 3,
     node: process.version,
     packages: Object.fromEntries(Object.entries(lock.packages).filter(([name]) => name.startsWith('node_modules/'))
       .map(([name, value]) => [name.slice('node_modules/'.length), value.version])),

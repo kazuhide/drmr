@@ -85,6 +85,12 @@ Diagnostic protection has several layers:
 - Conversion and verification failures use fixed error codes and safe progress labels without raw tool output.
 - The local web console selects protected key files by reference and excludes their contents from session, job, and result responses.
 
+Secret matching uses bounded memory and search work. If a diagnostic value
+exhausts its search budget, the entire value is replaced with the redaction
+marker. JSON Lines records keep their JSON structure; other fields are scrubbed
+independently. This limit prevents ambiguous overlapping matches from causing
+unbounded diagnostic processing.
+
 Global [progress output](usage.md#progress-output) uses fixed stage/task labels,
 elapsed time and numeric observations. It excludes URLs, keys, authentication
 headers, operator paths, raw metadata and raw tool output. This applies to both

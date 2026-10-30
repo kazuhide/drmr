@@ -14,6 +14,28 @@ export const guideLocales = [
     switchRoute: 'guide/' },
 ];
 
+// Read only the guide's literal fenced-example and expansion-marker syntax.
+// The rendered page cannot supply its own expected example count.
+export function guideSourceExampleCount(markdown, recipeCount) {
+  assert.equal(typeof markdown, 'string');
+  assert.ok(Number.isSafeInteger(recipeCount) && recipeCount > 0);
+  let fence = null, lines = 0, examples = 0, markers = 0;
+  for (const line of markdown.replace(/\r\n/g, '\n').split('\n')) {
+    if (fence !== null) {
+      if (line === '```') { assert.ok(lines > 0); fence = null; }
+      else lines++;
+    } else if (line.startsWith('```')) {
+      fence = line.slice(3);
+      assert.ok(['sh', 'bash', 'powershell', 'json', 'text'].includes(fence));
+      examples++; lines = 0;
+    } else if (line === '{{conversion-examples}}') markers++;
+  }
+  assert.equal(fence, null, 'Guide source fences must close');
+  assert.equal(markers, 1, 'Guide source must expand the recipe inventory exactly once');
+  assert.ok(examples > 0, 'Guide source must retain literal command examples');
+  return examples + recipeCount;
+}
+
 export function guideObservation() {
   const shown = element => {
     if (!element || !element.getClientRects().length) return false;

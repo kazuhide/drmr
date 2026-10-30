@@ -42,6 +42,8 @@ and the existing CLI workflow. Web and Desktop remain experimental.
   MP4 planning candidates. Execution still validates the actual container,
   tracks, clocks and presentation windows.
 - Normalize relative single-MP4 output paths before safe publication.
+- Mask nested encoded DRM records as complete values and bound diagnostic
+  search work. Keep JSON Lines records valid when a diagnostic is fully redacted.
 
 ### Requirements and verification
 

@@ -1237,3 +1237,152 @@ fn registered_and_per_call_nested_values_match_the_same_original_bytes() {
         );
     }
 }
+
+#[test]
+fn greedy_self_overlaps_with_a_suffix_fail_closed() {
+    let patterns = [regex::Regex::new("a+b").unwrap()];
+    let text = format!("{}b ordinary suffix", "a".repeat(4096));
+    // Exhausting the search budget must discard even the unprocessed suffix,
+    // rather than publish a partially scrubbed diagnostic.
+    assert_eq!(scrub_with(&patterns, &text), REDACTED);
+}
+
+#[test]
+fn a_failing_greedy_alternative_cannot_hide_work_behind_short_matches() {
+    let patterns = [regex::Regex::new("a.*b|a").unwrap()];
+    let text = format!("{}X", "a".repeat(4096));
+    assert_eq!(scrub_with(&patterns, &text), REDACTED);
+}
+
+#[test]
+fn a_very_long_public_literal_uses_the_same_fail_closed_budget() {
+    let patterns = [regex::Regex::new(&"a".repeat(4097)).unwrap()];
+    let text = format!("{}X", "a".repeat(4097 + 40));
+    assert_eq!(scrub_with(&patterns, &text), REDACTED);
+}
+
+#[test]
+fn literal_windows_cover_unicode_casefold_and_self_overlap_with_a_suffix() {
+    for pattern in [
+        regex::Regex::new("(?i)KK").unwrap(),
+        regex::RegexBuilder::new("KK")
+            .case_insensitive(true)
+            .build()
+            .unwrap(),
+    ] {
+        for padding in 16_375..16_393 {
+            let prefix = "前".repeat(padding);
+            let text = format!("{prefix}KKKX");
+            assert_eq!(
+                scrub_with(std::slice::from_ref(&pattern), &text),
+                format!("{prefix}{REDACTED}X")
+            );
+        }
+    }
+}
+
+#[test]
+fn many_registered_patterns_preserve_ordinary_labels_and_repeated_key_diagnostics() {
+    let values: Vec<_> = (0..40)
+        .map(|index| format!("operator-value-{index:04}"))
+        .collect();
+    let secrets = Secrets::with(values.iter());
+    let ordinary = "tool-output level=info returncode=0 duration_seconds=0.125";
+    assert_eq!(secrets.scrub(ordinary), ordinary);
+    assert_eq!(
+        secrets.scrub("before operator-value-0039 after"),
+        format!("before {REDACTED} after")
+    );
+    let writer = JsonLinesWriter::new(Vec::new(), Arc::new(secrets));
+    let ordinary_record = json!({
+        "event": "tool-output", "level": "info", "returncode": 0,
+        "duration_seconds": 0.125, "stderr": ordinary,
+    });
+    let line = writer.line(ordinary_record.as_object().unwrap());
+    assert_eq!(
+        serde_json::from_str::<Value>(&line).unwrap(),
+        ordinary_record
+    );
+    let secrets = Secrets::with([IV]);
+    let text = format!("tool-output: {}returncode=0", format!("{IV} ").repeat(16));
+    assert_eq!(
+        secrets.scrub(&text),
+        format!(
+            "tool-output: {}returncode=0",
+            format!("{REDACTED} ").repeat(16)
+        )
+    );
+}
+
+#[test]
+fn a_long_opaque_edge_match_with_a_suffix_has_bounded_work() {
+    let secret = format!("{}{}", "a".repeat(4097), "z".repeat(512));
+    let text = format!("{}{}X", "a".repeat(1_048_063), "z".repeat(512));
+    let patterns = patterns_for(&secret);
+    let start = Instant::now();
+    let scrubbed = scrub_with(&patterns, &text);
+    let elapsed = start.elapsed();
+    // This asserts the safe fallback independently from any timing threshold.
+    assert_eq!(scrubbed, REDACTED);
+    assert!(!scrubbed.contains(&secret));
+    assert!(!scrubbed.contains(&"z".repeat(512)));
+    if !cfg!(debug_assertions) && std::env::var_os("DRMR_SCRUB_TIMING").is_some() {
+        eprintln!(
+            "opaque suffix scrub: bytes={} patterns={} elapsed_ms={:.3}",
+            text.len(),
+            patterns.len(),
+            elapsed.as_secs_f64() * 1000.0
+        );
+    }
+}
+
+#[test]
+fn the_json_lines_guard_keeps_structure_when_one_diagnostic_exhausts_its_budget() {
+    let secret = format!("{}{}", "a".repeat(4097), "z".repeat(512));
+    let diagnostic = format!("{}{}X", "a".repeat(8192), "z".repeat(512));
+    let secrets = Arc::new(Secrets::with([secret]));
+    let writer = JsonLinesWriter::new(Vec::new(), secrets);
+    let record = json!({
+        "event": "tool-output",
+        "level": "error",
+        "returncode": 7,
+        "duration_seconds": 0.125,
+        "stderr": diagnostic,
+        "nested": [{"diagnostic": diagnostic, "count": 42}],
+    });
+    let line = writer.line(record.as_object().unwrap());
+    let parsed: Value = serde_json::from_str(&line).expect("guard must retain a JSON object");
+    assert_eq!(parsed["event"], "tool-output");
+    assert_eq!(parsed["level"], "error");
+    assert_eq!(parsed["returncode"], 7);
+    assert_eq!(parsed["duration_seconds"], 0.125);
+    assert_eq!(parsed["stderr"], REDACTED);
+    assert_eq!(parsed["nested"][0]["diagnostic"], REDACTED);
+    assert_eq!(parsed["nested"][0]["count"], 42);
+    assert!(!line.contains(&"z".repeat(512)));
+}
+
+#[test]
+fn the_json_lines_guard_scrubs_keys_json_escapes_and_numeric_tokens_safely() {
+    let quoted = "operator\"slash\\value-000";
+    let escaped = r"\u79d8\u5bc6";
+    let secrets = Arc::new(Secrets::with([quoted, escaped, "1234567890"]));
+    let writer = JsonLinesWriter::new(Vec::new(), secrets);
+    let record = json!({
+        "event": "tool-output", "returncode": 7,
+        "stderr": quoted, "escaped": "秘密", "numeric": 1_234_567_890_u64,
+        "nested": {quoted: "masked-key", "ordinary": 42},
+    });
+    let line = writer.line(record.as_object().unwrap());
+    let parsed: Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(parsed["event"], "tool-output");
+    assert_eq!(parsed["returncode"], 7);
+    assert_eq!(parsed["stderr"], REDACTED);
+    assert_eq!(parsed["escaped"], REDACTED);
+    assert_eq!(parsed["numeric"], REDACTED);
+    assert_eq!(parsed["nested"][REDACTED], "masked-key");
+    assert_eq!(parsed["nested"]["ordinary"], 42);
+    assert!(!line.contains(quoted));
+    assert!(!line.contains(escaped));
+    assert!(!line.contains("1234567890"));
+}

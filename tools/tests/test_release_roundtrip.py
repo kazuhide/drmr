@@ -39,6 +39,21 @@ class ReleaseMatrix(unittest.TestCase):
         self.assertFalse(value["license_playback_verified"])
         self.assertLess(len(json.dumps(value, indent=2)), ROUNDTRIP.PREPARE.MAX_ROUNDTRIP_REPORT)
 
+    def test_tuple_writer_and_list_case_profiles_keep_the_same_actual_providers(self):
+        for profile in CONTRACT.OUTPUTS:
+            expected = roundtrip_reports.providers(profile)
+            with self.subTest(profile=profile):
+                self.assertEqual(CONTRACT.drms(profile), expected)
+                self.assertEqual(CONTRACT.drms(list(profile)), expected)
+        value = roundtrip_reports.complete(CONTRACT)
+        for record in value["records"]:
+            self.assertIsInstance(record["target"], list)
+            if record["kind"] != "layout-condition":
+                self.assertEqual(record["forward"]["drms"], roundtrip_reports.providers(record["target"]))
+            if record["kind"] == "roundtrip":
+                self.assertEqual(record["backward"]["drms"], roundtrip_reports.providers(record["source"]))
+        self.assertIs(self.validate(value), value)
+
     def test_missing_duplicate_or_reordered_records_fail_closed(self):
         original = roundtrip_reports.complete(CONTRACT)
         for change in (lambda value: value["records"].pop(),

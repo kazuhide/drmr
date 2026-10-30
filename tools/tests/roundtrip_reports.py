@@ -1,6 +1,19 @@
 """Synthetic complete reports for contract and release-assembler unit tests."""
 import copy
 
+PROVIDERS = {
+    ("dash", "cenc"): ("widevine", "playready"),
+    ("dash", "cbcs"): ("widevine", "playready"),
+    ("hls-fmp4", "cenc"): ("widevine", "playready"),
+    ("hls-fmp4", "cbcs"): ("fairplay", "widevine", "playready"),
+    ("hls-ts", "hls-sample-aes"): ("fairplay",),
+}
+
+
+def providers(profile):
+    # This fixture oracle must not share the production validator's selection.
+    return list(PROVIDERS.get(tuple(profile), ()))
+
 
 def native(container):
     value = {"schema_version": 2, "required_depth": "native", "scope": "comparison", "passed": True,
@@ -20,7 +33,7 @@ def complete(contract, head="a" * 40, tree="b" * 40, target="aarch64-apple-darwi
     def leg(profile, layout):
         return {"format": profile[0], "protection": profile[1],
                 "tracks": ["video", "audio"] if contract.joint(layout) else ["audio"] if layout.startswith("aac") else ["video"],
-                "drms": contract.drms(profile), "conversion": native(profile[0]),
+                "drms": providers(profile), "conversion": native(profile[0]),
                 "independent_verification": native(profile[0]), "output_graph": copy.deepcopy(graph)}
 
     fixtures = []

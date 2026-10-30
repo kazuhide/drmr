@@ -129,13 +129,14 @@ def native_proof(value, container, protection=None):
 
 
 def drms(profile):
-    if profile[0] in ("dash", "hls-fmp4") and profile[1] == "cenc":
+    container, protection = profile
+    if container in ("dash", "hls-fmp4") and protection == "cenc":
         return ["widevine", "playready"]
-    if profile[0] == "dash" and profile[1] == "cbcs":
+    if container == "dash" and protection == "cbcs":
         return ["widevine", "playready"]
-    if profile == ("hls-fmp4", "cbcs"):
+    if container == "hls-fmp4" and protection == "cbcs":
         return ["fairplay", "widevine", "playready"]
-    if profile == ("hls-ts", "hls-sample-aes"):
+    if container == "hls-ts" and protection == "hls-sample-aes":
         return ["fairplay"]
     return []
 

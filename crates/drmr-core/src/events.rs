@@ -1,6 +1,9 @@
 //! Structured activity records and event sinks shared by media operations.
 
-use crate::{canonical::Dumps, toolrun::Secrets};
+use crate::{
+    canonical::Dumps,
+    toolrun::{REDACTED, Secrets},
+};
 use serde_json::{Map, Value};
 use std::io::Write;
 use std::sync::Mutex;
@@ -49,8 +52,8 @@ impl Sink for Collector {
     }
 }
 
-/// The JSON-Lines writer of the CLI entry points: one lock, one line per record, the line
-/// scrubbed of the job's secrets (`CLI log output`).
+/// The JSON-Lines writer of the CLI entry points: one lock, one line per record, with
+/// string values, keys and serialized scalar tokens scrubbed of the job's secrets.
 pub struct JsonLinesWriter<W: Write + Send> {
     out: Mutex<W>,
     secrets: Arc<Secrets>,
@@ -76,13 +79,55 @@ impl<W: Write + Send> JsonLinesWriter<W> {
 
     /// The serialized, scrubbed line (without the newline) a record becomes.
     pub fn line(&self, record: &Record) -> String {
-        self.secrets
-            .scrub(&Dumps::DEFAULT.dumps(&Value::Object(record.clone())))
+        Dumps::DEFAULT.dumps(&scrub_value(&self.secrets, &Value::Object(record.clone())))
     }
 
     /// Give the writer back.
     pub fn into_inner(self) -> W {
         self.out.into_inner().expect("writer lock")
+    }
+}
+
+fn scrub_value(secrets: &Secrets, value: &Value) -> Value {
+    match value {
+        Value::Object(fields) => Value::Object(
+            fields
+                .iter()
+                .map(|(key, value)| (scrub_string(secrets, key), scrub_value(secrets, value)))
+                .collect(),
+        ),
+        Value::Array(values) => Value::Array(
+            values
+                .iter()
+                .map(|value| scrub_value(secrets, value))
+                .collect(),
+        ),
+        Value::String(text) => Value::String(scrub_string(secrets, text)),
+        _ => {
+            let token = Dumps::DEFAULT.dumps(value);
+            if secrets.scrub(&token) == token {
+                value.clone()
+            } else {
+                Value::String(REDACTED.to_string())
+            }
+        }
+    }
+}
+
+fn scrub_string(secrets: &Secrets, text: &str) -> String {
+    let scrubbed = secrets.scrub(text);
+    let token = Dumps::DEFAULT.dumps(&Value::String(scrubbed.clone()));
+    let guarded = secrets.scrub(&token);
+    if guarded == token {
+        return scrubbed;
+    }
+    // Scrub the serialized token as well as the original value, covering JSON
+    // escapes without writing a replacement into the surrounding JSON syntax.
+    // A work-budget fallback or a match across quotes discards only this value;
+    // fixed event labels, metrics and the rest of the record remain available.
+    match serde_json::from_str(&guarded) {
+        Ok(Value::String(text)) => text,
+        _ => REDACTED.to_string(),
     }
 }
 

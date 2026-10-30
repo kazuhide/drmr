@@ -169,6 +169,17 @@ fn check_values(
     }
     Ok(())
 }
+pub(super) fn iv_equivalent(a: &str, b: &str) -> bool {
+    use crate::conversion::SegmentIv;
+    // HLS hexadecimal integers may use either prefix case and leading zeroes.
+    match (
+        SegmentIv::from_hex(a.strip_prefix("0X").unwrap_or(a)),
+        SegmentIv::from_hex(b.strip_prefix("0X").unwrap_or(b)),
+    ) {
+        (Ok(a), Ok(b)) => a.0 == b.0,
+        _ => false,
+    }
+}
 pub(super) fn validate_iv(
     attrs: &crate::m3u8::Attributes,
     target: TargetProtection,
@@ -176,12 +187,7 @@ pub(super) fn validate_iv(
 ) -> Result<(), ConversionError> {
     if let Some(actual) = attrs.get("IV")
         && (target != TargetProtection::Cbcs
-            || expected.is_none_or(|expected| {
-                !actual
-                    .strip_prefix("0x")
-                    .unwrap_or(actual)
-                    .eq_ignore_ascii_case(expected)
-            }))
+            || expected.is_none_or(|expected| !iv_equivalent(actual, expected)))
     {
         return Err(MISMATCH);
     }
@@ -265,4 +271,27 @@ fn replace(path: &Path, text: &str, stop: &Stop) -> Result<(), ConversionError> 
         .write_all(text.as_bytes())
         .and_then(|()| output.sync_all())
         .map_err(|_| MISMATCH)
+}
+
+#[cfg(test)]
+mod iv_tests {
+    use super::*;
+    #[test]
+    fn iv_comparison_uses_bounded_integer_values_and_never_accepts_changed_bytes() {
+        assert!(iv_equivalent(
+            "0XABCDEF",
+            "00000000000000000000000000abcdef"
+        ));
+        assert!(iv_equivalent("0x00", "0X0000"));
+        for invalid in [
+            "",
+            "0x",
+            "0X",
+            "0xGG",
+            "0x123456789012345678901234567890123",
+        ] {
+            assert!(!iv_equivalent(invalid, invalid));
+        }
+        assert!(!iv_equivalent("0x01", "0x00"));
+    }
 }

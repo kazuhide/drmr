@@ -138,6 +138,48 @@ fn patch_box(source: &Path, output: &Path, kind: [u8; 4], offset: usize, bytes: 
     data[at..at + bytes.len()].copy_from_slice(bytes);
     std::fs::write(output, data).unwrap();
 }
+fn repeated_edit_window(source: &Path, output: &Path) {
+    let mut data = std::fs::read(source).unwrap();
+    let boxes = drmr_core::mp4::parse_boxes(&data).unwrap();
+    let nodes = drmr_core::mp4::walk(&boxes);
+    let edit = nodes
+        .iter()
+        .find(|node| node.kind() == *b"elst")
+        .unwrap()
+        .header;
+    let movie = nodes
+        .iter()
+        .find(|node| node.kind() == *b"moov")
+        .unwrap()
+        .header;
+    let media = nodes
+        .iter()
+        .find(|node| node.kind() == *b"mdat")
+        .unwrap()
+        .header;
+    // This fixture puts moov after mdat, so growing an edit cannot change any chunk offset.
+    assert!(movie.offset >= media.offset + media.size);
+    let payload = edit.payload(&data);
+    assert_eq!(&payload[..8], &[0, 0, 0, 0, 0, 0, 0, 1]);
+    assert_eq!(payload.len(), 20);
+    let duration = u32::from_be_bytes(payload[8..12].try_into().unwrap());
+    let mut second = payload[8..].to_vec();
+    second[..4].copy_from_slice(&(duration - duration / 2).to_be_bytes());
+    let first = edit.offset + edit.header_size;
+    data[first + 4..first + 8].copy_from_slice(&2_u32.to_be_bytes());
+    data[first + 8..first + 12].copy_from_slice(&(duration / 2).to_be_bytes());
+    for node in nodes.iter().filter(|node| {
+        node.header.offset <= edit.offset
+            && node.header.offset + node.header.size >= edit.offset + edit.size
+    }) {
+        assert_eq!(node.header.header_size, 8);
+        let size = u32::try_from(node.header.size + second.len()).unwrap();
+        data[node.header.offset..node.header.offset + 4].copy_from_slice(&size.to_be_bytes());
+    }
+    data.splice(edit.offset + edit.size..edit.offset + edit.size, second);
+    std::fs::write(output, data).unwrap();
+}
+
 #[test]
 fn unsupported_audio_edits_and_playback_headers_are_refused_without_publication() {
     let root = tempfile::tempdir().unwrap();
@@ -146,7 +188,8 @@ fn unsupported_audio_edits_and_playback_headers_are_refused_without_publication(
     let mut errors = Vec::new();
     for (label, kind, at, value, code) in [
         (
-            "multiple",
+            // The declared count exceeds the available edit entries.
+            "truncated-edits",
             *b"elst",
             4,
             2_u32,
@@ -226,10 +269,31 @@ fn unsupported_audio_edits_and_playback_headers_are_refused_without_publication(
         assert_eq!(std::fs::read(&input).unwrap(), before);
     }
 
-    for (_, code, result) in errors {
+    for (label, code, result) in errors {
+        let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+        assert_eq!(report["error"]["code"], code, "{label}");
         assert_conversion_failure(&result, code, 1);
     }
 }
+
+#[test]
+fn a_well_formed_repeated_audio_window_is_refused_without_publication() {
+    let root = tempfile::tempdir().unwrap();
+    let original = root.path().join("original.mp4");
+    let input = root.path().join("multiple-valid.mp4");
+    let output = root.path().join("multiple-valid-output.mp4");
+    source(&original, false);
+    repeated_edit_window(&original, &input);
+    let before = std::fs::read(&input).unwrap();
+    assert_conversion_failure(
+        &convert(&input, &output),
+        "presentation-window-not-supported",
+        1,
+    );
+    assert!(!output.exists());
+    assert_eq!(std::fs::read(&input).unwrap(), before);
+}
+
 #[test]
 fn a_changed_finite_tail_fails_complete_decode_even_when_all_packet_clocks_match() {
     let root = tempfile::tempdir().unwrap();

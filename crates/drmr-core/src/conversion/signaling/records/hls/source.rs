@@ -85,7 +85,15 @@ pub(in crate::conversion) fn validate_source(
         let declarations = parse(&declarations)?;
         let selected = parse(&sessions)?;
         for (format, session) in selected {
-            if declarations.get(&format) != Some(&session) {
+            let media = declarations.get(&format).ok_or(INVALID)?;
+            let session = crate::conversion::hls::attributes(&session).map_err(|_| INVALID)?;
+            let media = crate::conversion::hls::attributes(media).map_err(|_| INVALID)?;
+            if session.len() != media.len()
+                || session.iter().any(|(name, value)| match media.get(name) {
+                    Some(expected) if name == "IV" => !super::iv_equivalent(value, expected),
+                    expected => expected != Some(value),
+                })
+            {
                 return Err(INVALID);
             }
         }

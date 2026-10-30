@@ -967,6 +967,14 @@ impl Converter {
         input: VerificationSource<'_>,
         purpose: SourceValidationPurpose,
     ) -> Result<SourceQualification, ConversionError> {
+        if matches!(purpose, SourceValidationPurpose::Conversion)
+            && self
+                .output_signaling
+                .as_ref()
+                .is_some_and(|value| value.is_multi())
+        {
+            self.validate_drm_metadata_before_decode(input.input)?;
+        }
         let qualified = self.validate_source_inner(input, purpose)?;
         if let Some(sink) = &self.backend.activity {
             sink.emit(
@@ -1953,7 +1961,11 @@ fn prepare_presentation_mode(
                         .map_or((&path, index), |views| (&views[index], 0));
                     let mut prepared =
                         prepare_for(selected, selector, track.kind, input.input_keys, purpose)?;
-                    if actual.tracks.len() == 1 || track_views.is_some() {
+                    if (actual.tracks.len() == 1 || track_views.is_some())
+                        && super::audio::movie(selected)?.fragmented
+                    {
+                        // Only fragmented inputs use the canonical terminal AAC clock.
+                        // Progressive inputs retain their existing edit/profile admission.
                         prepared.clock = manifested_clock(selected, backend)?;
                         bind_audio_presentation(&mut prepared, backend, input.input_keys, stage)?;
                     }

@@ -9,6 +9,13 @@ export const matrixRecipes = matrixRows.flatMap(row => row.output.flatMap((label
   labels.map(label => ({ row: row.id, column, label, format: formats[column], target: targets[label],
     id: `recipe-${row.id}-${formats[column]}-${targets[label]}` }))));
 
+// Non-matrix targets are the independently inventoried navigation and code links.
+export const landingFocusTargetCounts = { en: 37 + matrixRecipes.length, ja: 36 + matrixRecipes.length };
+export const matrixRecipeBatches = Array.from({ length: Math.ceil(matrixRecipes.length / 15) }, (_, index) => {
+  const offset = index * 15, end = Math.min(offset + 15, matrixRecipes.length);
+  return { offset, end, recipes: matrixRecipes.slice(offset, end) };
+});
+
 const inputProfiles = {
   mp4: ['Clear', 'cenc', 'cbcs'], dash: ['Clear', 'cenc', 'cbcs'],
   'hls-fmp4': ['Clear', 'cenc', 'cbcs', 'AES-128'],

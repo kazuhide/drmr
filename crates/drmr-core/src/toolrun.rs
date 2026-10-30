@@ -8,7 +8,8 @@
 //! encoding a tool may print them in — contiguous hex in any case, bytes separated by spaces,
 //! colons, commas or `0x` prefixes, base64; a text secret as written, XML-escaped,
 //! percent-encoded, as UTF-8 and UTF-16LE hex and as base64 of both. The JSON-Lines writer
-//! applies the same scrub to each serialized line as the last guard.
+//! applies the same scrub to each record value and serialized JSON token as the last guard,
+//! retaining the JSON structure even when a diagnostic must be discarded.
 //!
 //! A tool that cannot complete (spawn failure, timeout, capture limit) is a [`ToolError`] naming the tool and
 //! the kind of failure only, never the argv.
@@ -81,6 +82,7 @@ mod cleanup;
 mod cohort_tests;
 #[cfg(test)]
 mod packager_jobs_tests;
+mod scrub;
 pub use cleanup::CleanupOwner;
 pub(crate) use cleanup::CleanupReceipt;
 /// Shorter strings would redact unrelated text; keys and IVs are 32 hex characters.
@@ -179,57 +181,13 @@ pub fn patterns_for(secret: &str) -> Vec<Regex> {
 }
 
 /// `text` with every match of `patterns` replaced by [`REDACTED`].
+/// If arbitrary regex searches exhaust their fixed work budget, the entire text is redacted.
 pub fn scrub_with(patterns: &[Regex], text: &str) -> String {
     scrub_combined(patterns, &[], text)
 }
 
 fn scrub_combined(registered: &[Regex], extra: &[Regex], text: &str) -> String {
-    // Keep one pending match per pattern. Match original bytes so an inner PRO
-    // cannot destroy the later match of its full PSSH or data URI. The heap is
-    // bounded by pattern count, including for millions of overlapping matches.
-    let mut pending = std::collections::BinaryHeap::with_capacity(registered.len() + extra.len());
-    for (index, pattern) in registered.iter().chain(extra).enumerate() {
-        if let Some(found) = pattern.find(text) {
-            pending.push(std::cmp::Reverse((found.start(), found.end(), index)));
-        }
-    }
-    let mut result = String::with_capacity(text.len());
-    let mut at = 0;
-    let mut active: Option<(usize, usize)> = None;
-    while let Some(std::cmp::Reverse((start, end, index))) = pending.pop() {
-        if let Some((first, last)) = active
-            && start < last
-        {
-            active = Some((first, last.max(end)));
-        } else {
-            if let Some((first, last)) = active {
-                result.push_str(&text[at..first]);
-                result.push_str(REDACTED);
-                at = last;
-            }
-            active = Some((start, end));
-        }
-        if active.is_some_and(|(first, last)| first < last && last == text.len()) {
-            break;
-        }
-        // Advance from the previous start by one complete character, rather
-        // than from its end, to find self-overlapping secrets without splitting UTF-8.
-        if let Some(character) = text[start..].chars().next()
-            && let Some(found) = registered
-                .get(index)
-                .unwrap_or_else(|| &extra[index - registered.len()])
-                .find_at(text, start + character.len_utf8())
-        {
-            pending.push(std::cmp::Reverse((found.start(), found.end(), index)));
-        }
-    }
-    if let Some((first, last)) = active {
-        result.push_str(&text[at..first]);
-        result.push_str(REDACTED);
-        at = last;
-    }
-    result.push_str(&text[at..]);
-    result
+    scrub::combined(registered, extra, text)
 }
 
 /// The job's secrets as patterns for every encoding.

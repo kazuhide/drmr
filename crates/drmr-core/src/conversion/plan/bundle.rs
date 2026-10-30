@@ -276,6 +276,9 @@ impl Converter {
                     .map(|output| output.processing.unwrap_or(self.processing_mode)),
             ));
         let source = super::rebound(request.input, &frozen);
+        if outputs.iter().any(|output| !output.drms.is_empty()) {
+            command.validate_drm_metadata_before_decode(source.input)?;
+        }
         let qualified = command.validate_source_preparing(
             source,
             SourceValidationPurpose::Conversion,
@@ -516,6 +519,9 @@ impl Converter {
             HlsTargetPolicy::Legacy
         };
         command.source_hls_target_ms = None;
+        if plan.outputs.iter().any(|output| !output.drms.is_empty()) {
+            command.validate_drm_metadata_before_decode(source.input)?;
+        }
         let qualified = command.validate_source_preparing(
             source,
             SourceValidationPurpose::Conversion,

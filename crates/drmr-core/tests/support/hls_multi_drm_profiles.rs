@@ -215,59 +215,154 @@ fn hls_and_dash_opaque_initialization_metadata_refuses_before_any_tool() {
         } else {
             "manifest.mpd"
         });
-        for mode in [ProcessingMode::Stitch, ProcessingMode::Segments] {
-            let (proof, _) = converter();
-            // Native media proof alone deliberately does not authorize opaque controls.
-            assert!(
-                proof
-                    .with_processing(mode)
-                    .validate_source(
-                        view(&entrypoint, &empty, &hls),
-                        SourceValidationPurpose::Conversion
-                    )
-                    .unwrap()
-                    .verification
-                    .passed
-            );
-            let events = Arc::new(Collector::default());
-            let command = Converter::new(
-                Arc::new(ToolRunner::new(Arc::new(Secrets::new()), events.clone())),
-                "must-not-start-packager",
-                "must-not-start-decoder",
-            )
-            .with_processing(mode)
-            .with_output_signaling(keys.signaling.clone());
-            let output = root.path().join(format!("refused-{format:?}-{mode:?}"));
-            let error = command
-                .convert(ConversionRequest {
-                    input: &entrypoint,
-                    output: &output,
-                    format: OutputFormat::Hls,
-                    target: TargetProtection::Cbcs,
-                    input_keys: &empty,
-                    hls_input_keys: &hls,
-                    output_key: keys.output.as_ref(),
-                    hls_key_uri: keys.hls_output_uri(),
-                    hls_output_key: None,
-                })
-                .unwrap_err();
-            assert_eq!(
-                error.0, "output-signaling-profile-not-supported",
-                "{format:?}/{mode:?}"
-            );
-            assert!(!output.exists());
-            assert!(
-                !events
-                    .records()
-                    .iter()
-                    .any(|record| record.get("event") == Some(&serde_json::json!("command")))
-            );
+        let manifest = std::fs::read_to_string(&entrypoint).unwrap();
+        for resolution in [true, false] {
+            let declaration = if resolution {
+                manifest.clone()
+            } else {
+                without_resolution(&manifest)
+            };
+            assert!(resolution || declaration != manifest);
+            std::fs::write(&entrypoint, declaration).unwrap();
+            for mode in [ProcessingMode::Stitch, ProcessingMode::Segments] {
+                let (proof, _) = converter();
+                // Native media proof alone deliberately does not authorize opaque controls.
+                assert!(
+                    proof
+                        .with_processing(mode)
+                        .validate_source(
+                            view(&entrypoint, &empty, &hls),
+                            SourceValidationPurpose::Conversion
+                        )
+                        .unwrap()
+                        .verification
+                        .passed
+                );
+                for decode in [false, true] {
+                    refuse_opaque_before_tools(
+                        &entrypoint,
+                        root.path(),
+                        &keys,
+                        mode,
+                        resolution,
+                        decode,
+                    );
+                }
+            }
         }
+        std::fs::write(&entrypoint, manifest).unwrap();
         assert_eq!(
             std::fs::read(&initialization).unwrap(),
             [original, b"\0\0\0\x08skip".to_vec()].concat()
         );
     }
+}
+
+fn without_resolution(manifest: &str) -> String {
+    let mut text: String = manifest
+        .lines()
+        .map(|line| {
+            line.split(',')
+                .filter(|attribute| !attribute.starts_with("RESOLUTION="))
+                .collect::<Vec<_>>()
+                .join(",")
+                + "\n"
+        })
+        .collect();
+    for name in ["width", "height"] {
+        let prefix = format!(" {name}=\"");
+        while let Some(at) = text.find(&prefix) {
+            let end = at + prefix.len() + text[at + prefix.len()..].find('"').unwrap() + 1;
+            text.replace_range(at..end, "");
+        }
+    }
+    text
+}
+
+fn refuse_opaque_before_tools(
+    input: &Path,
+    root: &Path,
+    keys: &key_file::OperatorKeys,
+    mode: ProcessingMode,
+    resolution: bool,
+    decode: bool,
+) {
+    let events = Arc::new(Collector::default());
+    let command = Converter::new(
+        Arc::new(ToolRunner::new(Arc::new(Secrets::new()), events.clone())),
+        "must-not-start-packager",
+        "must-not-start-decoder",
+    )
+    .with_ffprobe("must-not-start-probe")
+    .with_decode(decode)
+    .with_processing(mode);
+    let empty = InputKeys::default();
+    let hls = HlsInputKeys::default();
+    let label = format!("{:?}-{mode:?}-{resolution}-{decode}", input.extension());
+    let output = root.join(format!("refused-{label}"));
+    let systems = keys.signaling.as_ref().unwrap().systems();
+    assert_eq!(
+        command
+            .validate_drm_source(
+                view(input, &empty, &hls),
+                &systems,
+                OutputFormat::Hls,
+                TargetProtection::Cbcs
+            )
+            .unwrap_err()
+            .0,
+        "output-signaling-profile-not-supported",
+        "public source/{label}"
+    );
+    let outputs = [drmr_core::conversion::plan::bundle::BundleOutputIntent {
+        id: "hls".into(),
+        format: OutputFormat::Hls,
+        target: TargetProtection::Cbcs,
+        drms: systems,
+        conformance: drmr_core::conversion::plan::bundle::ManifestValidation::None,
+        processing: Some(mode),
+        dash_addressing: None,
+    }];
+    let bundle_output = root.join(format!("refused-bundle-{label}"));
+    assert_eq!(
+        command
+            .create_bundle_plan(drmr_core::conversion::plan::bundle::BundlePlanRequest {
+                input: view(input, &empty, &hls),
+                output_root: &bundle_output,
+                outputs: &outputs,
+            })
+            .unwrap_err()
+            .0,
+        "output-signaling-profile-not-supported",
+        "bundle/{label}"
+    );
+    assert!(!bundle_output.exists());
+    let error = command
+        .with_output_signaling(keys.signaling.clone())
+        .convert(ConversionRequest {
+            input,
+            output: &output,
+            format: OutputFormat::Hls,
+            target: TargetProtection::Cbcs,
+            input_keys: &empty,
+            hls_input_keys: &hls,
+            output_key: keys.output.as_ref(),
+            hls_key_uri: keys.hls_output_uri(),
+            hls_output_key: None,
+        })
+        .unwrap_err();
+    assert_eq!(
+        error.0, "output-signaling-profile-not-supported",
+        "convert/{label}"
+    );
+    assert!(!output.exists());
+    assert!(
+        !events
+            .records()
+            .iter()
+            .any(|record| record.get("event") == Some(&serde_json::json!("command"))),
+        "{label}"
+    );
 }
 
 #[test]

@@ -1,11 +1,14 @@
 import { guideChapters, requireGuideLayout, requireGuideMovement, codeAriaTemplate, requireGuideCheckpoint,
-  guideFiguresObservation, requireGuideFigures, guideScrollObservation, requireGuideCodeEdge, requireGuidePrintCode } from './guide.mjs';
+  guideFiguresObservation, requireGuideFigures, guideScrollObservation, requireGuideCodeEdge, requireGuidePrintCode,
+  guideSourceExampleCount } from './guide.mjs';
 import { locales } from './locales.mjs';
 import { matrixRows, matrixColumns, matrixObservation, requireMatrixLayout, requireMatrixMovement, completeMatrixKey, MatrixKeyDeadline } from './matrix.mjs';
-import { matrixRecipes, recipeObservation, requireRecipe, requireRecipeIdentity, requireRecipePosition, requireMatrixLinkExposure } from './recipes.mjs';
+import { matrixRecipes, matrixRecipeBatches, landingFocusTargetCounts, recipeObservation, requireRecipe,
+  requireRecipeIdentity, requireRecipePosition, requireMatrixLinkExposure } from './recipes.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runInNewContext } from 'node:vm';
+import { readFileSync } from 'node:fs';
 import { assets, assetRoute, assetPath, digest, liveMode, allowedRequest } from './source.mjs';
 import * as identity from './source.mjs';
 import { matchesPublication } from './wait-published.mjs';
@@ -534,6 +537,32 @@ test('each supported protection token has one stable recipe identity and unavail
         .map(recipe => recipe.label), labels);
     }
   }
+});
+
+test('every matrix recipe belongs to one complete navigation batch including the last five', () => {
+  assert.deepEqual(matrixRecipeBatches.map(batch => batch.offset), [0, 15, 30, 45, 60]);
+  assert.deepEqual(matrixRecipeBatches.map(batch => batch.end), [15, 30, 45, 60, 65]);
+  assert.deepEqual(matrixRecipeBatches.map(batch => batch.recipes.length), [15, 15, 15, 15, 5]);
+  assert.deepEqual(matrixRecipeBatches.flatMap(batch => batch.recipes), matrixRecipes);
+  assert.equal(new Set(matrixRecipeBatches.flatMap(batch => batch.recipes.map(recipe => recipe.id))).size, 65);
+  assert.deepEqual(landingFocusTargetCounts, { en: 102, ja: 101 });
+});
+
+test('guide code inventory counts literal Markdown examples and all independently expected recipes', () => {
+  for (const language of ['en', 'ja']) {
+    const source = readFileSync(new URL(`../../site-content/guide/${language}.md`, import.meta.url), 'utf8');
+    assert.equal(guideSourceExampleCount(source, matrixRecipes.length), 127);
+    assert.equal(guideSourceExampleCount(source, matrixRecipes.length) - matrixRecipes.length, 62);
+  }
+  const source = '```sh\ndrmr --version\n```\n\n{{conversion-examples}}\n';
+  assert.equal(guideSourceExampleCount(source, 65), 66);
+  assert.equal(guideSourceExampleCount(source.replace('drmr --version', '{{conversion-examples}}'), 65), 66);
+  for (const invalid of [source.replace('{{conversion-examples}}', ''), source + '{{conversion-examples}}\n',
+    source.replace('```sh', '```html'), source.replace('```\n\n', ''),
+    source.replace('drmr --version\n', ''), '{{conversion-examples}}\n']) {
+    assert.throws(() => guideSourceExampleCount(invalid, 65));
+  }
+  for (const count of [0, -1, 1.5, NaN, Infinity]) assert.throws(() => guideSourceExampleCount(source, count));
 });
 
 function recipeSample(recipe = matrixRecipes.find(value => value.id === 'recipe-hls-ts-video-dash-cbcs')) {

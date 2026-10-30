@@ -27,7 +27,7 @@ position and time; failed checks retain these samples too. Persistent clipping
 still fails. The suite covers:
 
 - English and Japanese at 320, 768, 1024 and 1440 px (eight cases): document overflow and clipped layout boxes, locally
-  hosted fonts and images, exact served asset bytes, all 97 English / 96 Japanese native Tab targets and
+  hosted fonts and images, exact served asset bytes, all 102 English / 101 Japanese native Tab targets and
   anchor navigation, rendered ARIA landmarks/headings/link names, and axe checks
   including color contrast. Both violations and incomplete checks must be empty.
   The five named code groups retain their full command text in both rendered
@@ -68,7 +68,7 @@ still fails. The suite covers:
   language (two cases). The
   loopback job checks both `/` and the project `/drmr/` mount; the published job
   checks only `/drmr/`.
-- Eight separate cases activate all 65 matrix links in each language at the project
+- Ten separate cases activate all 65 matrix links in each language at the project
   mount with JavaScript disabled. Each case covers fifteen distinct recipes,
   retaining the same thirty-second case budget. Native Tab/Enter activates the
   first recipe of each batch; the remaining links use actual link clicks. Each destination
@@ -206,7 +206,7 @@ The lockfile has five exact development packages: `@playwright/test`,
 `@axe-core/playwright` and `axe-core` 4.14.0 (MPL-2.0). They are CI-only and are not
 redistributed in the twelve-file Pages artifact. The npm audit gate is a current
 advisory check, not a claim that these dependencies can never have a defect.
-The pure Node controls are separate from the 19 landing and 12 guide browser cases and
+The pure Node controls are separate from the 23 landing and 12 guide browser cases and
 the applicable workflow checks, which depend on changed paths. Publish/live
 jobs are intentionally skipped on pull requests. Production HTML still contains zero scripts; CI-only
 axe injection does not change that source contract.

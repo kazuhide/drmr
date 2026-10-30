@@ -223,7 +223,7 @@ impl crate::conversion::Converter {
         if admitted.track_protection.is_empty() || !admitted.eligible_formats.contains(&format) {
             return Err(super::UNSUPPORTED);
         }
-        qualified_source_metadata(source, admitted, &self.backend.stop)?;
+        qualified_source_metadata(source, admitted.input.format, &self.backend.stop)?;
         Ok(())
     }
 
@@ -260,6 +260,13 @@ impl crate::conversion::Converter {
     ) -> Result<(), ConversionError> {
         profile(systems, format, target)?;
         self.backend.check_cancelled()?;
+        if self
+            .output_signaling
+            .as_ref()
+            .is_none_or(|value| !value.is_multi())
+        {
+            self.validate_drm_metadata_before_decode(source.input)?;
+        }
         let qualified = self.validate_source(
             source,
             crate::conversion::SourceValidationPurpose::Conversion,
@@ -267,15 +274,28 @@ impl crate::conversion::Converter {
         self.validate_qualified_drm_source(source.input, &qualified, systems, format, target)?;
         Ok(())
     }
+
+    pub(in crate::conversion) fn validate_drm_metadata_before_decode(
+        &self,
+        source: &std::path::Path,
+    ) -> Result<(), ConversionError> {
+        if self.backend.validation_depth == crate::conversion::ValidationDepth::Decoded {
+            // Decode preparation can probe rendition dimensions. Refuse unsupported
+            // public metadata first, using the same bounded native census as admission.
+            let report = crate::inspection::inspect(source).map_err(|_| super::UNSUPPORTED)?;
+            qualified_source_metadata(source, report.format, &self.backend.stop)?;
+        }
+        Ok(())
+    }
 }
 
 fn qualified_source_metadata(
     source: &std::path::Path,
-    admitted: &crate::conversion::SourceQualification,
+    format: InputFormat,
     stop: &crate::concurrency::Stop,
 ) -> Result<(), ConversionError> {
-    use crate::conversion::{SourceProtection, dash, files, hls, presentation};
-    match admitted.input.format {
+    use crate::conversion::{dash, files, hls, presentation};
+    match format {
         InputFormat::Mp4 => super::qualified_mp4(source, stop, true),
         InputFormat::Dash => {
             let parent = source.parent().ok_or(super::UNSUPPORTED)?;
@@ -287,19 +307,25 @@ fn qualified_source_metadata(
             Ok(())
         }
         InputFormat::Hls => {
-            if admitted.actual_format != OutputFormat::Hls
-                || admitted
-                    .track_protection
-                    .contains(&SourceProtection::HlsAes128)
-            {
-                // Transport media has no MP4 metadata. AES-128 resources are checked
-                // after localization, which exposes their plaintext init and media.
-                return Ok(());
-            }
             for media in presentation::hls_media_paths(source)? {
                 let parent = media.path.parent().ok_or(super::UNSUPPORTED)?;
                 let bytes = files::read_manifest(&media.path)?;
                 let text = std::str::from_utf8(&bytes).map_err(|_| super::UNSUPPORTED)?;
+                let mapped = text
+                    .lines()
+                    .any(|line| line.trim().starts_with("#EXT-X-MAP:"));
+                let aes = text
+                    .lines()
+                    .filter_map(|line| line.trim().strip_prefix("#EXT-X-KEY:"))
+                    .try_fold(false, |aes, value| {
+                        let attrs = hls::attributes(value)?;
+                        Ok::<_, ConversionError>(aes || attrs.get("METHOD") == Some("AES-128"))
+                    })?;
+                if !mapped || aes {
+                    // Transport has no MP4 metadata. AES-128 ciphertext is checked
+                    // after Rust localization exposes the plaintext initialization.
+                    continue;
+                }
                 for line in text.lines().map(str::trim) {
                     super::cancelled(stop)?;
                     if let Some(value) = line.strip_prefix("#EXT-X-MAP:") {
