@@ -11,6 +11,9 @@ use std::{
 };
 
 fn fixture(root: &Path, tracks: usize) -> PathBuf {
+    let media = root.join("media");
+    crate::native::create_media_dir_all(&media).unwrap();
+    let root = media.as_path();
     let clip = Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/clip.mp4");
     let kinds: &[&str] = if tracks == 1 {
         &["audio"]

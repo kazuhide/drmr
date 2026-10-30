@@ -6,6 +6,9 @@ const KID: &str = "00112233445566778899aabbccddeeff";
 const KEY: &str = "101112131415161718191a1b1c1d1e1f";
 
 fn fixture(root: &Path, scheme: &str) -> PathBuf {
+    let media = root.join("media");
+    crate::native::create_media_dir_all(&media).unwrap();
+    let root = media.as_path();
     let clip = Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/clip.mp4");
     let parts: Vec<_> = (0..2)
         .map(|index| root.join(format!("part-{index}.mp4")))

@@ -105,10 +105,10 @@ fn evidence(
 #[test]
 fn identity_rebinding_preserves_multiple_trafs_truns_and_every_native_base_form() {
     for mode in ["explicit", "implicit", "absolute"] {
-        let owner = crate::native::private_tempdir().unwrap();
+        let owner = crate::conversion::files::UnpublishedStage::new(None).unwrap();
         let path = owner.path().join("source.mp4");
         let before = fixture(mode);
-        let mut file = crate::native::create_private_new(&path).unwrap();
+        let mut file = owner.create_file(&path).unwrap();
         file.write_all(&before).unwrap();
         drop(file);
         let (mut movie, samples) = evidence(&path);
@@ -138,7 +138,7 @@ fn identity_rebinding_preserves_multiple_trafs_truns_and_every_native_base_form(
 
 #[test]
 fn recognized_index_references_change_without_certifying_or_dropping_opaque_indexes() {
-    let owner = crate::native::private_tempdir().unwrap();
+    let owner = crate::conversion::files::UnpublishedStage::new(None).unwrap();
     let path = owner.path().join("source.mp4");
     let mut before = fixture("implicit");
     let matching = full(*b"sidx", 0, &[7, 0xfeed, 0xbeef]);
@@ -163,7 +163,7 @@ fn recognized_index_references_change_without_certifying_or_dropping_opaque_inde
     ));
     // Truncated/opaque reference prefixes were already ignored by native admission.
     before.extend(test_files::boxed(*b"sidx", b"opaque"));
-    let mut file = crate::native::create_private_new(&path).unwrap();
+    let mut file = owner.create_file(&path).unwrap();
     file.write_all(&before).unwrap();
     drop(file);
     let (movie, samples) = evidence(&path);
@@ -190,7 +190,7 @@ fn recognized_index_references_change_without_certifying_or_dropping_opaque_inde
 
 #[test]
 fn descriptive_metadata_does_not_authorize_a_nested_same_name_track_header() {
-    let owner = crate::native::private_tempdir().unwrap();
+    let owner = crate::conversion::files::UnpublishedStage::new(None).unwrap();
     let path = owner.path().join("source.mp4");
     let original = fixture("implicit");
     let nodes = mp4::parse_boxes(&original).unwrap();
@@ -208,7 +208,7 @@ fn descriptive_metadata_does_not_authorize_a_nested_same_name_track_header() {
     before[..moov.header.size]
         .copy_from_slice(&test_files::boxed(*b"free", &vec![0; moov.header.size - 8]));
     before.extend(replacement);
-    let mut file = crate::native::create_private_new(&path).unwrap();
+    let mut file = owner.create_file(&path).unwrap();
     file.write_all(&before).unwrap();
     drop(file);
     let (mut movie, samples) = evidence(&path);

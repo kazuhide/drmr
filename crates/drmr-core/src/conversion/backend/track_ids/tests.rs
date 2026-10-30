@@ -161,10 +161,11 @@ fn copied_inputs_remain_creation_bound_and_detect_modified_payloads() {
         let copy = ToolInput::prepare(&path, &command).unwrap().unwrap();
         let modified = if replace {
             if std::fs::rename(copy.path(), copy.path().with_file_name("moved.mp4")).is_ok() {
-                native::create_private_new(copy.path())
-                    .unwrap()
+                let mut replacement = copy.stage.create_file(copy.path()).unwrap();
+                replacement
                     .write_all(&std::fs::read(copy.path().with_file_name("moved.mp4")).unwrap())
                     .unwrap();
+                drop(replacement);
                 true
             } else {
                 false
@@ -212,8 +213,10 @@ fn cancellation_and_unknown_actual_references_do_not_reach_the_tool() {
 #[test]
 fn nondense_joint_ids_use_one_geometry_preserving_tool_copy() {
     let owner = native::private_tempdir().unwrap();
-    let audio = fixture(owner.path(), "clear");
-    let video = owner.path().join("video.mp4");
+    let media = owner.path().join("media");
+    native::create_media_dir_all(&media).unwrap();
+    let audio = fixture(&media, "clear");
+    let video = media.join("video.mp4");
     let clip = Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/clip.mp4");
     assert!(
         Command::new("packager")
@@ -228,7 +231,7 @@ fn nondense_joint_ids_use_one_geometry_preserving_tool_copy() {
             .status
             .success()
     );
-    let source = owner.path().join("joint.mp4");
+    let source = media.join("joint.mp4");
     crate::conversion::finite::combine_parts(
         &[video, audio],
         &source,
