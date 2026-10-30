@@ -1,9 +1,11 @@
-//! Private track views retain each original initialization entry and complete fragment pair.
+//! Private track views retain metadata and fragment pairs with one self-contained track ID.
 use super::{BAD, ConversionError, File, Path, Read, Stop, Write, audio, boxed, integer, mp4, one};
 use std::{
     io::{Seek as _, SeekFrom},
     path::PathBuf,
 };
+
+const VIEW_TRACK_ID: u32 = 1;
 
 fn initialization(movie: &audio::Movie, index: usize) -> Result<Vec<u8>, ConversionError> {
     let boxes = mp4::parse_boxes(&movie.bytes).map_err(|_| BAD)?;
@@ -14,7 +16,8 @@ fn initialization(movie: &audio::Movie, index: usize) -> Result<Vec<u8>, Convers
         .filter(|n| n.kind() == *b"trak")
         .collect();
     let selected = tracks.get(index).ok_or(BAD)?;
-    let header = one(selected, *b"tkhd")?.header.payload(&movie.bytes);
+    let track_header = one(selected, *b"tkhd")?;
+    let header = track_header.header.payload(&movie.bytes);
     let at = match header.first() {
         Some(0) => 12,
         Some(1) => 20,
@@ -25,14 +28,28 @@ fn initialization(movie: &audio::Movie, index: usize) -> Result<Vec<u8>, Convers
     for child in &moov.children {
         if child.kind() == *b"trak" {
             if child.header.offset == selected.header.offset {
-                payload.extend(child.header.bytes(&movie.bytes));
+                let mut bytes = child.header.bytes(&movie.bytes).to_vec();
+                let pos = track_header.header.offset - child.header.offset
+                    + track_header.header.header_size
+                    + at;
+                bytes
+                    .get_mut(pos..pos + 4)
+                    .ok_or(BAD)?
+                    .copy_from_slice(&VIEW_TRACK_ID.to_be_bytes());
+                payload.extend(bytes);
             }
         } else if child.kind() == *b"mvex" {
             let mut defaults = Vec::new();
             for entry in &child.children {
                 if entry.kind() == *b"trex" {
                     if integer(entry.header.payload(&movie.bytes), 4)? == id {
-                        defaults.extend(entry.header.bytes(&movie.bytes));
+                        let mut bytes = entry.header.bytes(&movie.bytes).to_vec();
+                        let pos = entry.header.header_size + 4;
+                        bytes
+                            .get_mut(pos..pos + 4)
+                            .ok_or(BAD)?
+                            .copy_from_slice(&VIEW_TRACK_ID.to_be_bytes());
+                        defaults.extend(bytes);
                     }
                 } else if entry.kind() != *b"mehd" {
                     return Err(BAD);
@@ -87,8 +104,15 @@ fn copy_parts(
                 let nodes = mp4::parse_boxes(&bytes).map_err(|_| BAD)?;
                 let moof = nodes.first().ok_or(BAD)?;
                 let traf = one(moof, *b"traf")?;
-                let id = integer(one(traf, *b"tfhd")?.header.payload(&bytes), 4)?;
+                let track_header = one(traf, *b"tfhd")?;
+                let id = integer(track_header.header.payload(&bytes), 4)?;
                 let selected = ids.iter().position(|n| *n == id).ok_or(BAD)?;
+                // Match the original ID first; only the private view uses ID 1.
+                let pos = track_header.header.offset + track_header.header.header_size + 4;
+                bytes
+                    .get_mut(pos..pos + 4)
+                    .ok_or(BAD)?
+                    .copy_from_slice(&VIEW_TRACK_ID.to_be_bytes());
                 count[selected] = count[selected].checked_add(1).ok_or(BAD)?;
                 let seq = one(moof, *b"mfhd")?;
                 let pos = seq.header.offset + seq.header.header_size + 4;
@@ -169,3 +193,6 @@ pub(in crate::conversion) fn split_parts(
     }
     Ok(paths)
 }
+
+#[cfg(test)]
+mod tests;

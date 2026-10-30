@@ -262,7 +262,7 @@ fn fragment_duration(moov: &Mp4Box, data: &[u8]) -> Result<Option<u64>, Conversi
         _ => return Err(BAD),
     }))
 }
-fn track_header(bytes: &[u8]) -> Result<(u32, u64), ConversionError> {
+pub(super) fn track_header(bytes: &[u8]) -> Result<(u32, u64), ConversionError> {
     let (version, id_at, duration_at) = match (bytes.first(), bytes.len()) {
         (Some(0), 84) => (0, 12, 20),
         (Some(1), 96) => (1, 20, 28),

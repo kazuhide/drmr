@@ -7,6 +7,9 @@ use super::{
 use crate::inspection::{Protection, TargetProtection};
 use std::io::{Seek as _, SeekFrom, Write as _};
 
+#[cfg(test)]
+mod tests;
+
 pub(super) fn transport_comparison(
     output_format: inspection::OutputFormat,
     source: &Prepared,
@@ -27,18 +30,36 @@ pub(super) fn complete_track_views(
     backend: &super::super::backend::Backend,
     tracks: usize,
 ) -> Result<Option<Vec<std::path::PathBuf>>, ConversionError> {
-    if tracks != 2 || !super::super::audio::movie(path)?.fragmented {
+    if !(1..=2).contains(&tracks) {
         return Ok(None);
     }
+    let ids = {
+        let metadata = super::super::audio::movie(path)?;
+        if !metadata.fragmented {
+            return Ok(None);
+        }
+        super::super::native_media::metadata_track_ids(&metadata.bytes)?
+    };
+    if ids.len() != tracks {
+        return Err(ConversionError("native-mp4-invalid"));
+    }
+    if tracks == 1 {
+        if ids[0] == 1 {
+            return Ok(None);
+        }
+        return super::super::finite::split_parts(path, directory, &backend.stop).map(Some);
+    }
+    let nondense_ids = ids != [1, 2];
     let movie = super::super::native_media::inspect(path, &backend.stop)?;
     let needs_views = movie.fragmented
         && movie.tracks.len() == 2
-        && movie.tracks.iter().any(|track| {
-            track.edits.len() == 2
-                || (track.codec == *b"mp4a"
-                    && track.timescale == 90_000
-                    && track.sample_entry_metadata.sample_rate == Some(44_100))
-        });
+        && (nondense_ids
+            || movie.tracks.iter().any(|track| {
+                track.edits.len() == 2
+                    || (track.codec == *b"mp4a"
+                        && track.timescale == 90_000
+                        && track.sample_entry_metadata.sample_rate == Some(44_100))
+            }));
     if needs_views {
         super::super::finite::split_parts(path, directory, &backend.stop).map(Some)
     } else {
@@ -186,8 +207,11 @@ impl Converter {
     ) -> Result<Vec<std::path::PathBuf>, ConversionError> {
         self.run_tracks(prepared.len(), |index| {
             let source = &prepared[index];
-            let part = directory.join(format!("track-{index}.mp4"));
-            let clear = directory.join(format!("clear-{index}.mp4"));
+            // Per-track sealing must not walk a sibling's temporary edit workspace.
+            let directory = directory.join(format!("track-{index}"));
+            super::super::files::create_dir(&directory)?;
+            let part = directory.join("track.mp4");
+            let clear = directory.join("clear.mp4");
             let media = if source.key_id.is_some() {
                 self.backend.package_stream(
                     &source.media,

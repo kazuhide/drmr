@@ -291,6 +291,25 @@ fn catalogue(
     Ok(())
 }
 
+/// Read real IDs from the bounded moov retained by `audio::movie`, without sample scanning.
+/// This selects private views; complete source admission remains mandatory afterward.
+pub(super) fn metadata_track_ids(bytes: &[u8]) -> Result<Vec<u32>, ConversionError> {
+    if bytes.len() > MAX_METADATA_BYTES {
+        return Err(ConversionError("resource-budget"));
+    }
+    let nodes = crate::mp4::parse_boxes(bytes).map_err(|_| BAD)?;
+    let movie = read::one(&nodes, *b"moov")?;
+    movie
+        .children
+        .iter()
+        .filter(|node| node.kind() == *b"trak")
+        .map(|track| {
+            init::track_header(read::one(&track.children, *b"tkhd")?.header.payload(bytes))
+                .map(|(id, _)| id)
+        })
+        .collect()
+}
+
 /// Read bounded metadata and validate every sample's declared range and timeline.
 /// This does not read or decrypt sample payloads and does not establish media verification.
 pub(in crate::conversion) fn inspect(input: &Path, stop: &Stop) -> Result<Movie, ConversionError> {
