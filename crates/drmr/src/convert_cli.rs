@@ -805,18 +805,24 @@ fn verify_current_output(
         },
     })?;
     if let Some(frozen) = &frozen {
+        let observed = inspection::inspect(checked_output)
+            .map_err(|_| ConversionError("invalid-input-media"))?;
         let format = if keys.hls_output.is_some() {
             OutputFormat::HlsTs
         } else {
-            inspection::inspect(checked_output)
-                .map_err(|_| ConversionError("invalid-input-media"))?
-                .format
-                .into()
+            observed.format.into()
         };
-        let target = if format == OutputFormat::HlsTs {
-            TargetProtection::HlsSampleAes
-        } else {
-            TargetProtection::Cbcs
+        let target = match format {
+            OutputFormat::HlsTs => TargetProtection::HlsSampleAes,
+            OutputFormat::Hls => TargetProtection::Cbcs,
+            OutputFormat::Dash => match observed.protection {
+                inspection::Protection::Cenc => TargetProtection::Cenc,
+                inspection::Protection::Cbcs => TargetProtection::Cbcs,
+                _ => return Err(ConversionError("output-signaling-verification-failed")),
+            },
+            OutputFormat::Mp4 => {
+                return Err(ConversionError("output-signaling-profile-not-supported"));
+            }
         };
         command.verify_output_signaling(checked_output, format, target, keys)?;
         frozen.check_original().map_err(|cause| {

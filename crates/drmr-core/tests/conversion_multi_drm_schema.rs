@@ -128,7 +128,7 @@ fn legacy_key_files_retain_the_original_profile() {
 }
 
 #[test]
-fn widevine_scheme_and_all_declared_key_ids_must_agree_with_the_output() {
+fn widevine_boxes_accept_both_schemes_but_reject_duplicates_and_wrong_identifiers() {
     use base64::Engine as _;
     for scheme in ["cbcs", "cenc"] {
         let mut payload = hex::decode(format!("1210{KID}")).unwrap();
@@ -145,11 +145,8 @@ fn widevine_scheme_and_all_declared_key_ids_must_agree_with_the_output() {
         )
         .unwrap();
         let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
-        assert_eq!(
-            OutputSignaling::multi_drm(Some(&encoded), None, false).is_ok(),
-            scheme == "cbcs"
-        );
-        if scheme == "cbcs" {
+        assert!(OutputSignaling::multi_drm(Some(&encoded), None, false).is_ok());
+        {
             let mut duplicate = payload;
             let declaration = duplicate[18..].to_vec();
             duplicate.extend(declaration);
@@ -172,4 +169,29 @@ fn widevine_scheme_and_all_declared_key_ids_must_agree_with_the_output() {
     let owner = drmr_core::native::private_tempdir().unwrap();
     let path=write(owner.path(),&serde_json::json!({"schema_version":1,"output":{"kid":KID,"key":KEY,"signaling":{"system":"multi-drm","widevine_pssh":hex::encode(version_one)}}}).to_string());
     assert_eq!(key_file::read(&path).unwrap_err().0, "key-file-invalid");
+}
+
+#[test]
+fn named_output_recipes_share_the_converter_drm_profiles() {
+    for (format, target, drms, accepted) in [
+        ("dash", "cenc", vec!["widevine"], true),
+        ("dash", "cenc", vec!["playready"], true),
+        ("dash", "cenc", vec!["widevine", "playready"], true),
+        ("dash", "cbcs", vec!["widevine", "playready"], true),
+        ("dash", "cenc", vec!["fairplay"], false),
+        ("hls", "cbcs", vec!["fairplay"], true),
+        ("hls-ts", "hls-sample-aes", vec!["fairplay"], true),
+        ("hls", "cenc", vec!["fairplay"], false),
+        ("hls-ts", "hls-sample-aes", vec!["widevine"], false),
+    ] {
+        let owner = drmr_core::native::private_tempdir().unwrap();
+        let path = write(owner.path(), &serde_json::json!({
+            "schema_version":1,"outputs":[{"id":"result","format":format,"target":target,"drms":drms}]
+        }).to_string());
+        assert_eq!(
+            drmr_core::conversion::plan::bundle::read_output_spec(&path).is_ok(),
+            accepted,
+            "{format}/{target}/{drms:?}"
+        );
+    }
 }

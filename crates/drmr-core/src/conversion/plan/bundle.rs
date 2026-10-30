@@ -925,20 +925,13 @@ fn valid_id(id: &str) -> bool {
 }
 
 fn drm_profile(output: &BundleOutputIntent) -> bool {
-    if output.drms.is_empty() {
-        return true;
-    }
-    match (output.format, output.target) {
-        (OutputFormat::Dash, TargetProtection::Cbcs) => output
-            .drms
-            .iter()
-            .all(|value| matches!(value, DrmSystem::Widevine | DrmSystem::PlayReady)),
-        (OutputFormat::Hls, TargetProtection::Cbcs)
-        | (OutputFormat::HlsTs, TargetProtection::HlsSampleAes) => {
-            output.drms == [DrmSystem::FairPlay]
-        }
-        _ => false,
-    }
+    output.drms.is_empty()
+        || crate::conversion::signaling::validate_drm_profile(
+            &output.drms,
+            output.format,
+            output.target,
+        )
+        .is_ok()
 }
 
 fn validate_keys(plan: &BundlePlan, keys: &BundleOperatorKeys) -> Result<(), ConversionError> {

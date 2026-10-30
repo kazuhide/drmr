@@ -178,7 +178,7 @@ fn varint(data: &[u8], at: &mut usize) -> Result<u64, ConversionError> {
     Err(INVALID)
 }
 
-pub(super) fn profile(
+pub(in crate::conversion) fn profile(
     systems: &[DrmSystem],
     format: OutputFormat,
     target: TargetProtection,

@@ -8,6 +8,7 @@ use crate::{
     mp4, playready,
 };
 pub use multi::DrmSystem;
+pub(in crate::conversion) use multi::profile as validate_drm_profile;
 use std::{
     fs::File,
     io::{Read, Seek, SeekFrom},
@@ -127,12 +128,7 @@ impl OutputSignaling {
         format: OutputFormat,
         target: TargetProtection,
     ) -> Result<(), ConversionError> {
-        if format != OutputFormat::Dash
-            || !matches!(target, TargetProtection::Cenc | TargetProtection::Cbcs)
-        {
-            return Err(UNSUPPORTED);
-        }
-        Ok(())
+        validate_drm_profile(&[DrmSystem::PlayReady], format, target)
     }
     fn escaped_url(&self) -> Zeroizing<String> {
         let mut value = Zeroizing::new(String::with_capacity(self.license_url.len() * 5));

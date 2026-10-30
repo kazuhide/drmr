@@ -115,12 +115,23 @@ fn stage(
     assert_eq!(verified["source_unchanged"], true);
     assert_eq!(verified["output_matches_plan"], true);
     checked(&verified["verification"]);
-    assert_eq!(std::fs::read(saved).unwrap(), saved_bytes);
     let entrypoint = destination.join(if format == "dash" {
         "manifest.mpd"
     } else {
         "master.m3u8"
     });
+    checked(&cli(
+        &[
+            "verify".into(),
+            path(&entrypoint),
+            "--source".into(),
+            path(input),
+            "--keys-file".into(),
+            path(&key_file),
+        ],
+        native_segments,
+    ));
+    assert_eq!(std::fs::read(saved).unwrap(), saved_bytes);
     let metadata = cli(
         &[
             "analyze".into(),
@@ -217,7 +228,99 @@ fn saved_cenc_cbcs_and_clear_outputs_verify_against_the_previous_stage_and_origi
         true,
     );
     checked(&final_comparison);
+    named_outputs(root.path(), &input, &output);
     for (file, bytes) in before {
         assert_eq!(std::fs::read(file).unwrap(), bytes);
+    }
+}
+
+fn named_outputs(root: &Path, input: &Path, output_settings: &Value) {
+    let recipe = root.join("outputs.json");
+    serde_json::to_writer(
+        drmr_core::native::create_private_new(&recipe).unwrap(),
+        &json!({
+            "schema_version":1,"outputs":[
+                {"id":"ctr","format":"dash","target":"cenc","drms":["widevine","playready"]},
+                {"id":"cbc","format":"dash","target":"cbcs","drms":["widevine","playready"]}
+            ]
+        }),
+    )
+    .unwrap();
+    let keys = root.join("bundle.keys.json");
+    serde_json::to_writer(
+        drmr_core::native::create_private_new(&keys).unwrap(),
+        &json!({
+            "schema_version":2,"outputs":{"ctr":output_settings,"cbc":output_settings}
+        }),
+    )
+    .unwrap();
+    let plan = root.join("bundle.plan.json");
+    let destination = root.join("bundle");
+    let planned = cli(
+        &[
+            "plan".into(),
+            path(input),
+            "--outputs".into(),
+            path(&recipe),
+            "--output".into(),
+            path(&destination),
+            "--save".into(),
+            path(&plan),
+        ],
+        false,
+    );
+    assert_eq!(planned["outputs"].as_array().unwrap().len(), 2);
+    let converted = cli(
+        &[
+            "convert".into(),
+            "--plan".into(),
+            path(&plan),
+            "--keys-file".into(),
+            path(&keys),
+        ],
+        false,
+    );
+    assert_eq!(converted["outputs"].as_array().unwrap().len(), 2);
+    for output in converted["outputs"].as_array().unwrap() {
+        checked(&output["conversion"]["verification"]);
+        assert_eq!(output["signaling"]["verified"], true);
+        assert_eq!(
+            output["signaling"]["systems"],
+            json!(["widevine", "playready"])
+        );
+    }
+    let verified = cli(
+        &[
+            "verify".into(),
+            "--plan".into(),
+            path(&plan),
+            "--keys-file".into(),
+            path(&keys),
+        ],
+        false,
+    );
+    assert_eq!(verified["passed"], true);
+    assert_eq!(verified["source_unchanged"], true);
+    for output in verified["outputs"].as_array().unwrap() {
+        assert_eq!(output["output_matches_plan"], true);
+        checked(&output["verification"]);
+        assert_eq!(output["signaling"]["verified"], true);
+    }
+    let direct = cli(
+        &[
+            "convert".into(),
+            path(input),
+            "--outputs".into(),
+            path(&recipe),
+            "--keys-file".into(),
+            path(&keys),
+            "--output".into(),
+            path(&root.join("bundle-direct")),
+        ],
+        false,
+    );
+    for output in direct["outputs"].as_array().unwrap() {
+        checked(&output["conversion"]["verification"]);
+        assert_eq!(output["signaling"]["verified"], true);
     }
 }
