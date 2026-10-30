@@ -25,6 +25,7 @@ pub(super) fn prepare(
     purpose: SourceValidationPurpose,
     normalize: bool,
 ) -> Result<Vec<Prepared>, ConversionError> {
+    super::super::signaling::records::hls::validate_source(input.input, input.input_keys, backend)?;
     let backend = preparation_backend(backend, maximum_workers);
     let paths = hls_media_paths(input.input)?;
     let progress = backend.preparation();
@@ -42,6 +43,19 @@ pub(super) fn prepare(
         renditions: paths.len(),
     };
     let scheduler = super::super::execution::Scheduler::new(&backend, maximum_workers);
+    let localized = if backend.validation_depth == super::super::ValidationDepth::Decoded {
+        // Finish every Rust localization/census before the first rendition can
+        // probe or decode. Reuse these exact owned files; never decrypt twice.
+        let localization =
+            super::super::execution::Scheduler::new(&backend, maximum_workers).without_observers();
+        Some(collect(&localization, &paths, |ordinal| {
+            preparation
+                .localize(ordinal, &paths[ordinal])
+                .map(|value| vec![value])
+        })?)
+    } else {
+        None
+    };
     let tracks = collect(&scheduler, &paths, |ordinal| {
         let task = progress.and_then(|progress| progress.start(ordinal));
         if let Some(task) = &task {
@@ -50,7 +64,11 @@ pub(super) fn prepare(
                 paths[ordinal].metadata.resolution,
             );
         }
-        let tracks = preparation.rendition(ordinal, &paths[ordinal])?;
+        let tracks = if let Some(localized) = &localized {
+            preparation.localized(ordinal, &paths[ordinal], &localized[ordinal])?
+        } else {
+            preparation.rendition(ordinal, &paths[ordinal])?
+        };
         if tracks.len() == 1
             && let (Some(task), Some(track)) = (&task, tracks[0].report.tracks.first())
         {
@@ -155,10 +173,48 @@ fn retained_metadata<T>(paths: &[MediaPath], contexts: usize) -> Result<u64, Con
 }
 
 impl Preparation<'_, '_> {
+    fn directory(&self, ordinal: usize) -> std::path::PathBuf {
+        self.stage.join(format!("track-{ordinal:04}"))
+    }
+
+    fn localize(
+        &self,
+        ordinal: usize,
+        media: &MediaPath,
+    ) -> Result<hls::Localized, ConversionError> {
+        let directory = self.directory(ordinal);
+        super::super::files::create_dir(&directory)
+            .map_err(|_| ConversionError("temporary-workspace-unavailable"))?;
+        hls::localize(&media.path, &directory, self.input.hls_keys, self.backend)
+    }
+
     fn rendition(
         &self,
         ordinal: usize,
         media: &MediaPath,
+    ) -> Result<Vec<Prepared>, ConversionError> {
+        let directory = self.directory(ordinal);
+        super::super::files::create_dir(&directory)
+            .map_err(|_| ConversionError("temporary-workspace-unavailable"))?;
+        if let Some(prepared) = prepare_native_hls_transport(
+            self.input,
+            media,
+            &directory,
+            self.backend,
+            self.normalize,
+            self.renditions,
+        )? {
+            return Ok(prepared);
+        }
+        let localized = hls::localize(&media.path, &directory, self.input.hls_keys, self.backend)?;
+        self.localized(ordinal, media, &localized)
+    }
+
+    fn localized(
+        &self,
+        ordinal: usize,
+        media: &MediaPath,
+        localized: &hls::Localized,
     ) -> Result<Vec<Prepared>, ConversionError> {
         let Self {
             input,
@@ -168,29 +224,16 @@ impl Preparation<'_, '_> {
             normalize,
             ..
         } = *self;
-        let directory = self.stage.join(format!("track-{ordinal:04}"));
-        super::super::files::create_dir(&directory)
-            .map_err(|_| ConversionError("temporary-workspace-unavailable"))?;
-        if let Some(prepared) = prepare_native_hls_transport(
-            input,
-            media,
-            &directory,
-            backend,
-            normalize,
-            self.renditions,
-        )? {
-            return Ok(prepared);
-        }
-        let localized = hls::localize(&media.path, &directory, input.hls_keys, backend)?;
+        let directory = self.directory(ordinal);
         if let Some(admission) = &localized.transport {
             validate_transport_roles(media, admission, self.renditions)?;
             let mut prepared = if backend.validation_depth == super::super::ValidationDepth::Native
                 && !normalize
             {
-                native_preparation::transport(&localized, admission, backend)?
+                native_preparation::transport(localized, admission, backend)?
             } else {
                 prepare_transport(
-                    &localized,
+                    localized,
                     admission,
                     &directory,
                     input.input_keys,
@@ -198,7 +241,7 @@ impl Preparation<'_, '_> {
                     maximum_workers,
                 )?
             };
-            apply_transport_metadata(&mut prepared, media, &localized, backend, input.input_keys)?;
+            apply_transport_metadata(&mut prepared, media, localized, backend, input.input_keys)?;
             apply_hls_target(&mut prepared, localized.target_seconds);
             return Ok(prepared);
         }
@@ -247,9 +290,9 @@ impl Preparation<'_, '_> {
             None
         };
         track.source = if track.audio_presentation.is_some() {
-            localized.combined
+            localized.combined.clone()
         } else {
-            localized.reference
+            localized.reference.clone()
         };
         Ok(vec![track])
     }

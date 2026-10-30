@@ -25,9 +25,6 @@ pub(super) fn validate_request(
     if request.target == TargetProtection::HlsAes128 && request.format != OutputFormat::Hls {
         return Err(ConversionError("target-requires-hls-output"));
     }
-    if request.target == TargetProtection::Cenc && request.format == OutputFormat::Hls {
-        return Err(ConversionError("cenc-hls-output-not-supported"));
-    }
     if matches!(
         request.target,
         TargetProtection::Cenc | TargetProtection::Cbcs
@@ -43,7 +40,13 @@ pub(super) fn validate_request(
     {
         return Err(ConversionError("output-iv-not-used"));
     }
-    if request.format == OutputFormat::Hls && request.target == TargetProtection::Cbcs {
+    if request.format == OutputFormat::Hls
+        && matches!(
+            request.target,
+            TargetProtection::Cenc | TargetProtection::Cbcs
+        )
+        && converter.output_signaling.is_none()
+    {
         let uri = request
             .hls_key_uri
             .ok_or(ConversionError("hls-key-uri-required"))?;
@@ -148,23 +151,29 @@ fn key_tag(
     converter: &Converter,
     request: &ConversionRequest<'_>,
 ) -> Result<Option<String>, ConversionError> {
-    if request.target != TargetProtection::Cbcs || request.format != OutputFormat::Hls {
+    if !matches!(
+        request.target,
+        TargetProtection::Cenc | TargetProtection::Cbcs
+    ) || request.format != OutputFormat::Hls
+    {
+        return Ok(None);
+    }
+    if converter.output_signaling.is_some() {
+        // Provider declarations are inserted together after every media playlist
+        // has been written; the single-tag writer keeps its injection guard.
         return Ok(None);
     }
     let uri = request
         .hls_key_uri
         .ok_or(ConversionError("hls-key-uri-required"))?;
-    let fairplay = converter
-        .output_signaling
-        .as_ref()
-        .is_some_and(|value| value.systems().contains(&conversion::DrmSystem::FairPlay));
-    Ok(Some(if fairplay {
-        format!(
-            "#EXT-X-KEY:METHOD=SAMPLE-AES,URI=\"{uri}\",KEYFORMAT=\"com.apple.streamingkeydelivery\",KEYFORMATVERSIONS=\"1\""
-        )
+    let method = if request.target == TargetProtection::Cenc {
+        "SAMPLE-AES-CTR"
     } else {
-        format!("#EXT-X-KEY:METHOD=SAMPLE-AES,URI=\"{uri}\",KEYFORMAT=\"identity\"")
-    }))
+        "SAMPLE-AES"
+    };
+    Ok(Some(format!(
+        "#EXT-X-KEY:METHOD={method},URI=\"{uri}\",KEYFORMAT=\"identity\""
+    )))
 }
 
 fn aes_tag(key: &conversion::HlsOutputKey, iv: &SegmentIv) -> String {
@@ -224,7 +233,19 @@ pub(super) fn transform(
             )
         })
         .collect::<Result<Vec<_>, ConversionError>>()?;
-    super::super::manifest_hls::write(output, &hls_parts, &converter.backend.stop)
+    super::super::manifest_hls::write(output, &hls_parts, &converter.backend.stop)?;
+    if let Some(signaling) = &converter.output_signaling {
+        signaling.rewrite_hls(
+            output,
+            request
+                .output_key
+                .ok_or(ConversionError("output-key-required"))?,
+            request.target,
+            request.hls_key_uri,
+            &converter.backend.stop,
+        )?;
+    }
+    Ok(())
 }
 
 fn transform_part(

@@ -2,6 +2,7 @@
 
 import base64
 import copy
+import ctypes
 import importlib.util
 import io
 import json
@@ -14,7 +15,7 @@ import tarfile
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import zipfile
 
 
@@ -753,6 +754,22 @@ class OwnedFilesTests(unittest.TestCase):
             (graph / "outside").symlink_to(self.root / "not-owned")
             with self.assertRaisesRegex(module.Refusal, "^media-graph-invalid$"):
                 module.graph_identity(graph)
+
+
+class HeadlessWindowsTests(unittest.TestCase):
+    def test_headless_mode_preserves_existing_flags_and_suppresses_loader_dialogs(self):
+        kernel = Mock()
+        kernel.GetErrorMode.return_value = 0x0004
+        with patch.object(module.os, "name", "nt"), \
+                patch.object(ctypes, "WinDLL", return_value=kernel, create=True):
+            module.headless_windows_errors()
+        kernel.SetErrorMode.assert_called_once_with(0x8007)
+
+    def test_unavailable_launch_control_has_a_fixed_diagnostic(self):
+        with patch.object(module.os, "name", "nt"), \
+                patch.object(ctypes, "WinDLL", side_effect=OSError("private fixture path"), create=True):
+            with self.assertRaisesRegex(module.Refusal, "^command-unavailable$"):
+                module.headless_windows_errors()
 
 
 class ProcessTests(unittest.TestCase):

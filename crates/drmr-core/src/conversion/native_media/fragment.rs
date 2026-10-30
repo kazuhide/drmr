@@ -322,28 +322,25 @@ impl FragmentSource<'_> {
         let mut runs = Vec::new();
         let mut position = None;
         let mut count = 0_u64;
+        super::controls::semantic_children(traf)?;
         for node in &traf.children {
-            match &node.kind() {
-                b"trun" => {
-                    let run = Run::parse(
-                        node,
-                        bytes,
-                        RunStart {
-                            base,
-                            data: position,
-                            decode: end,
-                        },
-                        defaults,
-                        self.mdats,
-                        self.stop,
-                    )?;
-                    end = run.end;
-                    position = Some(run.range.end);
-                    count = count.checked_add(u64::from(run.count)).ok_or(BAD)?;
-                    runs.push(run);
-                }
-                b"tfhd" | b"tfdt" | b"senc" | b"saiz" | b"saio" | b"sgpd" | b"sbgp" => {}
-                _ => return Err(UNSUPPORTED),
+            if node.kind() == *b"trun" {
+                let run = Run::parse(
+                    node,
+                    bytes,
+                    RunStart {
+                        base,
+                        data: position,
+                        decode: end,
+                    },
+                    defaults,
+                    self.mdats,
+                    self.stop,
+                )?;
+                end = run.end;
+                position = Some(run.range.end);
+                count = count.checked_add(u64::from(run.count)).ok_or(BAD)?;
+                runs.push(run);
             }
         }
         if runs.is_empty() {
@@ -405,12 +402,8 @@ pub(super) fn parse(
         previous = part.runs.last().ok_or(BAD)?.range.end;
         tracks.push(part);
     }
-    if tracks.is_empty()
-        || moof
-            .children
-            .iter()
-            .any(|node| !matches!(&node.kind(), b"mfhd" | b"traf"))
-    {
+    super::controls::semantic_children(moof)?;
+    if tracks.is_empty() {
         return Err(UNSUPPORTED);
     }
     Ok(Fragment {

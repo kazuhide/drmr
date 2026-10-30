@@ -1,8 +1,8 @@
 //! Inspection and independent verification never require a normalized demux.
 use super::{
     ConversionError, Converter, Evidence, InputFormat, InputKeys, Inspection, Prepared, Protection,
-    SourceCompatibilityNote, SourceProtection, StreamView, TrackKind, VerificationReport, hls,
-    inspection, key_for, metadata,
+    SourceCompatibilityNote, SourceProtection, SourceValidationPurpose, StreamView, TrackKind,
+    VerificationReport, hls, inspection, key_for, metadata,
 };
 
 pub(super) fn transport(
@@ -131,6 +131,53 @@ fn transport_view(
 }
 
 impl Converter {
+    pub(super) fn standalone_mp4_eligible(
+        &self,
+        input: &super::VerificationSource<'_>,
+        original: &Inspection,
+        prepared: &[Prepared],
+        actual: crate::inspection::OutputFormat,
+        declared_audio: bool,
+        purpose: SourceValidationPurpose,
+    ) -> Result<bool, ConversionError> {
+        use super::super::{audio, progressive};
+        use crate::inspection::OutputFormat;
+        if declared_audio {
+            return Ok(super::ts_mp4::canonical_tracks(prepared, original.format));
+        }
+        if original.format == InputFormat::Mp4 {
+            let first = &prepared[0];
+            let report = inspection::inspect(&first.media)
+                .map_err(|_| ConversionError("invalid-input-media"))?;
+            if super::super::finite::has_audio(&first.media)?
+                && !audio::movie(&first.media)?.fragmented
+            {
+                let finite = match purpose {
+                    SourceValidationPurpose::Conversion => {
+                        progressive::validate_input(&first.media, &report, input.input_keys)?
+                    }
+                    SourceValidationPurpose::Verification => {
+                        progressive::verification_input(&first.media, &report, input.input_keys)?
+                    }
+                };
+                if finite {
+                    self.progressive_codecs(
+                        &first.media,
+                        &report,
+                        (report.protection != Protection::Clear)
+                            .then_some(super::super::keys::ProbeKeys::All(input.input_keys)),
+                    )?;
+                }
+                return Ok(finite);
+            }
+            return Ok(prepared.len() == 1);
+        }
+        Ok(actual != OutputFormat::HlsTs
+            && prepared.len() == 1
+            && prepared[0].metadata.audio.is_none()
+            && prepared[0].metadata.audio_group.is_none())
+    }
+
     pub(super) fn native_prepared_pair(
         &self,
         a: &Prepared,

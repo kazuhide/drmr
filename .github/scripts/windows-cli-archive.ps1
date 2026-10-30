@@ -1,7 +1,8 @@
 param(
     [Parameter(Mandatory = $true)][string]$Archive,
     [Parameter(Mandatory = $true)][string]$Version,
-    [Parameter(Mandatory = $true)][string]$Report
+    [Parameter(Mandatory = $true)][string]$Report,
+    [string]$RoundtripInputs = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -43,7 +44,9 @@ try {
     $sourceCargoHome = $env:CARGO_HOME
     if (-not $sourceCargoHome) { $sourceCargoHome = Join-Path $env:USERPROFILE '.cargo' }
     # Copy registry data only: no authentication or operator configuration.
-    Copy-Item -LiteralPath (Join-Path $sourceCargoHome 'registry') -Destination $cargoHome -Recurse
+    if (-not $RoundtripInputs) {
+        Copy-Item -LiteralPath (Join-Path $sourceCargoHome 'registry') -Destination $cargoHome -Recurse
+    }
     $retainedArchive = Join-Path $directory ([IO.Path]::GetFileName($Archive))
     Copy-Item -LiteralPath $Archive -Destination $retainedArchive
     $context = @{
@@ -54,11 +57,16 @@ try {
         cargo = $cargo
         rustc = $rustc
         tools = $env:DRMR_WINDOWS_MEDIA_TOOLS
+        roundtrip_inputs = $RoundtripInputs
     }
     $context | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $directory 'context.json')
     foreach ($path in @($checkout, (Split-Path $cargo), (Split-Path $rustc), $env:DRMR_WINDOWS_MEDIA_TOOLS)) {
         & icacls $path /grant "${username}:(OI)(CI)RX" /T /Q
         if ($LASTEXITCODE -ne 0) { throw 'Could not grant read-only qualification inputs' }
+    }
+    if ($RoundtripInputs) {
+        & icacls $RoundtripInputs /grant "${username}:(OI)(CI)RX" /T /Q
+        if ($LASTEXITCODE -ne 0) { throw 'Could not grant checked round-trip inputs' }
     }
     & icacls $directory /grant "${username}:(OI)(CI)M" /T /Q
     if ($LASTEXITCODE -ne 0) { throw 'Could not grant the owned qualification workspace' }
@@ -81,7 +89,11 @@ $env:GIT_CONFIG_KEY_0 = 'safe.directory'
 $env:GIT_CONFIG_VALUE_0 = $context.checkout
 Set-Location -LiteralPath $context.checkout
 $privateReport = Join-Path $PSScriptRoot 'qualification.json'
-& $context.python tools/qualify_cli_archive.py --archive $context.archive --target x86_64-pc-windows-msvc --expected-version $context.version --report $privateReport
+if ($context.roundtrip_inputs) {
+    & $context.python tools/release_roundtrip.py --inputs $context.roundtrip_inputs --target x86_64-pc-windows-msvc --report $privateReport
+} else {
+    & $context.python tools/qualify_cli_archive.py --archive $context.archive --target x86_64-pc-windows-msvc --expected-version $context.version --report $privateReport
+}
 $status = $LASTEXITCODE
 if (Test-Path -LiteralPath $privateReport) {
     # Only allowlisted qualification evidence leaves the ordinary user's ACL.

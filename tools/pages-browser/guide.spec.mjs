@@ -1,12 +1,12 @@
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { assets, assetPath, assetRoute, allowedRequest, digest, liveMode, publicOrigin, localOrigin } from './source.mjs';
 import { focusObservation, pollFocus, requireFocus, requireImages } from './checks.mjs';
 import { completeMatrixKey } from './matrix.mjs';
 import { guideChapters, guideLocales, guideObservation, requireGuideLayout,
   guideScrollObservation, requireGuideMovement, guideFiguresObservation, requireGuideFigures,
-  requireGuideCheckpoint, requireGuideCodeEdge, requireGuidePrintCode } from './guide.mjs';
+  requireGuideCheckpoint, requireGuideCodeEdge, requireGuidePrintCode, guideSourceExampleCount } from './guide.mjs';
 import { matrixRecipes } from './recipes.mjs';
 
 const live = liveMode(process.env.PAGES_LIVE);
@@ -14,6 +14,12 @@ const origin = live ? publicOrigin : localOrigin;
 const records = new WeakMap();
 const focusSelector = 'a[href],pre[tabindex="0"],.guide-table-scroll[tabindex="0"]';
 const compact = text => text.trim().replace(/\s+/g, ' ');
+async function expectedCodeCount(locale) {
+  const path = `site-content/guide/${locale.language}.md`;
+  const source = await readFile(new URL('../../' + path, import.meta.url));
+  expect(digest(source)).toBe(test.info().config.metadata.builderInputHashes[path]);
+  return guideSourceExampleCount(source.toString('utf8'), matrixRecipes.length);
+}
 function identity(info) {
   return { schema_version: 1, suite: 'guide', source_head: info.config.metadata.sourceHead,
     source_tree: info.config.metadata.sourceTree, mode: info.config.metadata.mode,
@@ -177,7 +183,7 @@ async function content(page, locale) {
     page.evaluate(guideFiguresObservation),
     timed(records.get(page).value, 'complete-body-aria', () => page.locator('body').ariaSnapshot()),
   ]);
-  expect(facts).toHaveLength(107);
+  expect(facts).toHaveLength(await expectedCodeCount(locale));
   const groups = requireGuideFigures(facts, aria);
   const tables = [];
   const regions = await page.locator('.guide-table-scroll').all();
@@ -370,7 +376,7 @@ test('both guides retain all chapters, code and tables in print media', async ({
   for (const locale of guideLocales) {
     await ready(page, locale);
     const sourceCode = await page.locator('pre code').allTextContents();
-    expect(sourceCode).toHaveLength(107);
+    expect(sourceCode).toHaveLength(await expectedCodeCount(locale));
     await page.emulateMedia({ media: 'print' });
     const layout = await page.evaluate(guideObservation); requireGuideLayout(layout);
     const styles = await page.locator('.guide-toc,.guide-chapter-switch,.language-switch,.guide-header-nav,.guide-toplink')

@@ -38,6 +38,14 @@ no cryptographic authentication, license acquisition or device qualification.
 
 A license URL can also be encoded inside a Protection System Specific Header (PSSH), which is DRM initialization metadata stored in a media file or manifest. Hexadecimal and Base64 are reversible encodings, not encryption. Masking a URL only in its readable form is insufficient. Known signaling values are removed from diagnostic records, while the intended signaling remains in the media output.
 
+Explicit HLS DRM output publishes Widevine PSSH and PlayReady Object (PRO)
+metadata in Base64 data URIs and stores the selected PSSH boxes in MP4
+initialization files. A PlayReady PRO can contain the configured license URL.
+drmr does not insert content-key bytes into these declarations. FairPlay
+output publishes its configured `skd:` key URI. Logs and UI omit or mask these
+addresses, complete data URIs and their registered encoded forms; the output
+manifests and initialization files deliberately retain them for players.
+
 Do not place confidential tokens in an output license URL or key URI unless publishing that address is intended. Keep signed input manifests and retained downloads private: original HLS playlists and DASH MPDs can contain credentials or signed URLs.
 
 HLS, DASH and MP4 URL input use the same fetch policy. Request headers are sent
@@ -76,6 +84,12 @@ Diagnostic protection has several layers:
 - Tool records mask registered secrets and their supported hexadecimal, byte-separated, Base64, escaped, and encoded representations. Secret values become `***REDACTED***`; some commands omit tool arguments and raw output entirely.
 - Conversion and verification failures use fixed error codes and safe progress labels without raw tool output.
 - The local web console selects protected key files by reference and excludes their contents from session, job, and result responses.
+
+Secret matching uses bounded memory and search work. If a diagnostic value
+exhausts its search budget, the entire value is replaced with the redaction
+marker. JSON Lines records keep their JSON structure; other fields are scrubbed
+independently. This limit prevents ambiguous overlapping matches from causing
+unbounded diagnostic processing.
 
 Global [progress output](usage.md#progress-output) uses fixed stage/task labels,
 elapsed time and numeric observations. It excludes URLs, keys, authentication

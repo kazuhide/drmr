@@ -920,6 +920,8 @@ fn audio_fmp4_hls_wrong_aes_key_with_valid_padding_is_rejected_by_fragment_struc
     let candidate = output.join("master.m3u8");
     all_checks(&verify_with_result_keys(&source, &candidate, &empty, &correct_hls).unwrap());
     let result = verify_with_result_keys(&source, &candidate, &empty, &wrong_hls);
+    // Valid padding still requires the decrypted initialization to pass the
+    // mandatory MP4 metadata census before its fragment clock is interpreted.
     println!(
         "DRMR_AUDIO_CBC_VALID_PADDING_CONTROL {}",
         serde_json::json!({
@@ -929,10 +931,13 @@ fn audio_fmp4_hls_wrong_aes_key_with_valid_padding_is_rejected_by_fragment_struc
             "wrong_init_padding": resources[0].padding(&wrong),
             "wrong_init_first_box_out_of_bounds": resources[0].invalid_first_box(&wrong),
             "actual_error": result.as_ref().err().map(|error| error.0),
-            "expected_error": "fragment-timing-not-supported",
+            "expected_error": "output-signaling-profile-not-supported",
         })
     );
-    expected_error(result.unwrap_err(), "fragment-timing-not-supported");
+    expected_error(
+        result.unwrap_err(),
+        "output-signaling-profile-not-supported",
+    );
     all_checks(&verify_with_result_keys(&source, &candidate, &empty, &correct_hls).unwrap());
     assert_eq!(
         common::snapshot_tree(source.parent().unwrap()),

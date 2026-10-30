@@ -283,7 +283,6 @@ fn error_hint(code: &str) -> Option<&'static str> {
         "hls-key-uri-required" => {
             Some("Provide output.hls_key_uri for CBCS HLS playlist signaling.")
         }
-        "cenc-hls-output-not-supported" => Some("Use --format dash or --format mp4 for cenc."),
         "output-key-not-used" => {
             Some("For clear output, omit the output section from --keys-file.")
         }
@@ -373,7 +372,6 @@ pub(crate) fn error(
                 | "output-key-not-used"
                 | "output-key-role-mismatch"
                 | "hls-key-uri-required"
-                | "cenc-hls-output-not-supported"
                 | "multi-track-mp4-output-not-supported"
                 | "target-requires-hls-output"
                 | "input-format-not-supported"
@@ -814,7 +812,28 @@ fn verify_current_output(
         };
         let target = match format {
             OutputFormat::HlsTs => TargetProtection::HlsSampleAes,
-            OutputFormat::Hls => TargetProtection::Cbcs,
+            OutputFormat::Hls => {
+                let tracks = &observed
+                    .details
+                    .as_ref()
+                    .ok_or(ConversionError("output-signaling-verification-failed"))?
+                    .track_protection;
+                if !tracks.is_empty()
+                    && tracks.iter().all(|track| {
+                        track.hls_key_methods == [inspection::HlsKeyMethod::SampleAesCtr]
+                    })
+                {
+                    TargetProtection::Cenc
+                } else if !tracks.is_empty()
+                    && tracks
+                        .iter()
+                        .all(|track| track.hls_key_methods == [inspection::HlsKeyMethod::SampleAes])
+                {
+                    TargetProtection::Cbcs
+                } else {
+                    return Err(ConversionError("output-signaling-verification-failed"));
+                }
+            }
             OutputFormat::Dash => match observed.protection {
                 inspection::Protection::Cenc => TargetProtection::Cenc,
                 inspection::Protection::Cbcs => TargetProtection::Cbcs,

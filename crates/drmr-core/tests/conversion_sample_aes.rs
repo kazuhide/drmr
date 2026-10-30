@@ -229,8 +229,7 @@ fn legacy_fmp4_declarations(
             .lines()
             .find(|line| line.starts_with("#EXT-X-KEY:"))
             .unwrap();
-        // Legacy fMP4 reads IVs from its validated container. New TS declaration
-        // restrictions must not reinterpret unrelated manifest IV text as media IVs.
+        // An unknown provider cannot be ignored beside a supported identity key.
         let declarations = format!(
             "#EXT-X-KEY:METHOD=SAMPLE-AES,URI=\"{OUTPUT_URI}\",KEYFORMAT=\"unsupported-format\",IV=not-a-vector\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI=\"{OUTPUT_URI}\",KEYFORMAT=\"identity\",IV=not-a-vector"
         );
@@ -251,9 +250,22 @@ fn legacy_fmp4_declarations(
                 hls_keys: result_hls,
             },
         })
-        .unwrap()
     };
-    let proof = verify();
+    assert_eq!(verify().unwrap_err().0, "hls-drm-signaling-invalid");
+    for (name, bytes) in &originals {
+        let text = std::str::from_utf8(bytes).unwrap();
+        let tag = text
+            .lines()
+            .find(|line| line.starts_with("#EXT-X-KEY:"))
+            .unwrap();
+        // fMP4 media IVs come from the validated container. A malformed identity
+        // declaration remains a separate manifest failure, not a TS media IV.
+        let identity = format!(
+            "#EXT-X-KEY:METHOD=SAMPLE-AES,URI=\"{OUTPUT_URI}\",KEYFORMAT=\"identity\",IV=not-a-vector"
+        );
+        std::fs::write(output.join(name), text.replace(tag, &identity)).unwrap();
+    }
+    let proof = verify().unwrap();
     // Container IVs still establish complete legacy media proof; malformed manifest
     // declarations independently fail the public verification's native rule scope.
     assert!(
@@ -275,7 +287,7 @@ fn legacy_fmp4_declarations(
     );
     assert!(!proof.passed);
     let native = proof.native_manifest.as_ref().unwrap();
-    assert_eq!(native.errors, originals.len() * 2);
+    assert_eq!(native.errors, originals.len());
     assert!(!native.is_clean_for_scope());
     assert!(
         native
@@ -287,7 +299,7 @@ fn legacy_fmp4_declarations(
     for (name, bytes) in originals {
         std::fs::write(output.join(name), bytes).unwrap();
     }
-    let restored = verify();
+    let restored = verify().unwrap();
     assert!(
         restored.passed
             && (restored.checks.is_pass()

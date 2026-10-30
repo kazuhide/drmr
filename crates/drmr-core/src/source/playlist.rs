@@ -29,7 +29,12 @@ pub const MEDIA: [&str; 12] = [
     "#EXT-X-CUE-IN",
 ];
 /// `_MASTER`: master playlist tags.
-pub const MASTER: [&str; 3] = ["#EXT-X-MEDIA", "#EXT-X-STREAM-INF", "#EXT-X-SESSION-DATA"];
+pub const MASTER: [&str; 4] = [
+    "#EXT-X-MEDIA",
+    "#EXT-X-STREAM-INF",
+    "#EXT-X-SESSION-DATA",
+    "#EXT-X-SESSION-KEY",
+];
 
 fn token(name: &str) -> SourceError {
     SourceError::new(name)
@@ -166,6 +171,14 @@ pub fn master_plan(
             let a = parse_attributes(value).map_err(Failure::Source)?;
             if a.get("URI").is_some() {
                 return Err(fail("unsupported-playlist-tag"));
+            }
+        } else if let Some(value) = line.strip_prefix("#EXT-X-SESSION-KEY:") {
+            // A session declaration advertises a key; it never grants a fetch.
+            let attrs = parse_attributes(value).map_err(Failure::Source)?;
+            if attrs.get("METHOD").is_none_or(|method| method == "NONE")
+                || attrs.get("URI").is_none_or(str::is_empty)
+            {
+                return Err(fail("invalid-playlist"));
             }
         } else if line.starts_with("#EXT") && !COMMON.contains(&tag_of(line)) {
             return Err(fail("ambiguous-playlist"));

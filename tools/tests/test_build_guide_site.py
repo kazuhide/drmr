@@ -6,6 +6,7 @@ from pathlib import Path
 import py_compile
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 TOOLS = Path(__file__).resolve().parents[1]
@@ -21,14 +22,14 @@ class GuideBuilderTests(unittest.TestCase):
         for route, page in pages.items():
             html = page.decode()
             self.assertEqual(html.count('data-guide-chapter='), 18)
-            self.assertIn('<figure class="guide-example" aria-labelledby=ex1 data-code-language=sh>', html)
+            self.assertIn('<figure class=guide-example aria-labelledby=e1 data-code-language=sh>', html)
             self.assertNotIn('role="group"', html)
-            self.assertIn('<caption id="table-1-title">', html)
+            self.assertIn('<caption id=t1>', html)
             self.assertIn('scope=row', html)
             for chapter in builder.CHAPTER_IDS:
                 self.assertIn(f'href="#{chapter}"', html)
                 other = "../ja/guide/" if route == "guide/index.html" else "../../guide/"
-                self.assertIn(f'href="{other}#{chapter}"', html)
+                self.assertIn(f'href={other}#{chapter}', html)
             self.assertNotIn('<script', html)
 
     def test_rendered_examples_keep_exact_source_text_and_validated_languages(self):
@@ -76,7 +77,7 @@ class GuideBuilderTests(unittest.TestCase):
             with self.subTest(target=target), self.assertRaises(ValueError):
                 builder.inline('[Bad](' + target + ')')
         output = builder.body('## MP4 → DASH / cbcs {#recipe-mp4-dash-cbcs}', 'en')
-        self.assertEqual(output, '<h3 id="recipe-mp4-dash-cbcs" tabindex=-1>MP4 → DASH / cbcs</h3>')
+        self.assertEqual(output, '<h3 id=recipe-mp4-dash-cbcs tabindex=-1>MP4 → DASH / cbcs</h3>')
 
     def test_example_generation_reads_source_even_when_an_old_bytecode_cache_looks_current(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -166,6 +167,54 @@ class GuideBuilderTests(unittest.TestCase):
             target.write_bytes(b'outdated')
             self.assertFalse(builder.outputs_match(root, builder.render(TOOLS.parent)))
             self.assertEqual(target.read_bytes(), b'outdated')
+
+    def test_compact_body_preserves_the_complete_element_tree_text_and_attributes(self):
+        spec = importlib.util.spec_from_file_location("guide_semantics", TOOLS / "check_site.py")
+        checker = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(checker)
+        markup = ('<section id="sample"><p>One <a href="#sample">link</a>.</p><p>Two.</p>'
+                  '<ul><li>First</li><li>Second</li></ul>'
+                  '<table><thead><tr><th scope="col">A</th><th scope="col">B</th></tr></thead>'
+                  '<tbody><tr><th scope="row">Key</th><td>Value</td></tr>'
+                  '<tr><th scope="row">Other</th><td>Last</td></tr></tbody></table>'
+                  '<p>Before code.</p><figure class="guide-example" aria-labelledby="e1" data-code-language="sh">'
+                  '<figcaption id="e1">Example 1: sh</figcaption><pre tabindex="0"><code>'
+                  'printf \'&lt;/td&gt; &lt;/p&gt;\' &amp;&amp;\n  drmr --version\n'
+                  '</code></pre></figure><p>Last.</p></section>')
+        compact = builder.compact_body(markup)
+
+        def tree(node):
+            if isinstance(node, str):
+                return node
+            return node.tag, node.attrs, [tree(child) for child in node.children]
+
+        self.assertEqual(tree(checker.MatrixMarkup(compact).root), tree(checker.MatrixMarkup(markup).root))
+        self.assertLess(len(compact), len(markup))
+        self.assertNotIn('</td>', compact)
+        self.assertIn('printf \'&lt;/td&gt; &lt;/p&gt;\' &amp;&amp;\n  drmr --version\n', compact)
+
+    def test_both_complete_guides_have_identical_semantics_before_and_after_compaction(self):
+        spec = importlib.util.spec_from_file_location("guide_serialization", TOOLS / "check_site.py")
+        checker = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(checker)
+        compact = builder.render(TOOLS.parent)
+        with patch.object(builder, "compact_body", side_effect=lambda markup: markup):
+            explicit = builder.render(TOOLS.parent)
+
+        def tree(node):
+            if isinstance(node, str):
+                return node
+            return node.tag, node.attrs, [tree(child) for child in node.children]
+
+        for route in compact:
+            with self.subTest(route=route):
+                self.assertEqual(tree(checker.MatrixMarkup(compact[route].decode()).root),
+                                 tree(checker.MatrixMarkup(explicit[route].decode()).root))
+                self.assertLess(len(compact[route]), len(explicit[route]))
+
+    def test_compaction_does_not_omit_endings_before_inline_text_or_other_elements(self):
+        markup = '<section><p>First.</p>tail<a href="#x">link</a><p>Second.</p><code>x</code></section>'
+        self.assertEqual(builder.compact_body(markup), markup.replace('href="#x"', 'href=#x'))
 
 
 if __name__ == '__main__':

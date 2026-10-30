@@ -14,6 +14,8 @@ use std::{
 mod aac;
 mod auxiliary;
 pub(in crate::conversion) use aac::AacConfiguration;
+mod controls;
+pub(in crate::conversion) use controls::census as metadata_controls;
 mod crypto;
 mod encrypt;
 mod entry;
@@ -24,6 +26,8 @@ mod progressive;
 mod progressive_copy;
 pub(in crate::conversion) use progressive_copy::copy_progressive;
 mod read;
+mod track_ids;
+pub(in crate::conversion) use track_ids::canonicalize_tool_ids;
 mod sample_window;
 mod segment;
 mod write;
@@ -287,6 +291,25 @@ fn catalogue(
         init.movie.tracks[index].sample_count = count;
     }
     Ok(())
+}
+
+/// Read real IDs from the bounded moov retained by `audio::movie`, without sample scanning.
+/// This selects tool-only compatibility copies; source admission remains unchanged.
+pub(super) fn metadata_track_ids(bytes: &[u8]) -> Result<Vec<u32>, ConversionError> {
+    if bytes.len() > MAX_METADATA_BYTES {
+        return Err(ConversionError("resource-budget"));
+    }
+    let nodes = crate::mp4::parse_boxes(bytes).map_err(|_| BAD)?;
+    let movie = read::one(&nodes, *b"moov")?;
+    movie
+        .children
+        .iter()
+        .filter(|node| node.kind() == *b"trak")
+        .map(|track| {
+            init::track_header(read::one(&track.children, *b"tkhd")?.header.payload(bytes))
+                .map(|(id, _)| id)
+        })
+        .collect()
 }
 
 /// Read bounded metadata and validate every sample's declared range and timeline.

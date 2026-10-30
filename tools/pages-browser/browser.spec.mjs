@@ -5,7 +5,8 @@ import { assets, digest, liveMode, publicOrigin, localOrigin, allowedRequest, as
 import { requireFocus, requireImages, requireLayout, layoutObservation, focusObservation, pollFocus, requireClippedFocusTimeout, partialFocusCandidate, FocusConditionTimeout } from './checks.mjs';
 import { locales, english } from './locales.mjs';
 import { matrixColumns, matrixRows, matrixObservation, requireMatrixLayout, requireMatrixMovement, completeMatrixKey } from './matrix.mjs';
-import { matrixRecipes, recipeObservation, requireRecipe, requireRecipeIdentity, requireRecipePosition,
+import { matrixRecipes, matrixRecipeBatches, landingFocusTargetCounts as focusTargetCounts,
+  recipeObservation, requireRecipe, requireRecipeIdentity, requireRecipePosition,
   matrixLinkExposure, requireMatrixLinkExposure } from './recipes.mjs';
 
 const live = liveMode(process.env.PAGES_LIVE);
@@ -129,8 +130,6 @@ test.afterEach(async ({ page }, info) => {
 });
 
 const focusSelector = 'a[href], pre[tabindex="0"], .matrix-scroll[tabindex="0"]';
-// Fixed inventories include the intentional documentation links in each locale.
-const focusTargetCounts = { en: 82, ja: 81 };
 
 function textWithoutNotes(node) {
   const text = value => value.nodeType === Node.TEXT_NODE ? value.textContent :
@@ -782,8 +781,8 @@ for (const locale of locales) test(`${locale.language}: core content and anchor 
   }
 });
 
-for (const locale of locales) for (const offset of [0, 15, 30]) {
-  test(`${locale.language}: matrix recipes ${offset + 1}–${offset + 15} navigate without JavaScript`, async ({ browser }, info) => {
+for (const locale of locales) for (const { offset, end, recipes: batch } of matrixRecipeBatches) {
+  test(`${locale.language}: matrix recipes ${offset + 1}–${end} navigate without JavaScript`, async ({ browser }, info) => {
     const context = await browser.newContext({ javaScriptEnabled: false, viewport: { width: 320, height: 900 } });
     const coldFonts = locale.language === 'en' && offset === 0
       ? coldFontFixture(origin + '/drmr/guide/', info.config.metadata.assetHashes) : undefined;
@@ -792,8 +791,7 @@ for (const locale of locales) for (const offset of [0, 15, 30]) {
       const page = await context.newPage();
       const network = monitor(page, coldFonts);
       if (coldFonts) network.coldFonts = coldFonts.record;
-      const batch = matrixRecipes.slice(offset, offset + 15);
-      expect(batch).toHaveLength(15);
+      expect(batch).toHaveLength(end - offset);
       const recipes = await recipeNavigation(page, locale, info, batch, offset, coldFonts);
       await Promise.all(monitors.get(page).pending);
       expect(network.console).toEqual([]);

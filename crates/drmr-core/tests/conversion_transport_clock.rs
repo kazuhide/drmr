@@ -6,6 +6,7 @@ use drmr_core::{
         ContentKey, ConversionReport, ConversionRequest, Converter, DecodeEvidence, HlsInputKeys,
         InputKeys, OutputKey, ProcessingMode, ValidationDepth, VerificationReport,
         VerificationRequest, VerificationScope, VerificationSource,
+        plan::{self, ExecutionPlanRequest},
     },
     events::NoSink,
     inspection::{OutputFormat, TargetProtection},
@@ -781,10 +782,46 @@ fn mp4_eligibility_depends_on_actual_aac_clocks_not_only_sample_rate_and_timesca
     assert!(!analysis.eligible_formats.contains(&OutputFormat::Mp4));
     let joined = root.path().join("two-step.mp4");
     joined_output(&output, &joined);
+    let joined_before = fs::read(&joined).unwrap();
+    let joined_analysis = native
+        .analyze_source(source_view(&joined, &empty, &hls))
+        .unwrap();
+    assert!(joined_analysis.input_admitted);
+    assert_eq!(joined_analysis.actual_format, OutputFormat::Mp4);
+    assert!(joined_analysis.verification.passed);
+    assert!(joined_analysis.verification.checks.is_pass());
+    assert_eq!(
+        joined_analysis.verification.required_depth,
+        ValidationDepth::Native
+    );
+    assert_eq!(
+        joined_analysis.verification.scope,
+        VerificationScope::SourceAdmission
+    );
     assert!(
-        native
-            .analyze_source(source_view(&joined, &empty, &hls))
-            .is_err()
+        !joined_analysis
+            .eligible_formats
+            .contains(&OutputFormat::Mp4)
+    );
+    assert_eq!(joined_analysis.eligible_formats, analysis.eligible_formats);
+    let unsupported_output = root.path().join("unsupported.mp4");
+    let unsupported_plan = root.path().join("unsupported.plan.json");
+    let error = native
+        .create_execution_plan(ExecutionPlanRequest {
+            input: source_view(&joined, &empty, &hls),
+            output: &unsupported_output,
+            format: Some(OutputFormat::Mp4),
+            target: TargetProtection::Clear,
+        })
+        .and_then(|planned| plan::write_new(&unsupported_plan, &planned))
+        .unwrap_err();
+    assert_eq!(error.0, "execution-plan-not-supported");
+    assert!(!unsupported_plan.exists());
+    assert!(!unsupported_output.exists());
+    assert_eq!(
+        fs::read(&joined).unwrap(),
+        joined_before,
+        "source admission and refused planning must not normalize the input clocks"
     );
     let clocks = packet_clocks(&joined, true);
     let control = strict_clock_control(&output, &root.path().join("strict-control"), &clocks);
@@ -800,11 +837,14 @@ fn mp4_eligibility_depends_on_actual_aac_clocks_not_only_sample_rate_and_timesca
     assert_eq!(actual.first(), clocks.first());
     assert_eq!(actual.last(), clocks.last());
     assert_ne!(actual, clocks);
+    let joined_control_analysis = native
+        .analyze_source(source_view(&joined_control, &empty, &hls))
+        .unwrap();
+    assert!(joined_control_analysis.input_admitted);
     assert!(
-        native
-            .analyze_source(source_view(&joined_control, &empty, &hls))
-            .unwrap()
-            .input_admitted
+        joined_control_analysis
+            .eligible_formats
+            .contains(&OutputFormat::Mp4)
     );
     assert_eq!(common::snapshot_tree(input.parent().unwrap()), original);
 }

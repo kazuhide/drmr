@@ -8,12 +8,13 @@
 //! encoding a tool may print them in — contiguous hex in any case, bytes separated by spaces,
 //! colons, commas or `0x` prefixes, base64; a text secret as written, XML-escaped,
 //! percent-encoded, as UTF-8 and UTF-16LE hex and as base64 of both. The JSON-Lines writer
-//! applies the same scrub to each serialized line as the last guard.
+//! applies the same scrub to each record value and serialized JSON token as the last guard,
+//! retaining the JSON structure even when a diagnostic must be discarded.
 //!
 //! A tool that cannot complete (spawn failure, timeout, capture limit) is a [`ToolError`] naming the tool and
 //! the kind of failure only, never the argv.
 
-use crate::canonical::python_float_repr;
+use crate::canonical::{python_float_repr, write_string};
 use crate::concurrency::Stop;
 use crate::events::{Record, Sink, now_iso, round3};
 use crate::resources::{Claim, Limiter, Permit, Workload, process_limiter};
@@ -81,6 +82,7 @@ mod cleanup;
 mod cohort_tests;
 #[cfg(test)]
 mod packager_jobs_tests;
+mod scrub;
 pub use cleanup::CleanupOwner;
 pub(crate) use cleanup::CleanupReceipt;
 /// Shorter strings would redact unrelated text; keys and IVs are 32 hex characters.
@@ -179,14 +181,13 @@ pub fn patterns_for(secret: &str) -> Vec<Regex> {
 }
 
 /// `text` with every match of `patterns` replaced by [`REDACTED`].
+/// If arbitrary regex searches exhaust their fixed work budget, the entire text is redacted.
 pub fn scrub_with(patterns: &[Regex], text: &str) -> String {
-    let mut current = text.to_string();
-    for pattern in patterns {
-        if pattern.is_match(&current) {
-            current = pattern.replace_all(&current, REDACTED).into_owned();
-        }
-    }
-    current
+    scrub_combined(patterns, &[], text)
+}
+
+fn scrub_combined(registered: &[Regex], extra: &[Regex], text: &str) -> String {
+    scrub::combined(registered, extra, text)
 }
 
 /// The job's secrets as patterns for every encoding.
@@ -243,11 +244,11 @@ impl SecretRegistry {
         if extra.is_empty() {
             return self.scrub(text);
         }
-        let mut patterns = self.patterns.clone();
+        let mut patterns = Vec::new();
         for secret in extra {
             patterns.extend(patterns_for(secret));
         }
-        scrub_with(&patterns, text)
+        scrub_combined(&self.patterns, &patterns, text)
     }
 }
 
@@ -327,11 +328,37 @@ impl Secrets {
             .scrub_extra(text, extra)
     }
 
-    /// [`Secrets::scrub`], then `extra` patterns the caller compiled once ([`patterns_for`]):
+    /// Scrub registered and precompiled `extra` patterns against the same original text:
     /// a tool run scrubs its per-call secrets from every argv token and both outputs without
     /// recompiling them per token.
     pub fn scrub_with_patterns(&self, text: &str, extra: &[Regex]) -> String {
-        scrub_with(extra, &self.scrub(text))
+        let registry = self.registry.read().unwrap_or_else(PoisonError::into_inner);
+        scrub_combined(&registry.patterns, extra, text)
+    }
+
+    pub(crate) fn scrub_record_string(&self, text: &str) -> String {
+        self.scrub_record_with_patterns(text, &[])
+    }
+
+    fn scrub_record_with_patterns(&self, text: &str, extra: &[Regex]) -> String {
+        let registry = self.registry.read().unwrap_or_else(PoisonError::into_inner);
+        let raw = scrub_combined(&registry.patterns, extra, text);
+        let mut token = String::with_capacity(text.len().saturating_add(2));
+        write_string(&mut token, text);
+        let guarded = scrub_combined(&registry.patterns, extra, &token);
+        if guarded == token {
+            return raw;
+        }
+        // Check BOTH original representations. Serializing an already masked
+        // inner value could destroy an enclosing match in the escaped form.
+        // Preserve ordinary diagnostic context when both independent masks
+        // agree; otherwise discard this value rather than merge byte offsets
+        // across JSON escapes. Use this before the first ToolRunner replacement
+        // as well as in the JSON writer, which cannot recover discarded bytes.
+        match serde_json::from_str(&guarded) {
+            Ok(Value::String(encoded)) if encoded == raw => raw,
+            _ => REDACTED.to_string(),
+        }
     }
 }
 
@@ -1030,7 +1057,9 @@ impl ToolRunner {
             Value::Array(
                 shown
                     .iter()
-                    .map(|token| Value::String(self.secrets.scrub_with_patterns(token, extra)))
+                    .map(|token| {
+                        Value::String(self.secrets.scrub_record_with_patterns(token, extra))
+                    })
                     .collect(),
             ),
         );
@@ -1056,7 +1085,8 @@ impl ToolRunner {
         put(
             &mut record,
             "stderr",
-            self.secrets.scrub_with_patterns(&failure.text, extra),
+            self.secrets
+                .scrub_record_with_patterns(&failure.text, extra),
         );
         put(&mut record, "truncated", false);
         base.apply(&mut record);
@@ -1083,7 +1113,7 @@ impl ToolRunner {
         };
         let (out, out_cut) = if options.log_stdout {
             bounded(
-                &self.secrets.scrub_with_patterns(&stdout_text, extra),
+                &self.secrets.scrub_record_with_patterns(&stdout_text, extra),
                 options.max_output_chars,
             )
         } else {
@@ -1098,7 +1128,7 @@ impl ToolRunner {
             )
         };
         let (err, err_cut) = bounded(
-            &self.secrets.scrub_with_patterns(&stderr_text, extra),
+            &self.secrets.scrub_record_with_patterns(&stderr_text, extra),
             options.max_output_chars,
         );
         let mut record = Record::new();
@@ -1144,7 +1174,7 @@ impl ToolRunner {
             "argv",
             Value::Array(
                 argv.iter()
-                    .map(|token| Value::String(self.secrets.scrub(token)))
+                    .map(|token| Value::String(self.secrets.scrub_record_string(token)))
                     .collect(),
             ),
         );
@@ -1187,7 +1217,11 @@ impl ToolRunner {
         );
         put(&mut record, "duration_s", round3(duration_s));
         put(&mut record, "stdout", "");
-        put(&mut record, "stderr", self.secrets.scrub(stderr));
+        put(
+            &mut record,
+            "stderr",
+            self.secrets.scrub_record_string(stderr),
+        );
         put(&mut record, "truncated", false);
         if let Some(id) = call_id {
             put(&mut record, "call_id", id);

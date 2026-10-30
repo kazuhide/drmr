@@ -166,6 +166,38 @@ fn sample_aes_candidate(input: &Inspection) -> bool {
             })
 }
 
+fn transport_mp4_candidate(input: &Inspection, target: TargetProtection) -> bool {
+    input.format == InputFormat::Hls
+        && input.evidence == super::Evidence::Manifest
+        && matches!(
+            target,
+            TargetProtection::Clear | TargetProtection::Cenc | TargetProtection::Cbcs
+        )
+        && input.tracks.len() == 2
+        && input
+            .tracks
+            .iter()
+            .filter(|track| track.kind == TrackKind::Video)
+            .count()
+            == 1
+        && input
+            .tracks
+            .iter()
+            .filter(|track| track.kind == TrackKind::Audio)
+            .count()
+            == 1
+}
+
+fn fragmented_mp4_condition(input: &Inspection, target: TargetProtection) -> Option<&'static str> {
+    if transport_mp4_candidate(input, target) {
+        Some("local-transport-stream-single-video-audio-profile-and-presentation-windows-must-pass")
+    } else if input.tracks.len() == 1 || progressive_candidate(input, target) {
+        Some("fragmented-output-profile-and-presentation-windows-must-pass")
+    } else {
+        None
+    }
+}
+
 fn compatibility_findings(
     input: &Inspection,
     target: TargetProtection,
@@ -186,9 +218,6 @@ fn compatibility_findings(
         && matches!(target, TargetProtection::Cenc | TargetProtection::Cbcs)
     {
         findings.push(Finding::new("mp4-protection-requires-mp4-container"));
-    }
-    if target == TargetProtection::Cenc && formats.contains(&OutputFormat::Hls) {
-        findings.push(Finding::new("cenc-hls-output-not-supported"));
     }
     if input.tracks.is_empty()
         || input
@@ -238,7 +267,11 @@ pub fn plan(
     if progressive_candidate && formats == [OutputFormat::Mp4] {
         findings.push(Finding::new("progressive-mp4-profile-validation-required"));
     }
-    if formats == [OutputFormat::Mp4] && input.tracks.len() != 1 && !progressive_candidate {
+    if formats == [OutputFormat::Mp4]
+        && input.tracks.len() != 1
+        && !progressive_candidate
+        && !transport_mp4_candidate(&input, target)
+    {
         execution_available = false;
         findings.push(Finding::new("mp4-output-requires-one-track"));
     }
@@ -351,11 +384,11 @@ fn describe_processing(
                             "finite-progressive-profile-must-pass",
                         ));
                     }
-                    if input.tracks.len() == 1 || progressive_candidate(input, target) {
+                    if let Some(condition) = fragmented_mp4_condition(input, target) {
                         candidates.push(CandidateRoute::new(
                             Route::FragmentedMp4,
                             format,
-                            "fragmented-output-profile-and-presentation-windows-must-pass",
+                            condition,
                         ));
                     }
                 }

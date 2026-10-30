@@ -1,7 +1,7 @@
 //! Explicit operator signaling. No license service is contacted by this module.
 pub(in crate::conversion) mod flagfile;
 mod multi;
-mod records;
+pub(in crate::conversion) mod records;
 use super::{ConversionError, OutputKey};
 use crate::{
     inspection::{InputFormat, OutputFormat, Protection, TargetProtection},
@@ -28,13 +28,21 @@ const CLEAR_METADATA_BOXES: &[[u8; 4]] = &[
     *b"trex", *b"mehd", *b"moof", *b"mfhd", *b"traf", *b"tfhd", *b"tfdt", *b"trun", *b"mfra",
     *b"tfra", *b"mfro", *b"free",
 ];
+// These declarations require the complete native source qualification as well.
+// It checks their contents, locations, sample groups and encryption auxiliaries;
+// this additional census still refuses unknown opaque metadata.
+const QUALIFIED_METADATA_BOXES: &[[u8; 4]] = &[
+    *b"encv", *b"enca", *b"sinf", *b"frma", *b"schm", *b"schi", *b"tenc", *b"senc", *b"saiz",
+    *b"saio", *b"pssh", *b"sgpd", *b"sbgp", *b"sdtp", *b"iods",
+];
 
 const LIMIT: usize = 16 * 1024 * 1024;
+const METADATA_BOX_LIMIT: usize = LIMIT / std::mem::size_of::<mp4::Mp4Box>();
 const DASH: &str = "urn:mpeg:dash:schema:mpd:2011";
 const CENC: &str = "urn:mpeg:cenc:2013";
 const PR: &str = "urn:uuid:9a04f079-9840-4286-ab92-e65be0885f95";
 
-/// One explicit `PlayReady` license address, kept out of diagnostics and reports.
+/// Explicit DRM provider metadata, kept out of diagnostics and reports.
 #[derive(Clone)]
 pub struct OutputSignaling {
     license_url: Zeroizing<String>,
@@ -73,7 +81,8 @@ impl OutputSignaling {
         })
     }
     /// Select explicit DRM systems. Widevine data must be a complete hexadecimal or base64
-    /// PSSH box; the `FairPlay` key URI belongs to the separate HLS output-key configuration.
+    /// PSSH box. The `FairPlay` URI is supplied separately as `hls_key_uri` for
+    /// fragmented MP4, or through `HlsOutputKey` for MPEG-TS.
     pub fn multi_drm(
         widevine_pssh: Option<&str>,
         playready_license_url: Option<&str>,
@@ -128,6 +137,9 @@ impl OutputSignaling {
         format: OutputFormat,
         target: TargetProtection,
     ) -> Result<(), ConversionError> {
+        if format != OutputFormat::Dash {
+            return Err(UNSUPPORTED);
+        }
         validate_drm_profile(&[DrmSystem::PlayReady], format, target)
     }
     fn escaped_url(&self) -> Zeroizing<String> {
@@ -330,6 +342,25 @@ pub(super) fn clear_mp4(
     {
         return Err(UNSUPPORTED);
     }
+    metadata_census(path, stop, false, true)
+}
+
+/// Complement a complete media proof with the stricter opaque-metadata census.
+pub(super) fn qualified_mp4(
+    path: &Path,
+    stop: &crate::concurrency::Stop,
+    require_movie: bool,
+) -> Result<(), ConversionError> {
+    metadata_census(path, stop, true, require_movie)
+}
+
+fn metadata_census(
+    path: &Path,
+    stop: &crate::concurrency::Stop,
+    qualified: bool,
+    require_movie: bool,
+) -> Result<(), ConversionError> {
+    cancelled(stop)?;
     let mut file = File::open(path).map_err(|_| UNSUPPORTED)?;
     let length = file.metadata().map_err(|_| UNSUPPORTED)?.len();
     let mut position = 0u64;
@@ -338,7 +369,11 @@ pub(super) fn clear_mp4(
     for _ in 0..100_000 {
         cancelled(stop)?;
         if position == length {
-            return if moov == 1 { Ok(()) } else { Err(UNSUPPORTED) };
+            return if moov <= 1 && (!require_movie || moov == 1) {
+                Ok(())
+            } else {
+                Err(UNSUPPORTED)
+            };
         }
         let mut header = [0u8; 8];
         file.read_exact(&mut header).map_err(|_| UNSUPPORTED)?;
@@ -357,13 +392,14 @@ pub(super) fn clear_mp4(
             return Err(UNSUPPORTED);
         }
         let kind = &header[4..];
-        if !matches!(
+        if !(matches!(
             kind,
             b"ftyp" | b"moov" | b"mdat" | b"free" | b"moof" | b"mfra" | b"sidx" | b"styp"
-        ) {
+        ) || qualified && kind == b"pssh")
+        {
             return Err(UNSUPPORTED);
         }
-        if matches!(kind, b"moov" | b"moof" | b"mfra") {
+        if matches!(kind, b"moov" | b"moof" | b"mfra" | b"pssh") {
             let size = usize::try_from(size).map_err(|_| UNSUPPORTED)?;
             metadata_bytes = metadata_bytes
                 .checked_add(size)
@@ -373,7 +409,11 @@ pub(super) fn clear_mp4(
             bytes.resize(size, 0);
             file.read_exact(&mut bytes[head..])
                 .map_err(|_| UNSUPPORTED)?;
-            clear_metadata_tree(&bytes, stop)?;
+            if qualified {
+                metadata_tree(&bytes, stop, true)?;
+            } else {
+                clear_metadata_tree(&bytes, stop)?;
+            }
             if kind == b"moov" {
                 moov += 1;
             }
@@ -396,7 +436,21 @@ fn clear_metadata_tree(
     bytes: &[u8],
     stop: &crate::concurrency::Stop,
 ) -> Result<(), ConversionError> {
-    let tree = mp4::parse_boxes(bytes).map_err(|_| UNSUPPORTED)?;
+    metadata_tree(bytes, stop, false)
+}
+
+fn metadata_tree(
+    bytes: &[u8],
+    stop: &crate::concurrency::Stop,
+    qualified: bool,
+) -> Result<(), ConversionError> {
+    let tree = mp4::parse_boxes_with_limit(bytes, METADATA_BOX_LIMIT).map_err(|_| UNSUPPORTED)?;
+    super::native_media::metadata_controls(&tree).map_err(|_| UNSUPPORTED)?;
+    let descriptive = if qualified {
+        qualified_descriptive_metadata(&tree, bytes)?
+    } else {
+        std::collections::BTreeSet::new()
+    };
     for node in mp4::walk(&tree) {
         cancelled(stop)?;
         let kind = node.kind();
@@ -404,10 +458,24 @@ fn clear_metadata_tree(
         if kind == *b"ilst" && payload.is_empty() {
             continue;
         }
-        if !CLEAR_METADATA_BOXES.contains(&kind) {
+        if descriptive.contains(&node.header.offset) {
+            continue;
+        }
+        if !(CLEAR_METADATA_BOXES.contains(&kind)
+            || qualified && QUALIFIED_METADATA_BOXES.contains(&kind))
+        {
             return Err(UNSUPPORTED);
         }
         match &kind {
+            // A closed InitialObjectDescriptor contains profile indicators only:
+            // no URL, scene graph, nested descriptor or external stream reference.
+            b"iods"
+                if payload.len() != 13
+                    || payload.get(..10) != Some(&[0, 0, 0, 0, 0x10, 7, 0, 0x4f, 0xff, 0xff])
+                    || payload[12] != 0xff =>
+            {
+                return Err(UNSUPPORTED);
+            }
             b"dref" | b"stsd"
                 if payload.get(..8) != Some(&[0, 0, 0, 0, 0, 0, 0, 1])
                     || node.children.len() != 1 =>
@@ -415,7 +483,7 @@ fn clear_metadata_tree(
                 return Err(UNSUPPORTED);
             }
             b"url " if payload != [0, 0, 0, 1] => return Err(UNSUPPORTED),
-            b"avc1"
+            b"avc1" | b"encv"
                 if payload.len() < 78
                     || node
                         .children
@@ -426,7 +494,7 @@ fn clear_metadata_tree(
             {
                 return Err(UNSUPPORTED);
             }
-            b"mp4a"
+            b"mp4a" | b"enca"
                 if payload.len() < 28
                     || payload.get(8..10) != Some(&[0, 0])
                     || node
@@ -444,7 +512,88 @@ fn clear_metadata_tree(
     Ok(())
 }
 
+fn qualified_descriptive_metadata(
+    tree: &[mp4::Mp4Box],
+    bytes: &[u8],
+) -> Result<std::collections::BTreeSet<usize>, ConversionError> {
+    let mut descriptive = std::collections::BTreeSet::new();
+    for node in mp4::walk(tree) {
+        if node.kind() == *b"moov"
+            && node.children.iter().any(|meta| {
+                meta.kind() == *b"meta"
+                    && meta.children.iter().any(|child| child.kind() == *b"ID32")
+            })
+        {
+            super::audio_presentation::id3_metadata_count(node, bytes).map_err(|_| UNSUPPORTED)?;
+            for meta in node.children.iter().filter(|meta| meta.kind() == *b"meta") {
+                descriptive.extend(
+                    meta.children
+                        .iter()
+                        .filter(|child| child.kind() == *b"ID32")
+                        .map(|child| child.header.offset),
+                );
+            }
+        }
+        if node.kind() == *b"ilst" && !node.header.payload(bytes).is_empty() {
+            validate_static_text_tags(node.header.payload(bytes))?;
+            descriptive.insert(node.header.offset);
+        }
+    }
+    Ok(descriptive)
+}
+
+fn validate_static_text_tags(bytes: &[u8]) -> Result<(), ConversionError> {
+    let tags = mp4::parse_boxes_with_limit(bytes, METADATA_BOX_LIMIT).map_err(|_| UNSUPPORTED)?;
+    for tag in tags {
+        if !matches!(
+            &tag.kind(),
+            b"\xa9nam" | b"\xa9ART" | b"\xa9too" | b"\xa9cmt" | b"cprt"
+        ) {
+            return Err(UNSUPPORTED);
+        }
+        let entries = mp4::parse_boxes_with_limit(tag.header.payload(bytes), METADATA_BOX_LIMIT)
+            .map_err(|_| UNSUPPORTED)?;
+        let [entry] = entries.as_slice() else {
+            return Err(UNSUPPORTED);
+        };
+        let value = entry.header.payload(tag.header.payload(bytes));
+        if entry.kind() != *b"data"
+            || value.get(..8) != Some(&[0, 0, 0, 1, 0, 0, 0, 0])
+            || std::str::from_utf8(&value[8..]).is_err()
+        {
+            return Err(UNSUPPORTED);
+        }
+    }
+    Ok(())
+}
+
 impl super::Converter {
+    fn register_provider_secrets(
+        &self,
+        key: Option<&OutputKey>,
+        target: TargetProtection,
+        uri: Option<&str>,
+    ) -> Result<(), ConversionError> {
+        if let Some(signaling) = &self.output_signaling {
+            self.backend.runner.secrets().register(uri);
+            self.backend
+                .runner
+                .secrets()
+                .register([signaling.license_url.as_str()]);
+            if signaling.is_multi()
+                && matches!(target, TargetProtection::Cenc | TargetProtection::Cbcs)
+            {
+                let key = key.ok_or(INVALID)?;
+                let records = signaling.multi_objects(key, target)?;
+                self.backend.runner.secrets().register(records.secrets());
+                self.backend
+                    .runner
+                    .secrets()
+                    .register([key.0.key_hex().as_str()]);
+            }
+        }
+        Ok(())
+    }
     /// Validate final native output records against the same private graph used for media checks.
     pub(in crate::conversion) fn verify_segment_signaling(
         &self,
@@ -458,14 +607,24 @@ impl super::Converter {
         self.backend.check_cancelled()?;
         if let Some(signaling) = &self.output_signaling {
             signaling.validate_profile(format, target)?;
-            if format == OutputFormat::Dash {
+            if matches!(format, OutputFormat::Dash | OutputFormat::Hls) {
                 let key = key.ok_or(INVALID)?;
                 let records = if signaling.is_multi() {
                     signaling.multi_objects(key, target)?
                 } else {
                     records::MultiObjects::legacy_playready(signaling.objects(key, target)?)
                 };
-                records.finish(frozen, key, &self.backend.stop)?;
+                if format == OutputFormat::Dash {
+                    records.finish(frozen, key, &self.backend.stop)?;
+                } else {
+                    records.finish_hls(
+                        frozen,
+                        key,
+                        signaling.systems().contains(&DrmSystem::FairPlay),
+                        uri,
+                        &self.backend.stop,
+                    )?;
+                }
             } else {
                 records::fairplay(
                     frozen,
@@ -548,7 +707,18 @@ impl super::Converter {
     ) -> Result<(), ConversionError> {
         if let Some(signaling) = &self.output_signaling {
             signaling.validate_profile(request.format, request.target)?;
+            self.register_provider_secrets(
+                request.output_key,
+                request.target,
+                request.hls_key_uri,
+            )?;
             if signaling.is_multi() && qualified_presentation {
+                let mut checked = std::collections::BTreeSet::new();
+                for track in request.tracks {
+                    if checked.insert(&track.source) {
+                        qualified_mp4(&track.source, &self.backend.stop, true)?;
+                    }
+                }
                 return Ok(());
             }
             let first = request.tracks.first().ok_or(UNSUPPORTED)?;
@@ -573,8 +743,31 @@ impl super::Converter {
         request: &super::ConversionRequest<'_>,
         admitted: Option<&super::SourceQualification>,
     ) -> Result<(), ConversionError> {
+        if request.format == OutputFormat::Hls
+            && matches!(
+                request.target,
+                TargetProtection::Cenc | TargetProtection::Cbcs
+            )
+            && self.output_signaling.is_none()
+        {
+            let uri = request
+                .hls_key_uri
+                .ok_or(ConversionError("hls-key-uri-required"))?;
+            if uri.is_empty()
+                || uri.len() > 4096
+                || uri.contains('"')
+                || uri.chars().any(char::is_control)
+            {
+                return Err(ConversionError("invalid-hls-key-uri"));
+            }
+        }
         if let Some(signaling) = &self.output_signaling {
             signaling.validate_profile(request.format, request.target)?;
+            self.register_provider_secrets(
+                request.output_key,
+                request.target,
+                request.hls_key_uri,
+            )?;
             if signaling.is_multi() {
                 if let Some(admitted) = admitted {
                     self.validate_qualified_drm_source(
@@ -596,7 +789,7 @@ impl super::Converter {
                         request.target,
                     )?;
                 }
-                if request.format != OutputFormat::Dash
+                if signaling.systems().contains(&DrmSystem::FairPlay)
                     && !records::valid_fairplay_uri(
                         request
                             .hls_key_uri
@@ -662,7 +855,24 @@ impl super::Converter {
         hls: Option<&super::HlsOutputKey>,
     ) -> Result<(), ConversionError> {
         if self.output_signaling.is_none() {
+            if format == OutputFormat::Hls && target == TargetProtection::Cenc {
+                records::hls::rewrite_identity(
+                    root,
+                    target,
+                    uri.ok_or(ConversionError("hls-key-uri-required"))?,
+                    &self.backend.stop,
+                )?;
+            }
             return Ok(());
+        }
+        if format == OutputFormat::Hls {
+            self.output_signaling.as_ref().ok_or(INVALID)?.rewrite_hls(
+                root,
+                key.ok_or(INVALID)?,
+                target,
+                uri,
+                &self.backend.stop,
+            )?;
         }
         let entrypoint = root.join(if format == OutputFormat::Dash {
             "manifest.mpd"
@@ -731,6 +941,62 @@ mod tests {
                 Err(UNSUPPORTED)
             );
         }
+    }
+    #[test]
+    fn qualified_metadata_census_keeps_unknown_control_and_descriptor_refusals() {
+        fn boxed(kind: [u8; 4], payload: &[u8]) -> Vec<u8> {
+            [
+                (8 + u32::try_from(payload.len()).unwrap())
+                    .to_be_bytes()
+                    .as_slice(),
+                kind.as_slice(),
+                payload,
+            ]
+            .concat()
+        }
+        let stop = crate::concurrency::Stop::new();
+        let descriptor = [0, 0, 0, 0, 0x10, 7, 0, 0x4f, 0xff, 0xff, 0x29, 0x7f, 0xff];
+        metadata_tree(&boxed(*b"moov", &boxed(*b"iods", &descriptor)), &stop, true).unwrap();
+        for bytes in [
+            boxed(*b"moov", &boxed(*b"uuid", &[0; 16])),
+            boxed(*b"moov", &boxed(*b"emsg", &[0; 8])),
+            boxed(*b"moov", &boxed(*b"TEST", &[])),
+            boxed(*b"moov", &boxed(*b"iods", &[0; 13])),
+            boxed(*b"ilst", &boxed(*b"pssh", &[0; 16])),
+            boxed(*b"ilst", &boxed(*b"\xa9nam", &boxed(*b"data", &[0; 8]))),
+            boxed(*b"ID32", &[0; 6]),
+        ] {
+            assert_eq!(metadata_tree(&bytes, &stop, true), Err(UNSUPPORTED));
+        }
+        let text = boxed(
+            *b"ilst",
+            &boxed(
+                *b"\xa9nam",
+                &boxed(
+                    *b"data",
+                    &[&[0, 0, 0, 1, 0, 0, 0, 0][..], b"Synthetic title"].concat(),
+                ),
+            ),
+        );
+        metadata_tree(&text, &stop, true).unwrap();
+    }
+    #[test]
+    fn native_location_errors_keep_the_fixed_signaling_refusal() {
+        let bytes = [
+            24_u32.to_be_bytes().as_slice(),
+            b"moov",
+            &8_u32.to_be_bytes(),
+            b"mvex",
+            &8_u32.to_be_bytes(),
+            b"mvex",
+        ]
+        .concat();
+        // Duplicate canonical containers produce a native framing error; it must
+        // not become a separate public error through the strict signaling census.
+        assert_eq!(
+            metadata_tree(&bytes, &crate::concurrency::Stop::new(), true),
+            Err(UNSUPPORTED)
+        );
     }
     #[test]
     fn explicit_addresses_are_bounded_absolute_metadata_and_never_debug_values() {

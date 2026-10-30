@@ -5,6 +5,58 @@ for installation, stable interfaces and versioning.
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-10-31
+
+Extend the qualified output profiles while retaining native media verification
+and the existing CLI workflow. Web and Desktop remain experimental.
+
+### Added
+
+- Generate and independently check Widevine and PlayReady declarations for
+  CENC (counter-mode) DASH, including PlayReady AESCTR headers and their key
+  checksum. CBCS retains its separate AESCBC header profile.
+- Generate CBCS fMP4 HLS with FairPlay, Widevine and PlayReady together, or
+  any supported subset. CENC fMP4 HLS supports Widevine and PlayReady with
+  `SAMPLE-AES-CTR`; FairPlay and Apple's authoring profile require CBCS.
+  Check each provider declaration against the actual encryption and key
+  identifier during conversion, retained-source acquisition and fresh verification.
+- Package qualified fragmented MP4 files, DASH and fMP4 HLS as clear, AES-128
+  or FairPlay SAMPLE-AES TS HLS. Encrypted input requires known keys.
+  Container changes use `auto` or `stitch`; `segments` refuses them.
+- Write one fragmented MP4 file with clear, CENC or CBCS protection from
+  qualified clear, AES-128 or SAMPLE-AES TS HLS. Support audio only, video only,
+  or one of each, retaining encoded samples, absolute clocks and exact final
+  AAC playback ranges at 44.1 or 48 kHz. Ambiguous video or audio selections
+  are refused rather than silently dropped.
+- Link the website's input/output matrix to examples for the added routes,
+  including separate clear-input and encrypted-input instructions.
+- Qualify release archives with native A → B → A comparisons across the
+  documented container/protection profiles. Reuse generated short fixtures,
+  verify every conversion independently, and bind complete reports to each
+  archive and source revision. Explicit track-layout conditions remain separate
+  from successful conversions.
+
+### Fixed
+
+- Use validated MPEG-TS frame dimensions when sizing independent bundle
+  verification, so small inputs can be checked within their memory budget.
+- Describe HLS selections containing one video and one audio track as conditional
+  MP4 planning candidates. Execution still validates the actual container,
+  tracks, clocks and presentation windows.
+- Normalize relative single-MP4 output paths before safe publication.
+- Mask nested encoded DRM records as complete values and bound diagnostic
+  search work. Keep JSON Lines records valid when a diagnostic is fully redacted.
+
+### Requirements and verification
+
+Native media checks run in Rust; packaging and output encryption use Shaka
+Packager where required. Additional complete decoding needs FFmpeg and
+ffprobe. Short attributed Big Buck Bunny regressions cover native conversion,
+saved plans, direct conversion, independent verification and refusal cases;
+selected cases also compare complete decoded media. Consult each release's
+native archive reports for its exact source, tools and platform evidence.
+These checks do not acquire DRM licenses or qualify device playback.
+
 ## [1.0.2] - 2026-10-30
 
 CLI release for the supported media profiles, with native validation,

@@ -8,7 +8,8 @@ use drmr_core::canonical::Dumps;
 use drmr_core::events::{Collector, JsonLinesWriter, NoSink, Record};
 use drmr_core::resources::Limiter;
 use drmr_core::toolrun::{
-    REDACTED, RunOptions, SecretRegistry, Secrets, ToolError, ToolRunner, bounded, patterns_for,
+    DEFAULT_STDERR_BYTES, REDACTED, RunOptions, SecretRegistry, Secrets, ToolError, ToolRunner,
+    bounded, patterns_for, scrub_with,
 };
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -1131,4 +1132,335 @@ fn accepted_whitespace_hex_secrets_cover_canonical_byte_encodings() {
     assert_eq!(Secrets::with([mixed]).scrub(&encoded), REDACTED);
     assert_eq!(Secrets::with(["short"]).scrub("short"), "short");
     assert_eq!(Secrets::with(["aa      bb"]).scrub("aabb"), "aabb");
+}
+
+#[test]
+fn opaque_data_uris_and_complete_payload_encodings_precede_registered_inner_values() {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    let private = "https://example.invalid/private-operator-metadata";
+    let payload = format!("header:{private}:tail");
+    let encoded = STANDARD.encode(payload.as_bytes());
+    for prefix in [
+        "data:text/plain;base64,",
+        "data:application/octet-stream;base64,",
+    ] {
+        let uri = format!("{prefix}{encoded}");
+        let mut secrets = SecretRegistry::new();
+        let hex = hex::encode(payload.as_bytes());
+        secrets.register([private, encoded.as_str(), hex.as_str()]);
+        secrets.register([uri.as_str()]);
+        secrets.register([private]);
+        for value in [&uri, &encoded, &hex::encode(payload.as_bytes())] {
+            assert!(
+                secrets.scrub(value) == REDACTED,
+                "an opaque provider value was only partially masked"
+            );
+        }
+        assert_eq!(
+            secrets.scrub(&format!("before {uri} after")),
+            format!("before {REDACTED} after")
+        );
+    }
+}
+
+#[test]
+fn overlapping_operator_metadata_is_masked_against_original_text_in_any_order() {
+    let inner = "private-license-operator-address";
+    let outer = format!("provider-header:{inner}:provider-tail");
+    for values in [[inner, outer.as_str()], [outer.as_str(), inner]] {
+        let secrets = Secrets::with(values);
+        assert_eq!(secrets.scrub(&outer), REDACTED);
+        assert_eq!(
+            secrets.scrub(&format!("{inner} {outer}")),
+            format!("{REDACTED} {REDACTED}")
+        );
+    }
+}
+
+#[test]
+fn masking_merges_partial_and_self_overlaps_without_splitting_unicode() {
+    for patterns in [["abcde", "cdefg"], ["cdefg", "abcde"]] {
+        let patterns: Vec<_> = patterns
+            .into_iter()
+            .map(|pattern| regex::Regex::new(pattern).unwrap())
+            .collect();
+        assert_eq!(
+            scrub_with(&patterns, "before abcdefg after"),
+            format!("before {REDACTED} after")
+        );
+    }
+    let pattern = regex::Regex::new("ababa").unwrap();
+    assert_eq!(scrub_with(&[pattern], "abababa"), REDACTED);
+    let first = "機密のライセンス";
+    let second = "のライセンス情報";
+    for values in [[first, second], [second, first]] {
+        assert_eq!(
+            Secrets::with(values).scrub("前 機密のライセンス情報 後"),
+            format!("前 {REDACTED} 後")
+        );
+    }
+}
+#[test]
+fn repeated_short_patterns_stream_one_capture_without_retaining_match_intervals() {
+    let text = "ab".repeat(DEFAULT_STDERR_BYTES / 2);
+    let patterns = [
+        regex::Regex::new("ababa").unwrap(),
+        regex::Regex::new("babab").unwrap(),
+    ];
+    assert_eq!(scrub_with(&patterns, &text), REDACTED);
+    let text = "x ".repeat(DEFAULT_STDERR_BYTES / 2);
+    let patterns = [regex::Regex::new("x").unwrap()];
+    let scrubbed = scrub_with(&patterns, &text);
+    assert_eq!(
+        scrubbed.len(),
+        (REDACTED.len() + 1) * (DEFAULT_STDERR_BYTES / 2)
+    );
+    assert!(scrubbed.starts_with(REDACTED) && scrubbed.ends_with(' '));
+}
+
+#[test]
+fn registered_and_per_call_nested_values_match_the_same_original_bytes() {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    let payload = STANDARD.encode(b"known-private-provider-record");
+    let uri = format!("data:text/plain;base64,{payload}");
+    for (registered, extra) in [
+        (payload.as_str(), uri.as_str()),
+        (uri.as_str(), payload.as_str()),
+    ] {
+        let secrets = Secrets::with([registered]);
+        let patterns = patterns_for(extra);
+        assert_eq!(secrets.scrub_with_patterns(&uri, &patterns), REDACTED);
+        assert_eq!(secrets.scrub_extra(&uri, &[extra]), REDACTED);
+        assert_eq!(
+            secrets.scrub_with_patterns(&format!("before {uri} after"), &patterns),
+            format!("before {REDACTED} after")
+        );
+    }
+}
+
+#[test]
+fn greedy_self_overlaps_with_a_suffix_fail_closed() {
+    let patterns = [regex::Regex::new("a+b").unwrap()];
+    let text = format!("{}b ordinary suffix", "a".repeat(4096));
+    // Exhausting the search budget must discard even the unprocessed suffix,
+    // rather than publish a partially scrubbed diagnostic.
+    assert_eq!(scrub_with(&patterns, &text), REDACTED);
+}
+
+#[test]
+fn a_failing_greedy_alternative_cannot_hide_work_behind_short_matches() {
+    let patterns = [regex::Regex::new("a.*b|a").unwrap()];
+    let text = format!("{}X", "a".repeat(4096));
+    assert_eq!(scrub_with(&patterns, &text), REDACTED);
+}
+
+#[test]
+fn a_very_long_public_literal_uses_the_same_fail_closed_budget() {
+    let patterns = [regex::Regex::new(&"a".repeat(4097)).unwrap()];
+    let text = format!("{}X", "a".repeat(4097 + 40));
+    assert_eq!(scrub_with(&patterns, &text), REDACTED);
+}
+
+#[test]
+fn literal_windows_cover_unicode_casefold_and_self_overlap_with_a_suffix() {
+    for pattern in [
+        regex::Regex::new("(?i)KK").unwrap(),
+        regex::RegexBuilder::new("KK")
+            .case_insensitive(true)
+            .build()
+            .unwrap(),
+    ] {
+        for padding in 16_375..16_393 {
+            let prefix = "前".repeat(padding);
+            let text = format!("{prefix}KKKX");
+            assert_eq!(
+                scrub_with(std::slice::from_ref(&pattern), &text),
+                format!("{prefix}{REDACTED}X")
+            );
+        }
+    }
+}
+
+#[test]
+fn many_registered_patterns_preserve_ordinary_labels_and_repeated_key_diagnostics() {
+    let values: Vec<_> = (0..40)
+        .map(|index| format!("operator-value-{index:04}"))
+        .collect();
+    let secrets = Secrets::with(values.iter());
+    let ordinary = "tool-output level=info returncode=0 duration_seconds=0.125";
+    assert_eq!(secrets.scrub(ordinary), ordinary);
+    assert_eq!(
+        secrets.scrub("before operator-value-0039 after"),
+        format!("before {REDACTED} after")
+    );
+    let writer = JsonLinesWriter::new(Vec::new(), Arc::new(secrets));
+    let ordinary_record = json!({
+        "event": "tool-output", "level": "info", "returncode": 0,
+        "duration_seconds": 0.125, "stderr": ordinary,
+    });
+    let line = writer.line(ordinary_record.as_object().unwrap());
+    assert_eq!(
+        serde_json::from_str::<Value>(&line).unwrap(),
+        ordinary_record
+    );
+    let secrets = Secrets::with([IV]);
+    let text = format!("tool-output: {}returncode=0", format!("{IV} ").repeat(16));
+    assert_eq!(
+        secrets.scrub(&text),
+        format!(
+            "tool-output: {}returncode=0",
+            format!("{REDACTED} ").repeat(16)
+        )
+    );
+}
+
+#[test]
+fn a_long_opaque_edge_match_with_a_suffix_has_bounded_work() {
+    let secret = format!("{}{}", "a".repeat(4097), "z".repeat(512));
+    let text = format!("{}{}X", "a".repeat(1_048_063), "z".repeat(512));
+    let patterns = patterns_for(&secret);
+    let start = Instant::now();
+    let scrubbed = scrub_with(&patterns, &text);
+    let elapsed = start.elapsed();
+    // This asserts the safe fallback independently from any timing threshold.
+    assert_eq!(scrubbed, REDACTED);
+    assert!(!scrubbed.contains(&secret));
+    assert!(!scrubbed.contains(&"z".repeat(512)));
+    if !cfg!(debug_assertions) && std::env::var_os("DRMR_SCRUB_TIMING").is_some() {
+        eprintln!(
+            "opaque suffix scrub: bytes={} patterns={} elapsed_ms={:.3}",
+            text.len(),
+            patterns.len(),
+            elapsed.as_secs_f64() * 1000.0
+        );
+    }
+}
+
+#[test]
+fn the_json_lines_guard_keeps_structure_when_one_diagnostic_exhausts_its_budget() {
+    let secret = format!("{}{}", "a".repeat(4097), "z".repeat(512));
+    let diagnostic = format!("{}{}X", "a".repeat(8192), "z".repeat(512));
+    let secrets = Arc::new(Secrets::with([secret]));
+    let writer = JsonLinesWriter::new(Vec::new(), secrets);
+    let record = json!({
+        "event": "tool-output",
+        "level": "error",
+        "returncode": 7,
+        "duration_seconds": 0.125,
+        "stderr": diagnostic,
+        "nested": [{"diagnostic": diagnostic, "count": 42}],
+    });
+    let line = writer.line(record.as_object().unwrap());
+    let parsed: Value = serde_json::from_str(&line).expect("guard must retain a JSON object");
+    assert_eq!(parsed["event"], "tool-output");
+    assert_eq!(parsed["level"], "error");
+    assert_eq!(parsed["returncode"], 7);
+    assert_eq!(parsed["duration_seconds"], 0.125);
+    assert_eq!(parsed["stderr"], REDACTED);
+    assert_eq!(parsed["nested"][0]["diagnostic"], REDACTED);
+    assert_eq!(parsed["nested"][0]["count"], 42);
+    assert!(!line.contains(&"z".repeat(512)));
+}
+
+#[test]
+fn the_json_lines_guard_scrubs_keys_json_escapes_and_numeric_tokens_safely() {
+    let quoted = "operator\"slash\\value-000";
+    let escaped = r"\u79d8\u5bc6";
+    let secrets = Arc::new(Secrets::with([quoted, escaped, "1234567890"]));
+    let writer = JsonLinesWriter::new(Vec::new(), secrets);
+    let record = json!({
+        "event": "tool-output", "returncode": 7,
+        "stderr": quoted, "escaped": "秘密", "numeric": 1_234_567_890_u64,
+        "nested": {quoted: "masked-key", "ordinary": 42},
+    });
+    let line = writer.line(record.as_object().unwrap());
+    let parsed: Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(parsed["event"], "tool-output");
+    assert_eq!(parsed["returncode"], 7);
+    assert_eq!(parsed["stderr"], REDACTED);
+    assert_eq!(parsed["escaped"], REDACTED);
+    assert_eq!(parsed["numeric"], REDACTED);
+    assert_eq!(parsed["nested"][REDACTED], "masked-key");
+    assert_eq!(parsed["nested"]["ordinary"], 42);
+    assert!(!line.contains(quoted));
+    assert!(!line.contains(escaped));
+    assert!(!line.contains("1234567890"));
+}
+
+#[test]
+fn the_json_lines_guard_checks_both_original_representations_before_masking() {
+    let outer = r"\u79d8\u5bc6-provider-sensitive-tail";
+    let inner = "provider-sensitive-tail";
+    let positive = "秘密-provider-sensitive-tail";
+    let negative = "秘密-independent-value";
+    for registered in [[outer, inner], [inner, outer]] {
+        let writer = JsonLinesWriter::new(Vec::new(), Arc::new(Secrets::with(registered)));
+        let record = json!({
+            "event": "tool-output", "returncode": 7, "duration_s": 0.125,
+            "positive": positive, "negative": negative,
+            "array": [positive, negative, format!("quoted: \"{positive}\"\n")],
+            "nested": {positive: negative},
+            "ordinary": format!("before {inner} after"),
+        });
+        let line = writer.line(record.as_object().unwrap());
+        let parsed: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(parsed["event"], "tool-output");
+        assert_eq!(parsed["returncode"], 7);
+        assert_eq!(parsed["duration_s"], 0.125);
+        assert_eq!(parsed["positive"], REDACTED);
+        assert_eq!(parsed["negative"], negative);
+        assert_eq!(parsed["array"][0], REDACTED);
+        assert_eq!(parsed["array"][1], negative);
+        assert_eq!(parsed["array"][2], REDACTED);
+        assert_eq!(parsed["nested"][REDACTED], negative);
+        assert!(!parsed["nested"].as_object().unwrap().contains_key(positive));
+        assert_eq!(parsed["ordinary"], format!("before {REDACTED} after"));
+    }
+}
+
+#[test]
+fn tool_records_check_original_json_before_the_first_raw_replacement() {
+    let outer = r"\u79d8\u5bc6-provider-sensitive-tail";
+    let inner = "provider-sensitive-tail";
+    let positive = "秘密-provider-sensitive-tail";
+    for (registered, extra) in [(outer, inner), (inner, outer)] {
+        let (runner, collector, secrets) = runner();
+        secrets.register([registered]);
+        let completed = runner
+            .run_tool(
+                &response(positive.as_bytes(), positive.as_bytes(), 0, &[positive]),
+                "fixture",
+                &RunOptions {
+                    secrets: &[extra],
+                    ..RunOptions::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(completed.stdout_text(), positive, "parsed data stays real");
+        assert_eq!(completed.stderr_text(), positive);
+        let records = collector.records();
+        assert_eq!(
+            records[0]["argv"].as_array().unwrap().last().unwrap(),
+            REDACTED
+        );
+        assert_eq!(records[1]["stdout"], REDACTED);
+        assert_eq!(records[1]["stderr"], REDACTED);
+        assert_eq!(records[1]["returncode"], 0);
+
+        secrets.register([outer, inner]);
+        let call = runner.note_command(&argv(&["fixture", positive]), "fixture", None);
+        runner.note_result("fixture", Some(7), 0.125, None, positive, Some(call));
+        let records = collector.records();
+        assert_eq!(records[2]["argv"], json!(["fixture", REDACTED]));
+        assert_eq!(records[3]["stderr"], REDACTED);
+        assert_eq!(records[3]["returncode"], 7);
+        let writer = JsonLinesWriter::new(Vec::new(), secrets);
+        for record in &records {
+            let line = writer.line(record);
+            let parsed: Value = serde_json::from_str(&line).unwrap();
+            assert!(parsed.is_object());
+            assert!(!line.contains(r"\u79d8\u5bc6"));
+            assert!(!line.contains(inner));
+        }
+    }
 }

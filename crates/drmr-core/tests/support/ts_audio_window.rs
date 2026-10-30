@@ -4,6 +4,11 @@ use super::*;
 use num_rational::Ratio;
 use sha2::{Digest as _, Sha256};
 
+#[path = "ts_audio_window/mp4.rs"]
+mod mp4;
+#[path = "ts_audio_window/reinput.rs"]
+mod reinput;
+
 const RAW_FRAMES: usize = 432;
 const RAW_SAMPLES: usize = RAW_FRAMES * 1024;
 const FINAL_PRESENTED_SAMPLES: usize = 240;
@@ -1001,7 +1006,7 @@ fn partial_aac_final_one_and_1023_samples_keep_exact_global_sample_endpoints() {
 }
 
 #[test]
-fn standalone_partial_audio_mp4_inputs_and_outputs_are_refused_without_side_effects() {
+fn standalone_partial_audio_mp4_is_analyzed_verified_and_qualified_for_repackaging() {
     use drmr_core::conversion::{VerificationRequest, VerificationSource};
     let root = drmr_core::native::private_tempdir().unwrap();
     let (source, _) = audio_sources_at_rate(root.path(), Some(44_100));
@@ -1016,110 +1021,73 @@ fn standalone_partial_audio_mp4_inputs_and_outputs_are_refused_without_side_effe
     let mp4 = root.path().join("standalone.mp4");
     join_dash_track(&prepared, &mp4);
     assert_two_standard_edits(&mp4, AAC_44100, packets[0][0]);
-    let before = common::snapshot_tree(root.path());
+    let before = std::fs::read(&mp4).unwrap();
+    let original_source = common::snapshot_tree(source.parent().unwrap());
+    let original_dash = common::snapshot_tree(&prepared);
     let empty = InputKeys::default();
     let hls = HlsInputKeys::default();
-    refuse_code(
-        &converter().analyze_source(VerificationSource {
+    let admitted = converter()
+        .analyze_source(VerificationSource {
             input: &mp4,
             input_keys: &empty,
             hls_keys: &hls,
-        }),
-        "audio-presentation-range-not-supported",
-    );
-    for (format, code) in [
-        (OutputFormat::Hls, "audio-presentation-range-not-supported"),
-        (OutputFormat::Dash, "audio-presentation-range-not-supported"),
-        // This standalone edit profile remains outside conversion admission.
-        (
-            OutputFormat::HlsTs,
-            "audio-presentation-range-not-supported",
-        ),
-        (OutputFormat::Mp4, "audio-presentation-range-not-supported"),
-    ] {
-        let output = root
-            .path()
-            .join(format!("refused-input-{}", format.as_str()));
-        refuse_clear_plan_and_conversion(
-            &mp4,
-            &output,
-            format,
-            "audio-presentation-range-not-supported",
-            code,
+        })
+        .unwrap();
+    assert!(admitted.verification.passed);
+    for format in [OutputFormat::Mp4, OutputFormat::Dash, OutputFormat::Hls] {
+        assert!(admitted.eligible_formats.contains(&format));
+        let output = root.path().join(if format == OutputFormat::Mp4 {
+            "accepted-mp4.mp4".to_owned()
+        } else {
+            format!("accepted-{}", format.as_str())
+        });
+        let plan = converter()
+            .create_execution_plan(drmr_core::conversion::plan::ExecutionPlanRequest {
+                input: VerificationSource {
+                    input: &mp4,
+                    input_keys: &empty,
+                    hls_keys: &hls,
+                },
+                output: &output,
+                format: Some(format),
+                target: TargetProtection::Clear,
+            })
+            .unwrap();
+        all_checks(
+            &converter()
+                .execute_plan(
+                    &plan,
+                    &drmr_core::conversion::key_file::OperatorKeys::default(),
+                )
+                .unwrap()
+                .verification,
         );
     }
     let manifest = prepared.join("manifest.mpd");
     for (reference, result) in [(&mp4, &manifest), (&source, &mp4)] {
-        refuse_code(
-            &converter().verify(VerificationRequest {
-                source: VerificationSource {
-                    input: reference,
-                    input_keys: &empty,
-                    hls_keys: &hls,
-                },
-                output: VerificationSource {
-                    input: result,
-                    input_keys: &empty,
-                    hls_keys: &hls,
-                },
-            }),
-            "audio-presentation-range-not-supported",
+        all_checks(
+            &converter()
+                .verify(VerificationRequest {
+                    source: VerificationSource {
+                        input: reference,
+                        input_keys: &empty,
+                        hls_keys: &hls,
+                    },
+                    output: VerificationSource {
+                        input: result,
+                        input_keys: &empty,
+                        hls_keys: &hls,
+                    },
+                })
+                .unwrap(),
         );
     }
-    for (label, input, code) in [
-        ("ts", &source, "ts-audio-only-timing-proof-not-supported"),
-        ("dash", &manifest, "audio-presentation-range-not-supported"),
-    ] {
-        let output = root.path().join(format!("refused-output-{label}.mp4"));
-        refuse_clear_plan_and_conversion(
-            input,
-            &output,
-            OutputFormat::Mp4,
-            "execution-plan-not-supported",
-            code,
-        );
-    }
-    assert_eq!(common::snapshot_tree(root.path()), before);
-}
-
-fn refuse_clear_plan_and_conversion(
-    input: &Path,
-    output: &Path,
-    format: OutputFormat,
-    plan_code: &str,
-    conversion_code: &str,
-) {
-    use drmr_core::conversion::{VerificationSource, plan::ExecutionPlanRequest};
-    let empty = InputKeys::default();
-    let hls = HlsInputKeys::default();
-    refuse_code(
-        &converter().create_execution_plan(ExecutionPlanRequest {
-            input: VerificationSource {
-                input,
-                input_keys: &empty,
-                hls_keys: &hls,
-            },
-            output,
-            format: Some(format),
-            target: TargetProtection::Clear,
-        }),
-        plan_code,
+    assert_eq!(std::fs::read(&mp4).unwrap(), before);
+    assert_eq!(
+        common::snapshot_tree(source.parent().unwrap()),
+        original_source
     );
-    refuse_code(
-        &converter().convert(ConversionRequest {
-            input,
-            output,
-            format,
-            target: TargetProtection::Clear,
-            input_keys: &empty,
-            hls_input_keys: &hls,
-            output_key: None,
-            hls_key_uri: None,
-            hls_output_key: None,
-        }),
-        conversion_code,
-    );
-    assert!(!output.exists());
+    assert_eq!(common::snapshot_tree(&prepared), original_dash);
 }
 
 fn refuse_code<T>(result: &Result<T, drmr_core::conversion::ConversionError>, expected: &str) {

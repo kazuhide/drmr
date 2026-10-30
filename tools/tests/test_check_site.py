@@ -26,7 +26,7 @@ def recipe_fixture(language="en", first_example=1):
     }
     formats = (("mp4", "MP4", ("clear", "cenc", "cbcs")),
                ("dash", "DASH", ("clear", "cenc", "cbcs")),
-               ("hls", "HLS / fMP4", ("clear", "cbcs", "hls-aes128")),
+               ("hls", "HLS / fMP4", ("clear", "cenc", "cbcs", "hls-aes128")),
                ("hls-ts", "HLS / MPEG-TS", ("clear", "hls-aes128", "hls-sample-aes")))
     rows = ("mp4", "dash", "hls-fmp4", "hls-ts-video", "hls-ts-audio")
     protection_labels = {"clear": "Clear", "cenc": "cenc", "cbcs": "cbcs",
@@ -39,8 +39,6 @@ def recipe_fixture(language="en", first_example=1):
     example = first_example
     for index, row in enumerate(rows):
         for output_format, output_label, targets in formats:
-            if (index < 3 and output_format == "hls-ts") or (index >= 3 and output_format == "mp4"):
-                continue
             for target in targets:
                 identifier = "recipe-" + row + "-" + output_format + "-" + target
                 heading = input_labels[language][index] + " → " + output_label + " / " + protection_labels[target]
@@ -48,11 +46,13 @@ def recipe_fixture(language="en", first_example=1):
                 source = "src/input." + suffix
                 output = "result.mp4" if output_format == "mp4" else "result"
                 groups = []
-                for protection in input_profiles[index]:
+                for group in ((input_profiles[index][0],), input_profiles[index][1:]):
+                    protection = group[0]
+                    label = " / ".join(protection_labels[item] for item in group)
                     input_keys = " --keys-file keys.json" if protection != "clear" else ""
                     runtime_keys = " --keys-file keys.json" if protection != "clear" or target != "clear" else ""
-                    name = {"hls-aes128": "aes128", "hls-sample-aes": "sample-aes"}.get(protection, protection)
-                    groups.append("# " + protection_labels[protection] + " input\n"
+                    name = "clear" if protection == "clear" else "encrypted"
+                    groups.append("# " + label + " input\n"
                                   'drmr analyze "https://example.com/' + name + "." + suffix + '" \\\n'
                                   "  --download-dir src" + input_keys + " &&\n"
                                   "drmr plan " + source + " --to " + target + " --format " + output_format + " \\\n"
@@ -62,11 +62,38 @@ def recipe_fixture(language="en", first_example=1):
                 code = "\n\n".join(groups)
                 content.append('<h3 id="' + identifier + '" tabindex="-1">' + heading + '</h3>'
                                '<p><a href="#recipe-setup">Prepare the key configuration</a></p>'
-                               '<figure class="guide-example" data-code-language="sh" aria-labelledby="ex' + str(example) + '">'
-                               '<figcaption id="ex' + str(example) + '">Complete URL conversion example</figcaption>'
+                               '<figure class="guide-example" data-code-language="sh" aria-labelledby="e' + str(example) + '">'
+                               '<figcaption id="e' + str(example) + '">Complete URL conversion example</figcaption>'
                                '<pre tabindex="0"><code>' + escape(code) + '</code></pre></figure>')
                 example += 1
     return "".join(content)
+
+
+class OptionalGuideEndings(unittest.TestCase):
+    def test_only_generated_optional_endings_reconstruct_the_same_tree(self):
+        explicit = ('<section><p>Before.</p><p>After.</p><ol><li>One</li><li>Two</li></ol>'
+                    '<table><thead><tr><th>A</th><th>B</th></tr></thead>'
+                    '<tbody><tr><th>C</th><td>D</td></tr><tr><th>E</th><td>F</td></tr></tbody></table>'
+                    '<p>Final.</p></section>')
+        compact = ('<section><p>Before.<p>After.<ol><li>One<li>Two</ol>'
+                   '<table><thead><tr><th>A<th>B<tbody><tr><th>C<td>D<tr><th>E<td>F</table>'
+                   '<p>Final.</section>')
+
+        def tree(node):
+            if isinstance(node, str):
+                return node
+            return node.tag, node.attrs, [tree(child) for child in node.children]
+
+        self.assertEqual(tree(CHECK.MatrixMarkup(explicit).root), tree(CHECK.MatrixMarkup(compact).root))
+
+    def test_other_missing_endings_and_cross_parent_closures_remain_refused(self):
+        for markup in ('<section><p><strong>Missing</section>', '<ul><li>Wrong parent</ol>',
+                       '<table><thead><tr><th>Missing tbody</table>',
+                       '<section><p><a href="#x">Missing link ending<p>Other</section>',
+                       '<div><p>Omission outside the emitted parent</div>',
+                       '<table><tbody><tr><td><code>Missing code ending</table>'):
+            with self.subTest(markup=markup), self.assertRaises(CHECK.Failure):
+                CHECK.MatrixMarkup(markup)
 
 
 class Site(unittest.TestCase):
@@ -421,6 +448,17 @@ class Site(unittest.TestCase):
 
 
     def regenerate_guide_fixture(self):
+        # URL mutations must reach reference validation even when real guides
+        # nearly fill the transfer budget. Replace only link-free introduction
+        # prose in these copied fixtures; production bytes and the explicit
+        # transfer-budget regression remain unchanged.
+        for language in ("en", "ja"):
+            source = self.repo / ("site-content/guide/" + language + ".md")
+            paragraphs = source.read_text(encoding="utf-8").split("\n\n")
+            self.assertTrue(paragraphs[1].startswith("# 1."))
+            self.assertNotIn("[", paragraphs[2])
+            paragraphs[2] = "Guide fixture introduction."
+            source.write_bytes("\n\n".join(paragraphs).encode("utf-8"))
         spec = importlib.util.spec_from_file_location("chapter_link_builder_fixture", self.repo / "tools/build_guide_site.py")
         builder = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(builder)
@@ -437,7 +475,9 @@ class Site(unittest.TestCase):
                 source.write_bytes((source.read_text(encoding="utf-8") +
                                   "\n[CLI chapter details](" + reference + ")\n").encode("utf-8"))
                 self.regenerate_guide_fixture()
-                self.assertIn('href="' + reference + '"', (self.site / output).read_text(encoding="utf-8"))
+                page = CHECK.Page()
+                page.feed((self.site / output).read_text(encoding="utf-8"))
+                self.assertIn(('a', 'href', reference), page.references)
                 self.assertEqual(self.check()["guides"][output]["chapters"], 18)
 
     def test_regeneration_does_not_waive_portable_chapter_url_boundaries(self):
@@ -458,7 +498,9 @@ class Site(unittest.TestCase):
                 with self.subTest(language=language, reference=reference):
                     source.write_bytes((original + "\n[Chapter details](" + reference + ")\n").encode("utf-8"))
                     self.regenerate_guide_fixture()
-                    self.assertIn('href="' + reference + '"', (self.site / output).read_text(encoding="utf-8"))
+                    page = CHECK.Page()
+                    page.feed((self.site / output).read_text(encoding="utf-8"))
+                    self.assertIn(('a', 'href', reference), page.references)
                     with self.assertRaisesRegex(CHECK.Failure, "site-guide-reference"):
                         self.check()
             source.write_bytes(original.encode("utf-8"))
@@ -494,13 +536,13 @@ class ConversionMatrix(unittest.TestCase):
                    ["プログレッシブ / フラグメント化", "フラグメント化MP4トラック", "フラグメント化MP4（fMP4）", "映像（音声は省略可）", "音声のみ"]),
         }
         heading, region, caption, corner, outside, profiles = labels[language]
-        standard = ["Clear/cenc/cbcs", "Clear/cenc/cbcs", "Clear/cbcs/AES-128", ""]
+        standard = ["Clear/cenc/cbcs", "Clear/cenc/cbcs", "Clear/cenc/cbcs/AES-128", "Clear/AES-128/SAMPLE-AES"]
         rows = [
             ("mp4", "MP4", "Clear/cenc/cbcs", standard),
             ("dash", "DASH", "Clear/cenc/cbcs", standard),
             ("hls-fmp4", "HLS", "Clear/cenc/cbcs/AES-128", standard),
-            ("hls-ts-video", "HLS / MPEG-TS", "Clear/AES-128/SAMPLE-AES", ["", "Clear/cenc/cbcs", "Clear/cbcs/AES-128", "Clear/AES-128/SAMPLE-AES"]),
-            ("hls-ts-audio", "HLS / MPEG-TS", "Clear/AES-128/SAMPLE-AES", ["", "Clear/cenc/cbcs", "Clear/cbcs/AES-128", "Clear/AES-128/SAMPLE-AES"]),
+            ("hls-ts-video", "HLS / MPEG-TS", "Clear/AES-128/SAMPLE-AES", standard),
+            ("hls-ts-audio", "HLS / MPEG-TS", "Clear/AES-128/SAMPLE-AES", standard),
         ]
         def protection(value, row=None, column=None):
             parts = []
@@ -512,7 +554,7 @@ class ConversionMatrix(unittest.TestCase):
                     input_label = (("MP4", "DASH", "HLS / fMP4", "HLS / MPEG-TS (video)", "HLS / MPEG-TS (audio only)") if language == "en" else
                                    ("MP4", "DASH", "HLS / fMP4", "HLS / MPEG-TS（映像）", "HLS / MPEG-TS（音声のみ）"))[index]
                     heading = input_label + " → " + ("MP4", "DASH", "HLS / fMP4", "HLS / MPEG-TS")[column] + " / " + token
-                    label = heading + (" command example" if language == "en" else "のコマンド例")
+                    label = heading
                     part = '<a href="guide/#recipe-' + row + '-' + output + '-' + target + '" aria-label="' + label + '">' + part + '</a>'
                 parts.append(part)
             return " / ".join(parts)
@@ -522,7 +564,7 @@ class ConversionMatrix(unittest.TestCase):
             header = ('<th scope="row"><strong class="input-format">' + form + '</strong>'
                       '<span class="input-profile">' + profiles[index] + note + '</span>'
                       '<span class="input-protections">' + protection(inputs) + '</span></th>')
-            cells = ['<td>' + (protection(value, name, column) if value else outside) + ('<sup>1</sup>' if column == 0 and index in (0, 1, 2) else "") + '</td>' for column, value in enumerate(outputs)]
+            cells = ['<td>' + (protection(value, name, column) if value else outside) + ('<sup>1</sup>' if column == 0 else '<sup>4</sup>' if column == 3 and index < 3 else "") + '</td>' for column, value in enumerate(outputs)]
             body.append('<tr id="' + name + '">' + header + "".join(cells) + '</tr>')
         return ('<main><section class="hero"><h1>drmr</h1></section><section id="support"><h2>' + heading + '</h2>'
                 '<p id="matrix-guide">Qualified profiles only.</p><p id="matrix-scroll-hint">Scroll horizontally.</p>'
@@ -531,7 +573,7 @@ class ConversionMatrix(unittest.TestCase):
                 + '<th scope="col" aria-label="' + corner + '"><span class="axis-input">' + corner.split(' / ')[0] + '</span> <span class="axis-output">' + corner.split(' / ')[1] + '</span></th>'
                 + ''.join('<th scope="col">' + label + '</th>' for label in ["MP4", "DASH", "HLS fMP4", "HLS MPEG-TS"])
                 + '</tr></thead><tbody>' + ''.join(body) + '</tbody></table></div>'
-                '<ol id="matrix-limits"><li>Single track.</li><li>Audio edit profile.</li><li>Transport stream profile.</li></ol>'
+                '<ol id="matrix-limits"><li>Single track.</li><li>Audio edit profile.</li><li>Transport stream profile.</li><li>Fragmented MP4 to TS profile.</li></ol>'
                 '<p id="matrix-definitions">Protection definitions.</p></section><section id="workflow"></section></main>')
 
     def test_both_locale_matrices_retain_all_input_and_output_profiles(self):
@@ -539,7 +581,7 @@ class ConversionMatrix(unittest.TestCase):
             with self.subTest(language=language):
                 result = CHECK.validate_matrix(self.fixture(language), language)
                 self.assertEqual((result["rows"], result["output_columns"], result["cells"]), (5, 4, 20))
-                self.assertEqual(result["recipe_links"], 45)
+                self.assertEqual(result["recipe_links"], 65)
 
     def test_each_output_protection_links_only_to_its_own_conversion_example(self):
         for language in ("en", "ja"):
@@ -558,13 +600,13 @@ class ConversionMatrix(unittest.TestCase):
 
     def test_missing_extra_nested_and_unavailable_cell_links_are_refused(self):
         original = self.fixture()
-        link = '<a href="guide/#recipe-mp4-mp4-clear" aria-label="MP4 → MP4 / Clear command example"><span>Clear</span></a>'
+        link = '<a href="guide/#recipe-mp4-mp4-clear" aria-label="MP4 → MP4 / Clear"><span>Clear</span></a>'
         self.assertIn(link, original)
         for old, new in (
                 (link, '<span>Clear</span>'),
                 (link, link + '<a href="guide/#recipe-mp4-mp4-clear">Extra</a>'),
                 (link, link.replace('<span>Clear</span>', '<a href="#other"><span>Clear</span></a>')),
-                ('<td>Outside profile</td>', '<td><a href="guide/#recipe-mp4-hls-ts-clear">Outside profile</a></td>')):
+                (link, link.replace('recipe-mp4-mp4-clear', 'recipe-mp4-hls-ts-clear'))):
             with self.subTest(changed=new), self.assertRaisesRegex(CHECK.Failure, "site-matrix-recipe-link"):
                 CHECK.validate_matrix(original.replace(old, new, 1), "en")
 
@@ -584,10 +626,10 @@ class ConversionMatrix(unittest.TestCase):
     def test_missing_duplicate_transposed_and_changed_cells_are_refused(self):
         original = self.fixture()
         mutations = [
-            original.replace('<td>Outside profile</td>', '', 1),
+            original.replace('<td>', '', 1),
             original.replace('id="dash"', 'id="mp4"', 1),
             original.replace('<th scope="col">MP4</th>', '<th scope="col">DASH</th>', 1),
-            original.replace('<td>Outside profile</td>', '<td><span>Clear</span></td>', 1),
+            original.replace('<td>', '<td><span>Clear</span>', 1),
             original.replace('<code>cbcs</code>', '<code>SAMPLE-AES</code>', 1),
             original.replace('<code>cenc</code>', '<span>cenc</span>', 1),
         ]
@@ -610,10 +652,9 @@ class ConversionMatrix(unittest.TestCase):
             with self.subTest(old=old), self.assertRaises(CHECK.Failure):
                 CHECK.validate_matrix(original.replace(old, new, 1), "en")
 
-    def test_the_audio_edit_row_never_implies_general_mp4_or_ts_support(self):
-        value = self.fixture()
-        value = value.replace('<td>Outside profile</td>', '<td><span>Clear</span></td>')
-        with self.assertRaisesRegex(CHECK.Failure, "site-matrix-protections"):
+    def test_fragmented_mp4_ts_qualification_note_cannot_be_omitted(self):
+        value = self.fixture().replace('<sup>4</sup>', '', 1)
+        with self.assertRaisesRegex(CHECK.Failure, "site-matrix-notes"):
             CHECK.validate_matrix(value, "en")
 
 
@@ -643,11 +684,11 @@ class GuideMarkup(unittest.TestCase):
         for name in CHECK.GUIDE_CHAPTERS:
             body = "<p>Complete chapter content with a bounded, meaningful explanation.</p>"
             if name == "introduction":
-                body += ('<figure class="guide-example" data-code-language="sh" aria-labelledby="ex1">'
-                         '<figcaption id="ex1">Read media metadata</figcaption>'
+                body += ('<figure class="guide-example" data-code-language="sh" aria-labelledby="e1">'
+                         '<figcaption id="e1">Read media metadata</figcaption>'
                          '<pre tabindex="0"><code>drmr analyze source.mp4 --metadata-only</code></pre></figure>'
-                         '<div class="guide-table-scroll" role="region" aria-labelledby="table-1-title" tabindex="0">'
-                         '<table><caption id="table-1-title">Known profiles</caption><thead><tr><th scope="col">Input</th></tr></thead>'
+                         '<div class="guide-table-scroll" role="region" aria-labelledby="t1" tabindex="0">'
+                         '<table><caption id="t1">Known profiles</caption><thead><tr><th scope="col">Input</th></tr></thead>'
                          '<tbody><tr><th scope="row">MP4</th></tr></tbody></table></div>')
             if name == "url-input":
                 body += recipe_fixture(language, first_example=2)
@@ -678,10 +719,10 @@ class GuideMarkup(unittest.TestCase):
     def test_missing_chapters_code_labels_and_table_scopes_remain_refused(self):
         original = self.fixture()
         self.assertEqual(CHECK.validate_guide(original, "en"),
-                         {"chapters": 18, "code_examples": 46, "tables": 1, "conversion_examples": 45})
+                         {"chapters": 18, "code_examples": 66, "tables": 1, "conversion_examples": 65})
         for old, new in [('data-guide-chapter="verification"', 'data-guide-chapter="missing"'),
                          ('href="#verification"', 'href="#missing"'), ('tabindex="0"', ''),
-                         ('aria-labelledby="ex1"', ''), ('data-code-language="sh"', 'data-code-language="unknown"'), ('scope="row"', '')]:
+                         ('aria-labelledby="e1"', ''), ('data-code-language="sh"', 'data-code-language="unknown"'), ('scope="row"', '')]:
             with self.subTest(old=old), self.assertRaises(CHECK.Failure):
                 CHECK.validate_guide(original.replace(old, new, 1), "en")
 
@@ -734,7 +775,7 @@ class ConversionExamples(unittest.TestCase):
     def test_all_supported_examples_have_complete_url_to_independent_verification_flow(self):
         for language in ("en", "ja"):
             with self.subTest(language=language):
-                self.assertEqual(self.check(recipe_fixture(language), language), 45)
+                self.assertEqual(self.check(recipe_fixture(language), language), 65)
 
     def test_missing_extra_duplicate_or_unfocusable_recipe_heading_is_refused(self):
         original = recipe_fixture()
@@ -803,12 +844,13 @@ class ConversionExamples(unittest.TestCase):
 
     def test_input_groups_must_be_complete_unique_and_supported(self):
         code = next(CHECK.MatrixMarkup(recipe_fixture()).root.descendants("code")).text()
-        first, second, third = code.split("\n\n")
-        for changed in (first, first + "\n\n" + third,
+        first, second = code.split("\n\n")
+        for changed in (first, second,
                         "\n\n".join((first, second, second)),
-                        "\n\n".join((second, first, third)),
-                        code.replace("# cenc input", "# AES-128 input", 1),
-                        code + "\n\n" + third, code + "\nexit 0"):
+                        "\n\n".join((second, first)),
+                        code.replace("# cenc / cbcs input", "# AES-128 input", 1),
+                        code.replace("# cenc / cbcs input", "# cenc input", 1),
+                        code + "\n\n" + second, code + "\nexit 0"):
             with self.subTest(changed=changed[:90]), self.assertRaisesRegex(CHECK.Failure, "site-guide-recipe-command"):
                 CHECK.validate_recipe_commands(changed, "mp4", "mp4", "clear")
 

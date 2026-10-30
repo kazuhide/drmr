@@ -46,7 +46,7 @@ jobs:
       - name: Check vendored source bytes before native compilation
         run: python -W error::ResourceWarning -m unittest discover -s tools/tests -p test_verify_private_fs.py -v
 
-      - name: Check archive owner cleanup with real private Windows ACLs
+      - name: Check headless decoder guards and archive cleanup as an ordinary user
         run: ./.github/scripts/test-windows-cli-archive-cleanup.ps1
 
       - name: Install checksummed Windows media tools

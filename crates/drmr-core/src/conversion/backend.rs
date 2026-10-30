@@ -1,6 +1,7 @@
 //! Backend command construction. Retained records contain neither raw arguments nor tool output.
 
 mod decoded_hash;
+mod track_ids;
 
 use super::{ContentKey, ConversionError, InputKeys, OutputKey};
 use crate::{
@@ -201,15 +202,17 @@ impl Backend {
         if super::finite::window(input, index)?.is_none() {
             super::audio::require_supported_audio(input, index)?;
         }
-        let input = super::files::tool_path(input)?;
+        let mut compatible = track_ids::ToolInput::prepare(input, self)?;
+        let tool_input = compatible.as_ref().map_or(input, |copy| copy.path());
+        let tool_input = super::files::tool_path(tool_input)?;
         let output = super::files::tool_path(output)?;
-        if input.contains([',', '\n', '\r']) || output.contains([',', '\n', '\r']) {
+        if tool_input.contains([',', '\n', '\r']) || output.contains([',', '\n', '\r']) {
             return Err(ConversionError("unsupported-path"));
         }
         let mut argv = Zeroizing::new(vec![
             self.packager.clone(),
             "--mp4_reset_initial_composition_offset_to_zero=false".into(),
-            format!("input={input},stream={index},output={output}"),
+            format!("input={tool_input},stream={index},output={output}"),
             "--clear_lead".into(),
             "0".into(),
         ]);
@@ -250,8 +253,19 @@ impl Backend {
             argv.push(std::mem::take(&mut *value));
         }
         let secrets: Vec<_> = key_hex.iter().map(|value| value.as_str()).collect();
-        self.run(&argv, "packager", &secrets)?;
-        super::finite::restore(Path::new(&input), index, Path::new(&output), &self.stop)?;
+        if let Some(copy) = &mut compatible {
+            let (runner, _) = self.runner.ensuring_cleanup_owner();
+            let mut protected = self.clone();
+            protected.runner = Arc::new(runner);
+            let result =
+                protected.run_with_cleanup_receipt(&argv, "packager", &secrets, &mut copy.cleanup);
+            copy.wait_for_cleanup();
+            copy.check(&self.stop)?;
+            result?;
+        } else {
+            self.run(&argv, "packager", &secrets)?;
+        }
+        super::finite::restore(input, index, Path::new(&output), &self.stop)?;
         super::private_file_mode(Path::new(&output))?;
         Ok(())
     }

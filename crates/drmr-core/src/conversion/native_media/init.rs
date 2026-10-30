@@ -191,29 +191,7 @@ fn table(track: &Mp4Box) -> Result<Mp4Box, ConversionError> {
     let mdia = one(&track.children, *b"mdia")?;
     let minf = one(&mdia.children, *b"minf")?;
     let table = one(&minf.children, *b"stbl")?;
-    for node in &table.children {
-        if !matches!(
-            &node.kind(),
-            b"stsd"
-                | b"stts"
-                | b"ctts"
-                | b"stsc"
-                | b"stsz"
-                | b"stco"
-                | b"co64"
-                | b"stss"
-                | b"sdtp"
-                | b"senc"
-                | b"saiz"
-                | b"saio"
-                | b"sgpd"
-                | b"sbgp"
-                | b"free"
-                | b"skip"
-        ) {
-            return Err(UNSUPPORTED);
-        }
-    }
+    super::controls::semantic_children(table)?;
     Ok(table.clone())
 }
 fn protection(encryption: Option<&TrackEncryption>) -> Protection {
@@ -284,7 +262,7 @@ fn fragment_duration(moov: &Mp4Box, data: &[u8]) -> Result<Option<u64>, Conversi
         _ => return Err(BAD),
     }))
 }
-fn track_header(bytes: &[u8]) -> Result<(u32, u64), ConversionError> {
+pub(super) fn track_header(bytes: &[u8]) -> Result<(u32, u64), ConversionError> {
     let (version, id_at, duration_at) = match (bytes.first(), bytes.len()) {
         (Some(0), 84) => (0, 12, 20),
         (Some(1), 96) => (1, 20, 28),
@@ -436,96 +414,6 @@ fn track(
         groups,
     })
 }
-/// Reject unmodeled playback controls at semantic container boundaries.
-fn semantic_children(container: &Mp4Box) -> Result<(), ConversionError> {
-    let known: &[[u8; 4]] = match &container.kind() {
-        b"moov" => &[
-            *b"mvhd", *b"trak", *b"mvex", *b"iods", *b"pssh", *b"udta", *b"meta",
-        ],
-        b"trak" => &[
-            *b"tkhd", *b"mdia", *b"edts", *b"senc", *b"saiz", *b"saio", *b"udta", *b"meta",
-        ],
-        b"mdia" => &[*b"mdhd", *b"hdlr", *b"minf"],
-        b"minf" => &[*b"smhd", *b"vmhd", *b"dinf", *b"stbl"],
-        b"dinf" => &[*b"dref"],
-        b"mvex" => &[*b"mehd", *b"trex"],
-        _ => return Ok(()),
-    };
-    for child in &container.children {
-        if !known.contains(&child.kind()) && !matches!(&child.kind(), b"free" | b"skip") {
-            return Err(UNSUPPORTED);
-        }
-    }
-    Ok(())
-}
-fn census(moov: &Mp4Box, tracks: &[Track]) -> Result<(), ConversionError> {
-    // A moov/udta meta box describes the file (for example static ID32 tags), not
-    // a timed media track. Its descriptive tags are outside sample preservation;
-    // nested sample, edit, group or protection declarations still cannot escape
-    // this census. Timed metadata handlers are refused by track admission.
-    let mut allowed = std::collections::BTreeSet::new();
-    if let Some(mvex) = optional(&moov.children, *b"mvex")? {
-        allowed.extend(mvex.children.iter().map(|node| node.header.offset));
-    }
-    for node in moov.children.iter().filter(|node| node.kind() == *b"trak") {
-        if let Some(edit_container) = optional(&node.children, *b"edts")? {
-            allowed.insert(edit_container.header.offset);
-            allowed.extend(
-                edit_container
-                    .children
-                    .iter()
-                    .map(|child| child.header.offset),
-            );
-        }
-    }
-    for track in tracks {
-        allowed.extend(track.auxiliary.iter().map(|node| node.header.offset));
-        allowed.extend(
-            track
-                .table
-                .children
-                .iter()
-                .filter(|node| matches!(&node.kind(), b"sgpd" | b"sbgp"))
-                .map(|node| node.header.offset),
-        );
-        let stsd = one(&track.table.children, *b"stsd")?;
-        if let Some(sinf) = optional(&stsd.children[0].children, *b"sinf")? {
-            allowed.extend(
-                mp4::walk(std::slice::from_ref(sinf))
-                    .iter()
-                    .map(|node| node.header.offset),
-            );
-        }
-    }
-    for node in mp4::walk(std::slice::from_ref(moov)) {
-        semantic_children(node)?;
-        if matches!(
-            &node.kind(),
-            b"sinf"
-                | b"frma"
-                | b"schm"
-                | b"schi"
-                | b"tenc"
-                | b"senc"
-                | b"saiz"
-                | b"saio"
-                | b"sgpd"
-                | b"sbgp"
-                | b"uuid"
-                | b"trex"
-                | b"tfhd"
-                | b"tfdt"
-                | b"trun"
-                | b"mfhd"
-                | b"edts"
-                | b"elst"
-        ) && !allowed.contains(&node.header.offset)
-        {
-            return Err(UNSUPPORTED);
-        }
-    }
-    Ok(())
-}
 pub(super) fn parse(layout: &Layout) -> Result<Initialization, ConversionError> {
     let data = &layout.movie;
     let nodes = mp4::parse_boxes_with_limit(data, super::MAX_PARSED_NODES).map_err(|_| BAD)?;
@@ -571,12 +459,13 @@ pub(super) fn parse(layout: &Layout) -> Result<Initialization, ConversionError> 
     if tracks.is_empty() || !defaults.is_empty() {
         return Err(BAD);
     }
-    census(moov, &tracks)?;
+    super::controls::census(std::slice::from_ref(moov))?;
     Ok(Initialization { movie, tracks })
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::controls::semantic_children;
     use super::*;
     fn boxed(kind: [u8; 4], payload: &[u8]) -> Vec<u8> {
         let mut bytes = u32::try_from(payload.len() + 8)

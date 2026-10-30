@@ -1,16 +1,74 @@
 import { guideChapters, requireGuideLayout, requireGuideMovement, codeAriaTemplate, requireGuideCheckpoint,
-  guideFiguresObservation, requireGuideFigures, guideScrollObservation, requireGuideCodeEdge, requireGuidePrintCode } from './guide.mjs';
+  guideFiguresObservation, requireGuideFigures, guideScrollObservation, requireGuideCodeEdge, requireGuidePrintCode,
+  guideSourceExampleCount } from './guide.mjs';
 import { locales } from './locales.mjs';
 import { matrixRows, matrixColumns, matrixObservation, requireMatrixLayout, requireMatrixMovement, completeMatrixKey, MatrixKeyDeadline } from './matrix.mjs';
-import { matrixRecipes, recipeObservation, requireRecipe, requireRecipeIdentity, requireRecipePosition, requireMatrixLinkExposure } from './recipes.mjs';
+import { matrixRecipes, matrixRecipeBatches, landingFocusTargetCounts, recipeObservation, requireRecipe,
+  requireRecipeIdentity, requireRecipePosition, requireMatrixLinkExposure } from './recipes.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runInNewContext } from 'node:vm';
+import { readFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { assets, assetRoute, assetPath, digest, liveMode, allowedRequest } from './source.mjs';
 import * as identity from './source.mjs';
 import { matchesPublication } from './wait-published.mjs';
 import { resource } from './server.mjs';
 import { requireFocus, requireImages, requireLayout, layoutObservation, focusObservation, requireClippedFocusTimeout, partialFocusCandidate, pollFocus, FocusConditionTimeout, FocusObservationDeadline } from './checks.mjs';
+
+test('only landing cases use two parallel workers and every suite deadline remains fixed', () => {
+  // Evaluate configuration objects only: no Playwright runtime, browser or CI launch.
+  const evaluate = (file, landing) => {
+    const fixture = { sourceHead: 'config-fixture', sourceTree: 'config-tree' };
+    const source = readFileSync(new URL('./' + file, import.meta.url), 'utf8')
+      .replace(/^import[^\n]*\n/gm, '').replaceAll('import.meta.url', '"file:///config-fixture.mjs"')
+      .replace('export default defineConfig(', 'result = defineConfig(');
+    let ciCalls = 0;
+    const context = { defineConfig: value => value, landing, result: null,
+      source: () => fixture, liveMode, publicOrigin: identity.publicOrigin, localOrigin: identity.localOrigin,
+      requireCi: value => { assert.equal(value, false); ciCalls++; },
+      process: { env: { GITHUB_SHA: fixture.sourceHead, PW_REPORT_ROOT: '/ci-evidence' }, version: 'node-config-fixture' },
+      createRequire: () => ({ resolve: () => '/fixture/playwright-core/package.json' }),
+      readFileSync: () => JSON.stringify({ packages: {}, browsers: [] }), dirname, join, resolve, URL,
+      locales, matrixRecipeBatches };
+    runInNewContext(source, context, { timeout: 1000 });
+    assert.equal(ciCalls, landing ? 0 : 1);
+    return JSON.parse(JSON.stringify(context.result));
+  };
+  const landing = evaluate('playwright.config.mjs');
+  const guide = evaluate('guide.config.mjs', landing);
+  assert.equal(landing.fullyParallel, true);
+  assert.equal(landing.workers, 2);
+  assert.equal(guide.fullyParallel, false);
+  assert.equal(guide.workers, 1);
+  for (const config of [landing, guide]) {
+    assert.equal(config.timeout, 30_000);
+    assert.equal(config.globalTimeout, 180_000);
+    assert.equal(config.expect.timeout, 5000);
+    assert.equal(config.use.actionTimeout, 5000);
+    assert.equal(config.use.navigationTimeout, 10_000);
+    assert.equal(config.retries, 0);
+  }
+  assert.equal(landing.metadata.browserCases, 23);
+  assert.equal(guide.metadata.browserCases, 12);
+});
+
+test('all independent landing cases retain unique evidence namespaces including both final recipe batches', () => {
+  const names = [];
+  const register = (name, callback) => { names.push(name); assert.equal(typeof callback, 'function'); };
+  register.afterEach = callback => assert.equal(typeof callback, 'function');
+  const source = readFileSync(new URL('./browser.spec.mjs', import.meta.url), 'utf8')
+    .replace(/^import[\s\S]*?;\n/gm, '');
+  runInNewContext(source, { test: register, process: { env: {} }, liveMode,
+    publicOrigin: identity.publicOrigin, localOrigin: identity.localOrigin,
+    locales, english: locales[0], matrixRecipeBatches }, { timeout: 1000 });
+  assert.equal(names.length, 23);
+  assert.equal(new Set(names).size, names.length);
+  for (const language of ['en', 'ja']) {
+    assert.ok(names.includes(`${language}: matrix recipes 61–65 navigate without JavaScript`));
+    assert.equal(names.filter(name => name.startsWith(language + ': matrix recipes ')).length, 5);
+  }
+});
 
 test('only the fixed static payload resolves at either mount', () => {
   assert.equal(resource('/').relative, 'index.html');
@@ -338,10 +396,10 @@ test('conversion facts unify MP4 and distinguish TS video and TS audio-only rout
   assert.equal(matrixRows.flatMap(row => row.output).length, 20);
   assert.deepEqual(matrixRows[0].input, ['Clear', 'cenc', 'cbcs']);
   assert.deepEqual(matrixRows[2].input, ['Clear', 'cenc', 'cbcs', 'AES-128']);
-  assert.deepEqual(matrixRows[0].output, [['Clear', 'cenc', 'cbcs'], ['Clear', 'cenc', 'cbcs'], ['Clear', 'cbcs', 'AES-128'], []]);
-  assert.deepEqual(matrixRows[3].output.slice(0, 2), [[], ['Clear', 'cenc', 'cbcs']]);
-  assert.deepEqual(matrixRows[4].output, [[], ['Clear', 'cenc', 'cbcs'], ['Clear', 'cbcs', 'AES-128'], ['Clear', 'AES-128', 'SAMPLE-AES']]);
-  for (const index of [0, 1, 2]) assert.deepEqual(matrixRows[index].output[3], []);
+  assert.deepEqual(matrixRows[0].output, [['Clear', 'cenc', 'cbcs'], ['Clear', 'cenc', 'cbcs'], ['Clear', 'cenc', 'cbcs', 'AES-128'], ['Clear', 'AES-128', 'SAMPLE-AES']]);
+  assert.deepEqual(matrixRows[3].output.slice(0, 2), [['Clear', 'cenc', 'cbcs'], ['Clear', 'cenc', 'cbcs']]);
+  assert.deepEqual(matrixRows[4].output, [['Clear', 'cenc', 'cbcs'], ['Clear', 'cenc', 'cbcs'], ['Clear', 'cenc', 'cbcs', 'AES-128'], ['Clear', 'AES-128', 'SAMPLE-AES']]);
+  for (const index of [0, 1, 2]) assert.deepEqual(matrixRows[index].output[3], ['Clear', 'AES-128', 'SAMPLE-AES']);
 });
 
 test('matrix bounds refuse page overflow, clipped cells and unanchored row headers', () => {
@@ -523,12 +581,12 @@ test('nested guide routes and generation inputs belong to the exact payload cont
 });
 
 test('each supported protection token has one stable recipe identity and unavailable cells have none', () => {
-  assert.equal(matrixRecipes.length, 45);
-  assert.equal(new Set(matrixRecipes.map(recipe => recipe.id)).size, 45);
+  assert.equal(matrixRecipes.length, 65);
+  assert.equal(new Set(matrixRecipes.map(recipe => recipe.id)).size, 65);
   assert.equal(matrixRecipes[0].id, 'recipe-mp4-mp4-clear');
   assert.equal(matrixRecipes.at(-1).id, 'recipe-hls-ts-audio-hls-ts-hls-sample-aes');
   for (const row of matrixRows) {
-    assert.equal(matrixRecipes.filter(recipe => recipe.row === row.id).length, 9);
+    assert.equal(matrixRecipes.filter(recipe => recipe.row === row.id).length, 13);
     for (const [column, labels] of row.output.entries()) {
       assert.deepEqual(matrixRecipes.filter(recipe => recipe.row === row.id && recipe.column === column)
         .map(recipe => recipe.label), labels);
@@ -536,14 +594,42 @@ test('each supported protection token has one stable recipe identity and unavail
   }
 });
 
+test('every matrix recipe belongs to one complete navigation batch including the last five', () => {
+  assert.deepEqual(matrixRecipeBatches.map(batch => batch.offset), [0, 15, 30, 45, 60]);
+  assert.deepEqual(matrixRecipeBatches.map(batch => batch.end), [15, 30, 45, 60, 65]);
+  assert.deepEqual(matrixRecipeBatches.map(batch => batch.recipes.length), [15, 15, 15, 15, 5]);
+  assert.deepEqual(matrixRecipeBatches.flatMap(batch => batch.recipes), matrixRecipes);
+  assert.equal(new Set(matrixRecipeBatches.flatMap(batch => batch.recipes.map(recipe => recipe.id))).size, 65);
+  assert.deepEqual(landingFocusTargetCounts, { en: 102, ja: 101 });
+});
+
+test('guide code inventory counts literal Markdown examples and all independently expected recipes', () => {
+  for (const language of ['en', 'ja']) {
+    const source = readFileSync(new URL(`../../site-content/guide/${language}.md`, import.meta.url), 'utf8');
+    assert.equal(guideSourceExampleCount(source, matrixRecipes.length), 127);
+    assert.equal(guideSourceExampleCount(source, matrixRecipes.length) - matrixRecipes.length, 62);
+  }
+  const source = '```sh\ndrmr --version\n```\n\n{{conversion-examples}}\n';
+  assert.equal(guideSourceExampleCount(source, 65), 66);
+  assert.equal(guideSourceExampleCount(source.replace('drmr --version', '{{conversion-examples}}'), 65), 66);
+  for (const invalid of [source.replace('{{conversion-examples}}', ''), source + '{{conversion-examples}}\n',
+    source.replace('```sh', '```html'), source.replace('```\n\n', ''),
+    source.replace('drmr --version\n', ''), '{{conversion-examples}}\n']) {
+    assert.throws(() => guideSourceExampleCount(invalid, 65));
+  }
+  for (const count of [0, -1, 1.5, NaN, Infinity]) assert.throws(() => guideSourceExampleCount(source, count));
+});
+
 function recipeSample(recipe = matrixRecipes.find(value => value.id === 'recipe-hls-ts-video-dash-cbcs')) {
   const extension = recipe.row === 'mp4' ? 'mp4' : recipe.row === 'dash' ? 'mpd' : 'm3u8';
   const profiles = recipe.row.startsWith('hls-ts-') ? ['Clear', 'AES-128', 'SAMPLE-AES']
     : recipe.row === 'hls-fmp4' ? ['Clear', 'cenc', 'cbcs', 'AES-128'] : ['Clear', 'cenc', 'cbcs'];
-  const code = profiles.map(profile => {
-    const name = { Clear: 'clear', 'AES-128': 'aes128', 'SAMPLE-AES': 'sample-aes' }[profile] ?? profile;
-    const inputKeys = profile === 'Clear' ? '' : ' --keys-file keys.json';
-    const runtimeKeys = profile === 'Clear' && recipe.target === 'clear' ? '' : ' --keys-file keys.json';
+  const code = [[profiles[0]], profiles.slice(1)].map(group => {
+    const profile = group.join(' / ');
+    const clear = group.length === 1 && group[0] === 'Clear';
+    const name = clear ? 'clear' : 'encrypted';
+    const inputKeys = clear ? '' : ' --keys-file keys.json';
+    const runtimeKeys = clear && recipe.target === 'clear' ? '' : ' --keys-file keys.json';
     const output = recipe.format === 'mp4' ? 'result.mp4' : 'result';
     return [`# ${profile} input`, `drmr analyze "https://example.com/${name}.${extension}" \\`,
       `  --download-dir src${inputKeys} &&`,
@@ -604,7 +690,7 @@ test('each recipe includes all supported input protection groups in order exactl
     const good = recipeSample(expected);
     requireRecipe(good, expected);
     const groups = good.code.trimEnd().split('\n\n');
-    assert.deepEqual(groups.map(group => group.split('\n')[0]), profiles[expected.row].map(profile => `# ${profile} input`));
+    assert.deepEqual(groups.map(group => group.split('\n')[0]), [[profiles[expected.row][0]], profiles[expected.row].slice(1)].map(group => `# ${group.join(' / ')} input`));
     for (let index = 0; index < groups.length; index++) {
       const changes = [groups.filter((_, current) => current !== index), [...groups, groups[index]],
         groups.map((group, current) => current === index ? group.replace(/^# .+ input/, '# cbc1 input') : group)];

@@ -1,7 +1,7 @@
 ---
 title: User guide
 updated: 2026-10-30
-version: 1.0.2
+version: 1.0.3
 ---
 
 # 1. Introduction
@@ -75,7 +75,7 @@ AES is a symmetric encryption algorithm. CTR means counter mode; CBC means ciphe
 | `--to` | Encryption unit | Output choices |
 | --- | --- | --- |
 | `clear` | No encryption | Supported MP4, DASH, fMP4 HLS and TS HLS profiles |
-| `cenc` | AES-CTR applied to MP4 samples | MP4 and DASH |
+| `cenc` | AES-CTR applied to MP4 samples | MP4, DASH and fMP4 HLS |
 | `cbcs` | AES-CBC sample encryption, including a supported video block pattern | MP4, DASH and fMP4 HLS |
 | `hls-aes128` | AES-CBC applied to complete HLS resources | fMP4 HLS and TS HLS |
 | `hls-sample-aes` | HLS sample encryption inside supported TS media | TS HLS |
@@ -86,7 +86,7 @@ AES-128 HLS is not an MP4 sample-protection scheme. `cens` and `cbc1` may be ide
 
 Widevine, PlayReady and FairPlay involve signaling, key exchange and device behavior beyond selecting an AES mode. A KID identifies a key; it is not the secret content key.
 
-Common `plan`, `convert` and `verify` commands accept an output list for DASH with Widevine/PlayReady and HLS with FairPlay. Protection System Specific Header (PSSH) data carries DRM initialization information; it is separate from the encrypted media and from a license. Chapter 5 describes the runtime metadata, and chapter 6 describes the output list. The single-output PlayReady configuration remains available. Successful known-key verification does not prove a license service or device will play the result.
+Common `plan`, `convert` and `verify` commands accept an output list for DASH with Widevine/PlayReady and fMP4 HLS with Widevine/PlayReady/FairPlay. Protection System Specific Header (PSSH) data carries DRM initialization information; it is separate from the encrypted media and from a license. Chapter 5 describes the runtime metadata, and chapter 6 describes the output list. The single-output PlayReady configuration remains available. Successful known-key verification does not prove a license service or device will play the result.
 
 # 3. Supported input and output profiles
 
@@ -98,13 +98,13 @@ These combinations describe generic `convert` for completed local media. Codec, 
 
 | Input | MP4 output | DASH output | fMP4 HLS output | TS HLS output |
 | --- | --- | --- | --- | --- |
-| MP4 | clear / cenc / cbcs; joint tracks conditional | clear / cenc / cbcs | clear / cbcs / AES-128 | Outside profile |
-| DASH / fMP4 | clear / cenc / cbcs; one track | clear / cenc / cbcs | clear / cbcs / AES-128 | Outside profile |
-| HLS / fMP4 | clear / cenc / cbcs; one track | clear / cenc / cbcs | clear / cbcs / AES-128 | Outside profile |
-| HLS / TS with video | Outside profile | clear / cenc / cbcs | clear / cbcs / AES-128 | clear / AES-128 / SAMPLE-AES |
-| HLS / TS, audio only | Outside profile | clear / cenc / cbcs | clear / cbcs / AES-128 | clear / AES-128 / SAMPLE-AES |
+| MP4 | clear / cenc / cbcs; joint tracks conditional | clear / cenc / cbcs | clear / cenc / cbcs / AES-128 | clear / AES-128 / SAMPLE-AES; fragmented input only |
+| DASH / fMP4 | clear / cenc / cbcs; one track | clear / cenc / cbcs | clear / cenc / cbcs / AES-128 | clear / AES-128 / SAMPLE-AES |
+| HLS / fMP4 | clear / cenc / cbcs; one track | clear / cenc / cbcs | clear / cenc / cbcs / AES-128 | clear / AES-128 / SAMPLE-AES |
+| HLS / TS with video | clear / cenc / cbcs; one video and optional audio | clear / cenc / cbcs | clear / cenc / cbcs / AES-128 | clear / AES-128 / SAMPLE-AES |
+| HLS / TS, audio only | clear / cenc / cbcs | clear / cenc / cbcs | clear / cenc / cbcs / AES-128 | clear / AES-128 / SAMPLE-AES |
 
-Joint MP4 output is limited to the qualified tracks from one progressive source described below. Separate DASH/HLS tracks or unrelated files are not combined into one MP4.
+Joint MP4 output accepts qualified tracks from one progressive MP4 or up to one video and one audio track from HLS TS. Separate DASH/fMP4 HLS tracks and unrelated files are not combined into one MP4.
 
 ## HLS input protection
 
@@ -117,13 +117,14 @@ Each fMP4 media playlist must contain one video or audio track. A master can ass
 
 ## Explicit DRM profiles in an output list
 
-The table describes `auto`/`stitch` DRM inputs; those routes refuse existing input DRM records. With `segments`, supported clear or known-key encrypted fMP4 can instead produce fMP4 DASH/HLS with the listed DRM systems, and supported TS can produce TS FairPlay. The container stays the same.
+With `auto`/`stitch`, DRM output requires complete source admission for a supported MP4, DASH or HLS profile, including its codec, protection and playback window. Supply known keys for encrypted input. Metadata-only inspection is insufficient. With `segments`, fMP4 stays fMP4 for DASH/HLS and TS FairPlay keeps TS.
 
 | Output list format and target | DRM systems | Input with auto/stitch |
 | --- | --- | --- |
-| `dash`, `cbcs` | Widevine, PlayReady, or both | Qualified clear HLS/TS or clear MP4 |
-| `hls`, `cbcs` | FairPlay | Qualified clear HLS/TS or clear MP4 |
-| `hls-ts`, `hls-sample-aes` | FairPlay | Qualified clear HLS/TS |
+| `dash`, `cenc` or `cbcs` | Widevine, PlayReady, or both | Qualified MP4, DASH or HLS |
+| `hls`, `cenc` | Widevine, PlayReady, or both | Qualified MP4, DASH or HLS |
+| `hls`, `cbcs` | Widevine, PlayReady, FairPlay, or any combination | Qualified MP4, DASH or HLS |
+| `hls-ts`, `hls-sample-aes` | FairPlay | Qualified TS or fragmented MP4; encrypted input needs known keys |
 
 `hls` produces fragmented MP4. `hls-ts` produces transport streams. One output list can select either HLS container alongside DASH, or request both HLS containers. Each output has its own named directory and runtime key settings. The list does not imply that every DRM system can be combined with every encryption scheme.
 
@@ -135,25 +136,37 @@ The complete progressive source must contain one AAC-LC audio track (`mp4a`), op
 
 | Input protection | MP4 output | DASH output | fMP4 HLS output |
 | --- | --- | --- | --- |
-| clear | clear / cenc / cbcs | clear / cenc / cbcs | clear / cbcs / AES-128 |
-| cenc | clear / cenc / cbcs | clear / cenc / cbcs | clear / cbcs / AES-128 |
-| cbcs | clear / cenc / cbcs | clear / cenc / cbcs | clear / cbcs / AES-128 |
+| clear | clear / cenc / cbcs | clear / cenc / cbcs | clear / cenc / cbcs / AES-128 |
+| cenc | clear / cenc / cbcs | clear / cenc / cbcs | clear / cenc / cbcs / AES-128 |
+| cbcs | clear / cenc / cbcs | clear / cenc / cbcs | clear / cenc / cbcs / AES-128 |
 
 Clear MP4 retains progressive sample tables. Encrypted MP4 is fragmented and can retain the two qualified tracks in one file. DASH/HLS uses separate tracks. Every encrypted source track needs its own key mapping.
 
 Rust writes a private copy, decrypting each sample at its original position. Clear sample types and zeroed padding replace protection metadata. Sample positions, clocks and playback edits stay unchanged. No FFmpeg, decoding or new segmentation is needed.
 
-Multiple edits, initial empty edits, rate changes, extra tracks, unrelated-file combinations, key rotation and input DRM initialization headers are refused by conversion. CENC accepts supported 8/16-byte sample-IV layouts; CBCS accepts supported 16-byte constant-IV and pattern layouts. This does not admit arbitrary encrypted MP4.
+This progressive-input profile refuses multiple edits, initial empty edits, rate changes, extra tracks, unrelated-file combinations, key rotation and input DRM initialization headers. CENC accepts supported 8/16-byte sample-IV layouts; CBCS accepts supported 16-byte constant-IV and pattern layouts. This does not admit arbitrary encrypted MP4.
 
 ## TS admission
 
-The TS profile uses one fixed program, one progressive H.264 video stream with optional 44.1 or 48 kHz AAC-LC audio. DASH, fMP4 HLS and TS output also accept audio-only input under the same single-program, 44.1 or 48 kHz AAC-LC conditions.
+The TS profile uses one fixed program, one progressive H.264 video stream with optional 44.1 or 48 kHz AAC-LC audio. MP4, DASH, fMP4 HLS and TS output also accept audio-only input under the same single-program, 44.1 or 48 kHz AAC-LC conditions.
 
 TS packets must be 188 bytes; H.264 decoder configuration must remain fixed. AAC uses seven-byte ADTS transport headers without a checksum and one raw data block. Multiple programs, configuration changes, corrupt packets, clock wrap, discontinuities, interlaced video and unsupported descriptors are refused. The sample rate and channel configuration must remain unchanged throughout the track.
 
-For an AAC-only rendition, the final `EXTINF` may end inside its last frame when its precision identifies one exact audio-sample boundary. drmr keeps the complete encoded frame and preserves the shorter playback range in HLS or DASH. Ambiguous precision, a partial nonfinal segment, and removing a whole frame are refused. An external audio rendition can accompany video; a multiplexed playlist does not independently declare an audio trim. This edit profile requires an HLS or DASH manifest; standalone MP4 input and output are outside its implemented verification route.
+For an AAC-only rendition, the final `EXTINF` may end inside its last frame when its precision identifies one exact audio-sample boundary. drmr keeps the complete encoded frame and preserves the shorter playback range in MP4, HLS or DASH. Ambiguous precision, a partial nonfinal segment, and removing a whole frame are refused. An external audio rendition can accompany video; a multiplexed playlist does not independently declare an audio trim. TS-to-MP4 writes standard playback edits for this exact range, including when audio accompanies video. The generated MP4 can be analyzed, independently verified and converted to DASH or fMP4 HLS. Audio-only input can also be re-encrypted as MP4. Every accepted edit is bound to all coded frames and clocks; other edit layouts and mismatches are refused.
 
 SAMPLE-AES accepts one effective `identity` or `com.apple.streamingkeydelivery` key format, with version 1 when declared. Distinct simultaneously active key formats and unsupported method changes are refused. Nonzero audio priming is outside the profile. Joint TS output uses separate audio/video playlists and a master; it does not multiplex both into one output segment.
+
+## Fragmented MP4 to TS
+
+Fragmented MP4 files and DASH/fMP4 HLS can produce Clear, AES-128 or SAMPLE-AES TS with known input keys when encrypted. `auto`/`stitch` joins and segments again; `segments` refuses this container change. Native verification compares all coded frames, clocks and audio/video relationships.
+
+Initial AAC warm-up trimming uses MP4 edits that this TS profile cannot represent; it fails with `ts-output-presentation-not-representable`. A supported shorter final AAC range from TS-derived fMP4 is retained in the output playlist.
+
+## TS to a single MP4
+
+TS-to-MP4 supports audio only, video only, or one of each, preserving coded samples, clocks and supported final AAC playback ranges without decoding. Restrict a multi-quality master to the chosen video and associated audio before analysis. A video-only media playlist produces video-only MP4.
+
+Supported audio-language metadata is retained, including equivalent `en`/`eng` spellings. HLS group identifiers, names and automatic-selection flags describe playlist choices and are not MP4 selection declarations. Unsupported language mappings and ambiguous video selections are refused.
 
 ## Common exclusions and bounds
 
@@ -331,6 +344,8 @@ When keys or DRM metadata are required, an output list uses a protected schema-v
       "hls_key_uri": "skd://<content-identifier>",
       "signaling": {
         "system": "multi-drm",
+        "widevine_pssh": "<complete Widevine PSSH box in hex or base64>",
+        "playready_license_url": "https://license.example.invalid/playready",
         "fairplay": true
       }
     }
@@ -338,7 +353,13 @@ When keys or DRM metadata are required, an output list uses a protected schema-v
 }
 ```
 
-Supply a complete Widevine PSSH box whose declared KIDs match the DASH output's `kid`. drmr checks that metadata and generates PlayReady information from the selected KID and license URL. It writes the FairPlay HLS declaration from the explicit FairPlay selection and `hls_key_uri`. Runtime DRM systems must exactly match the saved plan. No license service or advertised key URI is contacted.
+Supply a complete Widevine PSSH box whose declared KIDs match that output's `kid`. Any declared protection scheme must match the output target, `cenc` or `cbcs`. drmr validates the supplied box.
+
+PlayReady records contain the selected KID and license URL. CENC uses version-4.1.0.0 AESCTR headers and computes a checksum with the output key. CBCS uses version-4.3.0.0 AESCBC headers without that checksum.
+
+HLS CBCS supports all three DRM systems with one encrypted media set. The example selects all three; omit unselected DRM fields for a smaller set. For HLS CENC, use `target: "cenc"` and `drms: ["widevine", "playready"]` in the output list, set `fairplay: false`, and omit `hls_key_uri`. FairPlay requires CBCS and its `skd://` URI; CENC HLS does not support FairPlay. A single-output key file puts the same settings under `output` in schema 1. Runtime DRM selections must match the saved plan. No license or key URI is contacted.
+
+HLS uses `SAMPLE-AES` for CBCS and `SAMPLE-AES-CTR` for CENC. Each DRM has its own `KEYFORMAT`: Widevine UUID, PlayReady `com.microsoft.playready`, or FairPlay `com.apple.streamingkeydelivery`. These identify the DRM, not another encryption mode. Widevine PSSH and PlayReady records use data URIs; FairPlay uses its `skd://` URI. See [HLS DRM declarations](https://github.com/kazuhide/drmr/blob/main/docs/drm-signaling.md).
 
 For a FairPlay TS output named `hls-ts`, replace the HLS entry with this member of `outputs`:
 
@@ -481,7 +502,7 @@ Use `--outputs` when all listed outputs must be produced together. Save this pub
       "id": "hls",
       "format": "hls",
       "target": "cbcs",
-      "drms": ["fairplay"],
+      "drms": ["widevine", "playready", "fairplay"],
       "conformance": "required"
     }
   ]
@@ -628,7 +649,9 @@ Supply output key/IV/URI or source URI/IV mappings as applicable. Clear, AES-128
 
 ## Explicit PlayReady signaling
 
-This `auto`/`stitch` profile produces CBCS DASH from a qualified clear MP4 source and refuses source DRM records. The `segments` source conditions are in chapter 3. Supply the output key identifier (KID), key and license URL below. drmr generates the PlayReady Object (PRO) and Protection System Specific Header (PSSH), then checks the initialization segments and DASH manifest.
+The following `system: "playready"` setting has its own input restrictions. For `system: "multi-drm"`, even with PlayReady alone, use [chapter 5](#key-configuration) and chapter 3's input conditions.
+
+This `auto`/`stitch` profile produces CENC or CBCS DASH from a qualified clear MP4 source and refuses source DRM records. The `segments` source conditions are in chapter 3. Supply the output key identifier (KID), key and license URL below. drmr generates the PlayReady Object (PRO) and Protection System Specific Header (PSSH), then checks the initialization segments and DASH manifest.
 
 ```json
 {
@@ -767,17 +790,17 @@ See [URL conversion](https://github.com/kazuhide/drmr/blob/main/docs/usage.md).
 
 ## Example prerequisites and key file {#recipe-setup}
 
-Select an output in the matrix and **one four-command group** for your input's protection. The groups are alternatives. In a POSIX shell on macOS/Linux, `\` continues a command on the next line and `&&` stops the sequence on failure. These commands share files; `|` instead passes standard output. Replace the `https://example.com` URL.
+Select an output in the matrix and **one four-command group** for your input's protection. Clear and encrypted inputs have separate groups. The listed encrypted modes share the same commands; choose the matching input-key configuration. In a POSIX shell on macOS/Linux, `\` continues a command on the next line and `&&` stops the sequence on failure. These commands share files; `|` instead passes standard output. Replace the `https://example.com` URL.
 
 Use an existing private working directory. drmr saves the input in `src` and creates `plan.json` and `result` (MP4: `result.mp4`); these paths must be new. No `mkdir` or `cd` is needed. For another run, change all paths consistently or use another directory. For [fetch policy settings](#url-input), add `--fetch-policy config/fetch.json` to `analyze`.
 
 When needed, prepare `keys.json` here using [chapter 5's schemas and permissions](#key-configuration), replacing its `config/keys.json` path. Keep it outside source/output directories. Use `schema_version: 1`; omit the clear side's `input` or `output` role. `analyze` and `plan` need only input keys when encrypted; `convert` and `verify` need keys for each encrypted side. Clear → Clear needs no key file.
 
-CENC/CBCS input uses `input.keys`; AES-128 and TS SAMPLE-AES use `input.hls_keys` with absolute key URIs and required IVs. Cenc/cbcs output needs `output.kid` and `output.key`; HLS also needs `output.hls_key_uri`. Other output fields are in chapter 5. Input and output keys may differ; no key or license URL is fetched.
+CENC/CBCS input uses `input.keys`; AES-128 and TS SAMPLE-AES use `input.hls_keys` with absolute key URIs and required IVs. Cenc/cbcs output needs `output.kid` and `output.key`; generic HLS also needs `output.hls_key_uri` for its identity declaration. Other output fields and explicit DRM settings are in chapter 5. Input and output keys may differ; no key or license URL is fetched.
 
-Inputs must meet [chapter 3's profiles](#supported-profiles). MP4, DASH and fMP4 HLS examples assume one video track. TS video may include audio; audio-only TS uses 44.1 or 48 kHz AAC-LC. Joint TS output has separate audio/video playlists.
+Inputs must meet [chapter 3's profiles](#supported-profiles). MP4, DASH and fMP4 HLS examples assume one video track. MP4-to-TS requires fragmented MP4 and the TS presentation conditions above. TS-to-MP4 accepts one video and optional audio; restrict a multi-quality master to the desired video and associated audio. TS video may include audio; audio-only TS uses 44.1 or 48 kHz AAC-LC. Joint TS output has separate audio/video playlists.
 
-Explicit FairPlay HLS or Widevine/PlayReady DASH signaling uses [chapter 6's multiple-output workflow](#inspect-plan) and its input/runtime requirements.
+Explicit HLS or DASH DRM signaling uses [chapter 6's multiple-output workflow](#inspect-plan) and its input/runtime requirements.
 
 {{conversion-examples}}
 
@@ -888,7 +911,7 @@ The report has `scope: "manifest-only"` and `media_verified: false`. It reads no
 
 ## Processing units and storage
 
-Select `--processing` on direct `convert` or `plan --save`. `auto` selects a qualified packaging route. `segments` processes supported matching containers at their original segment boundaries. `stitch` joins when needed, then writes MP4 or segments HLS/DASH again at the resolved request. Explicit unsupported modes are refused. The saved choice cannot be overridden by `convert --plan`. fMP4 with two edits for a partial final AAC frame requires `stitch`.
+Select `--processing` on direct `convert` or `plan --save`. `auto` selects a qualified packaging route. `segments` processes supported matching containers at their original segment boundaries. `stitch` joins when needed, then writes MP4 or segments HLS/DASH again at the resolved request. Explicit unsupported modes are refused. The saved choice cannot be overridden by `convert --plan`. Same-container `segments` accepts the qualified two-edit AAC range after checking every frame and clock. Unsupported edits and container changes are refused.
 
 An HLS target-duration declaration is an upper bound, which can differ from the interval requested from Shaka Packager. New plans derive that request from admitted video intervals. For example, a common three-second bound can describe two-second video and approximately 2.005-second audio segments: the plan saves a two-second request and final HLS keeps the three-second bound after checking every output segment. MP4 and DASH inputs use a two-second default when stitching to segmented output. Earlier plan schemas 1–6 retain their fixed requests, including an implicit two seconds; execution does not shorten a saved request.
 
@@ -1410,7 +1433,7 @@ Real-media regressions use the attributed ten-second Big Buck Bunny excerpt with
 
 Encrypted fixtures use different video/audio KIDs and keys. GPAC is only an offline fixture-generation tool, not a runtime/test dependency. Negative cases alter clocks/windows by one sample, keys, payloads, playback controls, dimensions, auxiliary encryption and manifest declarations.
 
-The six MP4/DASH URL cases passed with ten-second fixtures: MP4 has one video track; DASH has separate video and audio tracks with two-second segment targets. Each case analyzes its URL, stops the source server, saves a plan from the retained local entrypoint, runs `convert --plan`, then independently runs `verify --plan`. Clear input produces CBCS DASH; cenc/cbcs input produces clear DASH. Packet content, timing, complete decoded content, source identity and output intent all match. Original media and raw manifests remain unchanged, and stdout, stderr and saved plans exclude the supplied credentials and keys. Run this regression with `cargo test --locked -p drmr --test url_formats_media -- --nocapture`. It does not establish DRM playback or execution of all 45 placeholder recipes.
+The six MP4/DASH URL cases passed with ten-second fixtures: MP4 has one video track; DASH has separate video and audio tracks with two-second segment targets. Each case analyzes its URL, stops the source server, saves a plan from the retained local entrypoint, runs `convert --plan`, then independently runs `verify --plan`. Clear input produces CBCS DASH; cenc/cbcs input produces clear DASH. Packet content, timing, complete decoded content, source identity and output intent all match. Original media and raw manifests remain unchanged, and stdout, stderr and saved plans exclude the supplied credentials and keys. Run this regression with `cargo test --locked -p drmr --test url_formats_media -- --nocapture`. It does not establish DRM playback or execution of all 65 placeholder recipes.
 
 Explicit DRM regressions also cover the maximum accepted Widevine PSSH, changed
 provider/KID/IV declarations, actual initialization-file references and decoys,
@@ -1531,7 +1554,7 @@ drmr convert original.mp4 --to cbcs --format mp4 \
 | `--route PROFILE` | Required tool set, default `all` |
 | `--decode` | Include complete-decoding tool requirements; default checks native conversion tools |
 
-PROFILE is `all`, `progressive-mp4`, `fragmented-mp4`, `dash-presentation`, `fmp4-hls-presentation`, `mpeg-ts-hls`, `mpeg-ts-sample-aes-hls`, `mpeg-ts-hls-ts`, `mpeg-ts-dash`, `fmp4-segments` or `mpeg-ts-segments`.
+PROFILE is `all`, `progressive-mp4`, `fragmented-mp4`, `dash-presentation`, `fmp4-hls-presentation`, `fmp4-hls-ts`, `mpeg-ts-hls`, `mpeg-ts-sample-aes-hls`, `mpeg-ts-hls-ts`, `mpeg-ts-dash`, `fmp4-segments` or `mpeg-ts-segments`.
 
 ## analyze
 

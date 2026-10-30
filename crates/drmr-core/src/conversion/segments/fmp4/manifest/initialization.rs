@@ -11,9 +11,7 @@ pub(super) fn finish(
     request: &ConversionRequest<'_>,
 ) -> Result<(), ConversionError> {
     converter.backend.check_cancelled()?;
-    let replacement = if request.format == OutputFormat::Hls {
-        Some(Zeroizing::new(Vec::new()))
-    } else if let Some(signaling) = &converter.output_signaling {
+    let replacement = if let Some(signaling) = &converter.output_signaling {
         Some(
             signaling
                 .segment_records(
@@ -24,6 +22,8 @@ pub(super) fn finish(
                 )?
                 .initialization,
         )
+    } else if request.format == OutputFormat::Hls {
+        Some(Zeroizing::new(Vec::new()))
     } else {
         None
     };

@@ -27,6 +27,11 @@ impl HlsSource {
             .backend
             .scope(super::super::measurement::Phase::InputPreparation);
         let frozen = converter.capture_source(input.input)?;
+        super::super::signaling::records::hls::validate_source(
+            frozen.entrypoint(),
+            input.input_keys,
+            &converter.backend,
+        )?;
         let report = inspection::inspect(frozen.entrypoint())
             .map_err(|_| ConversionError("input-inspection-failed"))?;
         if report.format != InputFormat::Hls {
@@ -86,6 +91,13 @@ impl HlsSource {
                     )
                     .filter(|total| *total <= super::super::MAX_MEDIA_BYTES)
                     .ok_or(ConversionError("source-graph-limit"))?;
+                if !transport && converter.output_signaling.is_some() {
+                    super::super::signaling::qualified_mp4(
+                        path,
+                        &converter.backend.stop,
+                        part.media.initialization.as_ref() == Some(path),
+                    )?;
+                }
             }
         }
         frozen.check_original()?;

@@ -349,7 +349,10 @@ fn optional_fragment_duration(extends: &Mp4Box, bytes: &[u8]) -> Result<bool, Co
     Ok(true)
 }
 
-fn metadata_count(movie: &Mp4Box, bytes: &[u8]) -> Result<usize, ConversionError> {
+pub(in crate::conversion) fn metadata_count(
+    movie: &Mp4Box,
+    bytes: &[u8],
+) -> Result<usize, ConversionError> {
     let mut objects = movie
         .children
         .iter()

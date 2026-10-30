@@ -6,5 +6,7 @@ import landing from './playwright.config.mjs';
 export default defineConfig({
   ...landing,
   testMatch: 'guide.spec.mjs',
+  fullyParallel: false,
+  workers: 1,
   metadata: { ...landing.metadata, suite: 'guide', browserCases: 12 },
 });

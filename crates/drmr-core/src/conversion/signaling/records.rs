@@ -16,6 +16,7 @@ use zeroize::Zeroizing;
 
 mod common;
 mod graph;
+pub(in crate::conversion) mod hls;
 mod media;
 
 const DASH: &str = "urn:mpeg:dash:schema:mpd:2011";
@@ -113,6 +114,9 @@ pub(in crate::conversion) struct MultiObjects {
     playready: Option<Objects>,
     widevine: Option<Zeroizing<Vec<u8>>>,
     widevine_hex: Option<Zeroizing<String>>,
+    widevine_base64: Option<Zeroizing<String>>,
+    widevine_uri: Option<Zeroizing<String>>,
+    playready_uri: Option<Zeroizing<String>>,
     pub hex: Zeroizing<String>,
 }
 impl OutputSignaling {
@@ -121,7 +125,9 @@ impl OutputSignaling {
         key: &OutputKey,
         target: TargetProtection,
     ) -> Result<MultiObjects, ConversionError> {
-        self.validate_profile(OutputFormat::Dash, target)?;
+        if !matches!(target, TargetProtection::Cenc | TargetProtection::Cbcs) {
+            return Err(super::UNSUPPORTED);
+        }
         let multi = self.multi.as_ref().ok_or(super::INVALID)?;
         let playready = (!self.license_url.is_empty())
             .then(|| OutputSignaling::playready(&self.license_url)?.objects(key, target))
@@ -140,8 +146,21 @@ impl OutputSignaling {
         if let Some(playready) = &playready {
             hex.push_str(&playready.hex);
         }
+        let widevine_base64 = multi
+            .widevine
+            .as_ref()
+            .map(|value| Zeroizing::new(base64::engine::general_purpose::STANDARD.encode(value)));
+        let widevine_uri = widevine_base64
+            .as_ref()
+            .map(|value| Zeroizing::new(format!("data:text/plain;base64,{}", value.as_str())));
+        let playready_uri = playready
+            .as_ref()
+            .map(|value| Zeroizing::new(format!("data:text/plain;base64,{}", value.pro.as_str())));
         Ok(MultiObjects {
             target,
+            widevine_base64,
+            widevine_uri,
+            playready_uri,
             playready,
             widevine: multi.widevine.clone(),
             widevine_hex,
@@ -169,14 +188,23 @@ impl MultiObjects {
         Self {
             target: playready.target,
             hex: playready.hex.clone(),
+            playready_uri: Some(Zeroizing::new(format!(
+                "data:text/plain;base64,{}",
+                playready.pro.as_str()
+            ))),
             playready: Some(playready),
             widevine: None,
             widevine_hex: None,
+            widevine_base64: None,
+            widevine_uri: None,
         }
     }
     pub fn secrets(&self) -> Vec<&str> {
         let mut values = vec![self.hex.as_str()];
         values.extend(self.widevine_hex.iter().map(|value| value.as_str()));
+        values.extend(self.widevine_base64.iter().map(|value| value.as_str()));
+        values.extend(self.widevine_uri.iter().map(|value| value.as_str()));
+        values.extend(self.playready_uri.iter().map(|value| value.as_str()));
         if let Some(playready) = &self.playready {
             values.extend(playready.secrets());
         }

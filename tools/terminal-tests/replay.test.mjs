@@ -192,3 +192,34 @@ test('a source-only summary cannot hide already introduced output parents', asyn
   value.stop_phase = 'source';
   assert.equal((await replayCapture(value)).passed, false);
 });
+
+const sourcePaint = '\x1b[?2026h\rdrmr convert elapsed 1.0s\r\nSource Checking\r\nOverall Checking source sample metadata and packet payload timing\x1b[?2026l';
+function sourceBoundaryCapture({ beforeResize = '', duplicateAfterResize = false } = {}) {
+  const prefix = sourcePaint + beforeResize;
+  const tail = '\r\n' + blockedPaint + (duplicateAfterResize ? '' : up(5)) + blockedPaint + clear(5);
+  const footer = 'Cancelled convert in 4.0s | cancelled\r\n' + stopped;
+  const value = capture(prefix + tail + footer);
+  Object.assign(value, { outcome: 'cancel', error_code: 'cancelled', stop_phase: 'outputs' });
+  value.events = [
+    { kind: 'write', offset: 0, length: Buffer.byteLength(prefix), elapsed_seconds: 0 },
+    { kind: 'resize', offset: Buffer.byteLength(prefix), columns: 40, rows: 8, elapsed_seconds: 1 },
+    { kind: 'write', offset: Buffer.byteLength(prefix), length: Buffer.byteLength(tail + footer), elapsed_seconds: 2 },
+  ];
+  return value;
+}
+test('native shrink clipping of an owned source paint permits one retained snapshot', async () => {
+  const result = await replayCapture(sourceBoundaryCapture());
+  assert.equal(result.passed, true);
+  assert.equal(result.assertions.prior_frames_replaced_without_resize, true);
+  assert.equal(result.assertions.primary_transcript_valid, true);
+});
+test('a native-reflow snapshot cannot authorize a later unannounced duplicate paint', async () => {
+  const result = await replayCapture(sourceBoundaryCapture({ duplicateAfterResize: true }));
+  assert.equal(result.passed, false);
+  assert.equal(result.assertions.prior_frames_replaced_without_resize, false);
+});
+test('unowned text before shrink cannot be authorized after native clipping removes it', async () => {
+  const result = await replayCapture(sourceBoundaryCapture({ beforeResize: 'unowned clipped text' }));
+  assert.equal(result.passed, false);
+  assert.equal(result.assertions.prior_frames_replaced_without_resize, false);
+});

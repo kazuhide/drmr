@@ -94,7 +94,8 @@ impl Converter {
         if self.layout_mode() == crate::conversion::layout::LayoutMode::Normalized {
             sources.sort_by_key(|source| kind_order(source.report.tracks[0].kind));
         }
-        let package_inputs = self.transport_package_inputs(&sources, request, work.path())?;
+        let package_inputs =
+            self.transport_package_inputs(&sources, request, work.path(), input.format.into())?;
         let transport = package_inputs.is_none();
         let sample_input = sources.iter().any(|source| source.transport_sample);
         let destination = destination(request.output)?;
@@ -146,22 +147,22 @@ impl Converter {
         self.finish_hls_segment_target(stage.path(), sources.len())?;
         self.finish_output_options(&stage, request.format)?;
         let output_keys = super::output_hls_keys(request.hls_output_key)?;
-        let verification_root = work.path().join("ts-output-verification");
-        super::super::files::create_dir(&verification_root)?;
         let empty = InputKeys::default();
-        let result = prepare_presentation(
-            &VerificationSource {
+        let result = self.prepare_transport_result(
+            VerificationSource {
                 input: &stage.path().join("master.m3u8"),
                 input_keys: &empty,
                 hls_keys: &output_keys,
             },
-            &verification_root,
-            &self.backend,
-            self.maximum_workers,
-            super::SourceValidationPurpose::Verification,
+            work.path(),
         )?;
-        let mut verification =
-            self.compare_presentations(sources, result, request.input_keys, &empty)?;
+        let mut verification = self.compare_presentations(
+            sources,
+            result,
+            request.input_keys,
+            &empty,
+            request.format,
+        )?;
         if !verification.passed {
             return Err(ConversionError("round-trip-verification-failed"));
         }
@@ -189,11 +190,27 @@ impl Converter {
             )),
         })
     }
+    fn prepare_transport_result(
+        &self,
+        input: VerificationSource<'_>,
+        work: &Path,
+    ) -> Result<Vec<Prepared>, ConversionError> {
+        let directory = work.join("ts-output-verification");
+        super::super::files::create_dir(&directory)?;
+        prepare_presentation(
+            &input,
+            &directory,
+            &self.backend,
+            self.maximum_workers,
+            super::SourceValidationPurpose::Verification,
+        )
+    }
     fn transport_package_inputs(
         &self,
         sources: &[Prepared],
         request: &ConversionRequest<'_>,
         work: &Path,
+        source_format: crate::inspection::OutputFormat,
     ) -> Result<Option<Vec<PathBuf>>, ConversionError> {
         if sources
             .iter()
@@ -205,7 +222,7 @@ impl Converter {
         if !fragmented_sources(sources)? {
             return Err(ConversionError("ts-output-profile-not-supported"));
         }
-        self.fragmented_transport_inputs(sources, request, work)
+        self.fragmented_transport_inputs(sources, request, work, source_format)
             .map(Some)
     }
     fn fragmented_transport_inputs(
@@ -213,9 +230,10 @@ impl Converter {
         sources: &[Prepared],
         request: &ConversionRequest<'_>,
         work: &Path,
+        source_format: crate::inspection::OutputFormat,
     ) -> Result<Vec<PathBuf>, ConversionError> {
         if !self
-            .validate_prepared_sources(sources, request.input_keys)?
+            .validate_prepared_sources(sources, request.input_keys, source_format)?
             .passed
         {
             return Err(ConversionError("source-media-verification-failed"));

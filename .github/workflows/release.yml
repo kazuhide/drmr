@@ -17,8 +17,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  assemble:
-    name: Assemble checked CLI release assets
+  native-inputs:
+    name: Stage checked native archives without rebuilding
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -53,7 +53,126 @@ jobs:
       - name: Assemble only the exact successful native CI artifacts
         run: |
           python3 tools/prepare_release.py --tag "$RELEASE_TAG" \
-            --repository "$GITHUB_REPOSITORY" --output "$RUNNER_TEMP/release-assets"
+            --repository "$GITHUB_REPOSITORY" --native-inputs-only --output "$RUNNER_TEMP/native-inputs"
+
+      - name: Retain inputs for native round-trip checks
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: native-roundtrip-inputs
+          path: ${{ runner.temp }}/native-inputs/*
+          if-no-files-found: error
+          retention-days: 3
+
+  roundtrip:
+    name: Release round trips / ${{ matrix.target }}
+    needs: native-inputs
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: macos-15
+            target: aarch64-apple-darwin
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env:
+      RELEASE_TARGET: ${{ matrix.target }}
+    steps:
+      - name: Check out the same main revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install the release helper runtime
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13.12'
+
+      - name: Fetch checked archives from this release run
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: native-roundtrip-inputs
+          path: ${{ runner.temp }}/native-inputs
+
+      - name: Install media fixture and packaging tools
+        if: runner.os != 'Windows'
+        uses: ./.github/actions/media-tools
+
+      - name: Install checksummed Windows media tools
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/windows-media-tools
+
+      - name: Run the extracted native CLI matrix
+        if: runner.os != 'Windows'
+        run: |
+          python3 tools/release_roundtrip.py --inputs "$RUNNER_TEMP/native-inputs" \
+            --target "$RELEASE_TARGET" --report "$RUNNER_TEMP/cli-release-roundtrip-$RELEASE_TARGET.json"
+
+      - name: Run the extracted Windows CLI as an ordinary user
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $inputs = Join-Path $env:RUNNER_TEMP 'native-inputs'
+          $manifest = Get-Content -Raw (Join-Path $inputs 'release-manifest.json') | ConvertFrom-Json
+          $assets = @($manifest.assets | Where-Object target -eq $env:RELEASE_TARGET)
+          if ($assets.Count -ne 1) { throw 'Native release input is missing' }
+          ./.github/scripts/windows-cli-archive.ps1 -Archive (Join-Path $inputs $assets[0].filename) `
+            -Version $manifest.version -Report (Join-Path $env:RUNNER_TEMP "cli-release-roundtrip-$env:RELEASE_TARGET.json") `
+            -RoundtripInputs $inputs
+
+      - name: Retain the complete allowlisted matrix report
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: release-roundtrip-${{ matrix.target }}
+          path: ${{ runner.temp }}/cli-release-roundtrip-${{ matrix.target }}.json
+          if-no-files-found: error
+          retention-days: 14
+
+  assemble:
+    name: Assemble fully qualified release assets
+    needs: roundtrip
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out the same main commit and version tags
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install the release helper runtime
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13.12'
+
+      - name: Install the supported minimum Rust toolchain
+        run: |
+          set -euo pipefail
+          channel="$(python3 .github/scripts/minimum-rust.py)"
+          rustup toolchain install "$channel" --profile minimal --no-self-update
+          printf 'RUSTUP_TOOLCHAIN=%s\n' "$channel" >> "$GITHUB_ENV"
+
+      - name: Fetch locked release metadata without building
+        run: cargo fetch --locked
+
+      - name: Fetch every native round-trip report
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          pattern: release-roundtrip-*
+          path: ${{ runner.temp }}/roundtrip-reports
+          merge-multiple: true
+
+      - name: Recheck current CI and require complete archive-bound round trips
+        run: |
+          python3 tools/prepare_release.py --tag "$RELEASE_TAG" --repository "$GITHUB_REPOSITORY" \
+            --roundtrip-reports "$RUNNER_TEMP/roundtrip-reports" --output "$RUNNER_TEMP/release-assets"
 
       - name: Retain the complete candidate for immutable publication
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6

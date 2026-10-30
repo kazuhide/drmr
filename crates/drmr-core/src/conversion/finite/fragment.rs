@@ -110,7 +110,7 @@ fn initialization(
     bytes.extend(boxed(*b"moov", &common)?);
     Ok(bytes)
 }
-fn append_fragments(
+pub(super) fn append_fragments(
     path: &Path,
     index: usize,
     output: &mut File,
