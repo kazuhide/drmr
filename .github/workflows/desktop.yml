@@ -25,6 +25,9 @@ on:
       - 'tools/tests/test_verify_archive.py'
       - 'tools/tests/test_ci_inputs.py'
       - '.github/workflows/desktop.yml'
+      - '.github/workflows/ci-scope.yml'
+      - 'tools/ci_contract.py'
+      - 'tools/tests/test_ci_contract.py'
   workflow_dispatch:
 
 permissions:
@@ -35,7 +38,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  scope:
+    uses: ./.github/workflows/ci-scope.yml
   native-build:
+    needs: scope
+    if: ${{ needs.scope.outputs.profile == 'full' }}
     name: Build / ${{ matrix.os }} / ${{ matrix.rust }}
     runs-on: ${{ matrix.os }}
     # Include system-package downloads before native builds and archive checks.

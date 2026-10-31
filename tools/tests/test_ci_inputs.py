@@ -18,6 +18,7 @@ class DesktopInputs(unittest.TestCase):
         paths = desktop_paths()
         inputs = [".gitattributes", "README.md", "CHANGELOG.md", "LICENSE", "Cargo.toml", "Cargo.lock",
                   ".github/scripts/minimum-rust.py", ".github/workflows/desktop.yml",
+                  ".github/workflows/ci-scope.yml", "tools/ci_contract.py", "tools/tests/test_ci_contract.py",
                   "vendor/process-wrap/src/std/job_object.rs", "crates/drmr-test-support/build.rs",
                   "tools/build_desktop.py", "tools/collect_notices.py", "tools/verify_archive.py",
                   "tools/tests/test_build_desktop.py", "tools/tests/test_verify_archive.py",

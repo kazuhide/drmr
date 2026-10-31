@@ -21,13 +21,14 @@ SPEC = importlib.util.spec_from_file_location("prepare_release", Path(__file__).
 PREPARE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(PREPARE)
 QUALIFY = PREPARE.module("qualify_cli_archive")
+CI = PREPARE.module("ci_contract")
 
 
 class FakeGitHub:
     def __init__(self, head, tree):
         self.head, self.tree = head, tree
         self.calls, self.downloads = [], []
-        self.workflows, self.runs, self.artifacts = {}, {}, {}
+        self.workflows, self.runs, self.artifacts, self.jobs = {}, {}, {}, {}
         self.entries, self.outer = {}, {}
         for index, name in enumerate(PREPARE.WORKFLOWS, 1):
             workflow = {"id": index, "path": ".github/workflows/" + name, "state": "active"}
@@ -37,6 +38,12 @@ class FakeGitHub:
                                 "repository": {"full_name": "example/drmr"}, "head_repository": {"full_name": "example/drmr"},
                                 "status": "completed", "conclusion": "success", "run_started_at": "2026-10-22T00:00:00Z",
                                 "updated_at": "2026-10-22T00:30:00Z"}]
+            names = list(CI.NATIVE_JOBS[name])
+            if name in CI.GATE_NAMES:
+                names += [CI.SCOPE_NAME, CI.GATE_NAMES[name]]
+            self.jobs[name] = [{"id": index * 1000 + number, "name": job, "run_id": 100 + index,
+                                "run_attempt": 1, "head_sha": head, "status": "completed", "conclusion": "success"}
+                               for number, job in enumerate(names, 1)]
         for index, (workflow, name, target, suffix) in enumerate(PREPARE.TARGETS, 1):
             archive = ("native archive fixture " + target).encode()
             archive_hash = hashlib.sha256(archive).hexdigest()
@@ -131,6 +138,9 @@ class FakeGitHub:
             identity = int(tail.split("/")[0])
             run = next(run for runs in self.runs.values() for run in runs if run["id"] == identity)
             if "/attempts/" in tail:
+                if tail.endswith("/jobs"):
+                    name = next(name for name, runs in self.runs.items() if run in runs)
+                    return {"total_count": len(self.jobs[name]), "jobs": copy.deepcopy(self.jobs[name])}
                 return copy.deepcopy(run)
             artifacts = [artifact for artifact in list(self.artifacts.values()) + self.extra_artifacts if artifact["workflow_run"]["id"] == identity]
             return {"total_count": len(artifacts), "artifacts": copy.deepcopy(artifacts)}
@@ -194,6 +204,23 @@ class ReleasePacket(unittest.TestCase):
         self.assertFalse(result["publication_ready"])
         self.assertFalse(manifest["publication_ready"])
         self.assertEqual(manifest["kind"], "native-cli-roundtrip-inputs")
+
+    def test_successful_workflow_cannot_hide_missing_skipped_or_unbound_native_jobs(self):
+        original = copy.deepcopy(self.client.jobs)
+        changes = [lambda jobs: jobs.pop(0), lambda jobs: jobs[0].update(conclusion="skipped"),
+                   lambda jobs: jobs[0].update(conclusion="failure"),
+                   lambda jobs: jobs[0].update(conclusion="cancelled"),
+                   lambda jobs: jobs[0].update(status="in_progress"),
+                   lambda jobs: jobs[0].update(head_sha="f" * 40),
+                   lambda jobs: jobs[0].update(run_attempt=2),
+                   lambda jobs: jobs.append({**jobs[0], "id": 9999})]
+        for workflow in PREPARE.WORKFLOWS:
+            for change in changes:
+                self.client.jobs = copy.deepcopy(original)
+                change(self.client.jobs[workflow])
+                with self.subTest(workflow=workflow, change=change), self.assertRaisesRegex(
+                        PREPARE.Failure, "^workflow-native-jobs-incomplete$"):
+                    PREPARE.qualification_runs(self.client, "example/drmr", self.head)
 
     def test_assembly_requires_a_release_report_or_explicit_input_staging(self):
         with self.assertRaisesRegex(PREPARE.Failure, "^roundtrip-reports-required$"):
@@ -615,6 +642,8 @@ class ReleasePacket(unittest.TestCase):
                 count[0] += 1
                 if count[0] == 2:
                     self.client.runs["ci.yml"][0]["run_attempt"] = 2
+                    for job in self.client.jobs["ci.yml"]:
+                        job["run_attempt"] = 2
         self.client.on_json = drift
         self.refuse("qualification-runs-changed")
 

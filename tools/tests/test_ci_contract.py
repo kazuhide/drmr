@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -215,6 +216,17 @@ class NativeQualification(unittest.TestCase):
                 CI.job_rows(lambda endpoint: value, "example/jobs")
         self.assertEqual(CI.job_rows(lambda endpoint: {"total_count": 1, "jobs": [{"id": 1}]}, "jobs"), [{"id": 1}])
 
+    def test_boolean_attempt_and_ambiguous_json_cannot_substitute_for_evidence(self):
+        jobs = self.jobs()
+        for job in jobs:
+            job["run_attempt"] = 1
+        jobs[0]["run_attempt"] = True
+        with self.assertRaises(CI.Refusal):
+            CI.validate_jobs("ci.yml", jobs, self.source, self.run, 1)
+        for raw in ['{"status":"failure","status":"success"}', '{"value":NaN}', '{"value":Infinity}']:
+            with self.subTest(raw=raw), self.assertRaises(CI.Refusal):
+                CI.load_json(raw)
+
     def test_documentation_needs_and_actual_jobs_must_both_show_native_checks_skipped(self):
         report = {"profile": "documentation", "source_sha": "b" * 40, "head_sha": self.source}
         needs = {name: {"result": "skipped"} for name in CI.NATIVE_NEEDS["ci.yml"]}
@@ -233,6 +245,44 @@ class NativeQualification(unittest.TestCase):
             mutation(n, j)
             with self.assertRaises(CI.Refusal):
                 CI.validate_gate("ci.yml", report, n, j, self.run, self.attempt)
+
+
+class WorkflowWiring(unittest.TestCase):
+    def blocks(self, filename):
+        text = (ROOT / ".github/workflows" / filename).read_text(encoding="utf-8")
+        body = text.split("\njobs:\n", 1)[1]
+        chunks = re.split(r"^  ([a-z][a-z0-9-]*):\n", body, flags=re.MULTILINE)
+        return dict(zip(chunks[1::2], chunks[2::2]))
+
+    def test_every_native_group_is_bound_to_classification_and_an_always_run_gate(self):
+        for filename, groups in CI.NATIVE_NEEDS.items():
+            with self.subTest(workflow=filename):
+                blocks = self.blocks(filename)
+                self.assertEqual(set(blocks), {"scope", "qualification", *groups})
+                self.assertIn("uses: ./.github/workflows/ci-scope.yml", blocks["scope"])
+                self.assertNotIn("\n    if:", blocks["scope"])
+                for group in groups:
+                    self.assertIn("    needs: scope\n", blocks[group])
+                    self.assertIn("    if: ${{ needs.scope.outputs.profile == 'full' }}\n", blocks[group])
+                gate = blocks["qualification"]
+                self.assertIn("    if: ${{ always() }}\n", gate)
+                self.assertIn("    name: " + CI.GATE_NAMES[filename] + "\n", gate)
+                self.assertIn("    needs: [" + ", ".join(["scope", *groups]) + "]\n", gate)
+                self.assertIn("      actions: read\n", gate)
+                self.assertIn("NEEDS_JSON: ${{ toJSON(needs) }}", gate)
+                self.assertIn("gate --workflow " + filename, gate)
+
+    def test_desktop_builds_also_respect_documentation_scope(self):
+        blocks = self.blocks("desktop.yml")
+        self.assertEqual(set(blocks), {"scope", "native-build"})
+        self.assertIn("uses: ./.github/workflows/ci-scope.yml", blocks["scope"])
+        self.assertIn("    needs: scope\n", blocks["native-build"])
+        self.assertIn("    if: ${{ needs.scope.outputs.profile == 'full' }}\n", blocks["native-build"])
+
+    def test_pages_retains_all_documentation_unit_tests_when_native_jobs_are_skipped(self):
+        static = self.blocks("pages.yml")["build"]
+        for name in ["test_build_guide_site.py", "test_check_site.py", "test_conversion_examples.py"]:
+            self.assertIn(name, static)
 
 
 if __name__ == "__main__":

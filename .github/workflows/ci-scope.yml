@@ -1,0 +1,46 @@
+name: Change classification
+
+on:
+  workflow_call:
+    outputs:
+      profile:
+        description: Full native qualification or proven publication-only PR
+        value: ${{ jobs.classify.outputs.profile }}
+      source_sha:
+        description: Exact checked-out source commit
+        value: ${{ jobs.classify.outputs.source_sha }}
+
+permissions:
+  contents: read
+
+jobs:
+  classify:
+    name: Classify changes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      profile: ${{ steps.classify.outputs.profile }}
+      source_sha: ${{ steps.classify.outputs.source_sha }}
+    steps:
+      - name: Check out the complete source graph
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install the qualification Python runtime
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13.12'
+      - name: Check routing and native evidence contracts
+        run: python3 -W error::ResourceWarning -m unittest discover -s tools/tests -p test_ci_contract.py -v
+      - name: Classify the exact checkout against its event
+        id: classify
+        run: python3 tools/ci_contract.py classify --report "$RUNNER_TEMP/ci-scope.json"
+      - name: Preserve the classification proof
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: validation-scope-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-scope.json
+          if-no-files-found: warn
+          retention-days: 14
