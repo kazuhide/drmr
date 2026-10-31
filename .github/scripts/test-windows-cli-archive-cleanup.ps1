@@ -115,7 +115,7 @@ try {
 
 foreach ($mode in @('success', 'qualification-failure', 'public-copy-failure', 'setup-failure', 'reparse-refusal', 'report-type-refusal', 'replacement-refusal')) {
     $username = 'drmr_arc_' + [guid]::NewGuid().ToString('N').Substring(0, 10)
-    $directory = Join-Path $parent ('drmr-archive-check-' + [guid]::NewGuid().ToString('N'))
+    $directory = Join-Path $parent ('q-' + [guid]::NewGuid().ToString('N'))
     $external = Join-Path $parent ('drmr-archive-sentinel-' + [guid]::NewGuid().ToString('N'))
     $retained = $null
     $directoryCreated = $false
@@ -256,13 +256,17 @@ temporary.mkdir()
 if mode == 'success':
     guard_check = temporary / 'decoder-guard-check'
     guard_check.mkdir()
-    selected = ('import sys, unittest; sys.path.insert(0, sys.argv[1]); '
+    selected = ('import pathlib, sys, unittest; sys.path.insert(0, sys.argv[1]); '
+                'import test_roundtrip_paths; '
+                'paths = test_roundtrip_paths.temporary_path_regression(pathlib.Path(sys.argv[2]), (122, 136)); '
+                'assert [row["legacy_temp_length"] for row in paths] == [122, 136]; '
+                'assert sum(row["child_checks"] for row in paths) == 6; '
                 'suite = unittest.defaultTestLoader.loadTestsFromName('
                 '"test_release_roundtrip.ReleaseMatrix.test_conversion_runner_cannot_execute_external_decoders"); '
                 'result = unittest.TextTestRunner(verbosity=2).run(suite); '
                 'sys.exit(not (result.wasSuccessful() and result.testsRun == 1 and not result.skipped))')
     module.Runner(guard_check).run([sys.executable, '-B', '-W', 'error::ResourceWarning',
-                                   '-c', selected, str(helper.parent / 'tests')], 'headless-decoder-guards', 120)
+                                   '-c', selected, str(helper.parent / 'tests'), temporary], 'headless-decoder-guards', 120)
 if mode != 'reparse-refusal':
     private = temporary / 'private'
     private.mkdir()
@@ -291,7 +295,7 @@ Publish-FixtureStage 'report-checked'
 if ($context.mode -eq 'reparse-refusal') {
     New-Item -ItemType Junction -Path (Join-Path $PSScriptRoot 'temp/escape') -Target $context.external | Out-Null
 }
-@{ ordinary_sid = $identity.User.Value; private_acl_checked = ($context.mode -ne 'report-type-refusal'); private_acl_regression_checked = ($context.mode -eq 'success'); decoder_guards_checked = ($context.mode -eq 'success') } |
+@{ ordinary_sid = $identity.User.Value; private_acl_checked = ($context.mode -ne 'report-type-refusal'); private_acl_regression_checked = ($context.mode -eq 'success'); decoder_guards_checked = ($context.mode -eq 'success'); temporary_paths_checked = ($context.mode -eq 'success') } |
     ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $PSScriptRoot 'public-check.json')
 Publish-FixtureStage 'proof-written'
 # These failures occur after genuine production ACL creation, before owner cleanup.
@@ -322,7 +326,9 @@ Publish-FixtureStage 'complete'
             if ($mode -eq 'success') {
                 Assert-ArchiveCleanupTest $proof.private_acl_regression_checked 'The owner-only ACL regression was not checked'
                 Assert-ArchiveCleanupTest ($proof.decoder_guards_checked -eq $true) 'The headless decoder guard regression was not checked'
+                Assert-ArchiveCleanupTest ($proof.temporary_paths_checked -eq $true) 'The roundtrip temporary paths were not checked'
                 Write-Output 'Headless decoder guard regression passed: one real test as an ordinary user'
+                Write-Output 'Roundtrip temporary path regression passed: 122/136 legacy lengths and six real child creation/cleanup checks'
                 Write-Output 'Private ACL regression passed: helper 2 positive / 2 foreign-owner refusals; documentation 6 positive / 6 foreign-owner refusals'
             }
             if ($mode -ne 'report-type-refusal') {
