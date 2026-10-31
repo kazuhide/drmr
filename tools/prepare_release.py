@@ -44,6 +44,7 @@ CHECK = module("check_release")
 VERIFY = module("verify_archive")
 EVIDENCE = module("media_evidence")
 ROUNDTRIP = module("roundtrip_contract")
+CI_CONTRACT = module("ci_contract")
 COMPRESSED_ERRORS = (EOFError, tarfile.TarError, zipfile.BadZipFile, zlib.error, NotImplementedError)
 ARCHIVE_ERRORS = (VERIFY.Failure, OSError, ValueError, TypeError, KeyError) + COMPRESSED_ERRORS
 WORKFLOWS = ("ci.yml", "windows.yml", "container.yml", "advisories.yml", "pages.yml")
@@ -221,6 +222,12 @@ def qualification_runs(client, repository, head):
         require(pin(run) == pin(attempt) and attempt.get("status") == "completed"
                 and attempt.get("conclusion") == "success", "workflow-attempt-changed")
         require(instant(attempt["run_started_at"]) <= instant(attempt["updated_at"]), "workflow-attempt-window-invalid")
+        jobs = rows(client, base + "/actions/runs/" + str(run["id"]) + "/attempts/"
+                    + str(run["run_attempt"]) + "/jobs", "jobs")
+        try:
+            CI_CONTRACT.validate_jobs(name, jobs, head, run["id"], run["run_attempt"], release=True)
+        except CI_CONTRACT.Refusal:
+            raise Failure("workflow-native-jobs-incomplete") from None
         selected[name] = attempt
     return selected
 

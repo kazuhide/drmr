@@ -136,6 +136,23 @@ def positive(value):
     return type(value) is int and value > 0
 
 
+def load_json(raw):
+    def unique(pairs):
+        value = {}
+        for key, item in pairs:
+            require(key not in value, "ci-json-invalid")
+            value[key] = item
+        return value
+
+    def constant(_value):
+        raise Refusal("ci-json-invalid")
+
+    try:
+        return json.loads(raw, object_pairs_hook=unique, parse_constant=constant)
+    except (ValueError, UnicodeError, TypeError):
+        raise Refusal("ci-json-invalid") from None
+
+
 def validate_jobs(workflow, jobs, head, run_id, attempt, *, release=False, profile="full"):
     require(workflow in NATIVE_JOBS and valid_sha(head) and positive(run_id) and positive(attempt),
             "job-contract-invalid")
@@ -144,8 +161,8 @@ def validate_jobs(workflow, jobs, head, run_id, attempt, *, release=False, profi
     for job in jobs:
         require(isinstance(job, dict) and positive(job.get("id")) and job["id"] not in ids
                 and isinstance(job.get("name"), str) and job["name"] not in by_name
-                and job.get("head_sha") == head and job.get("run_id") == run_id
-                and job.get("run_attempt") == attempt, "job-binding-invalid")
+                and job.get("head_sha") == head and type(job.get("run_id")) is int and job["run_id"] == run_id
+                and type(job.get("run_attempt")) is int and job["run_attempt"] == attempt, "job-binding-invalid")
         by_name[job["name"]] = job
         ids.add(job["id"])
     auxiliary = {SCOPE_NAME, GATE_NAMES[workflow]} if workflow in GATE_NAMES else set()
@@ -210,7 +227,7 @@ def current_jobs(repository, run_id, attempt):
             raw = subprocess.run(["gh", "api", "--hostname", "github.com", endpoint],
                                  capture_output=True, check=True, timeout=30).stdout
             require(len(raw) <= 2 * 1024 * 1024, "job-list-invalid")
-            return json.loads(raw)
+            return load_json(raw)
         except (OSError, subprocess.SubprocessError, ValueError):
             raise Refusal("job-evidence-unavailable") from None
 
@@ -225,12 +242,12 @@ def main():
     parser.add_argument("--report", type=Path, required=True)
     args = parser.parse_args()
     try:
-        payload = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
+        payload = load_json(Path(os.environ["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
         report = classify(Path.cwd(), os.environ["GITHUB_EVENT_NAME"], payload, os.environ["GITHUB_SHA"])
         if args.mode == "gate":
             run_id, attempt = int(os.environ["GITHUB_RUN_ID"]), int(os.environ["GITHUB_RUN_ATTEMPT"])
             jobs = current_jobs(os.environ["GITHUB_REPOSITORY"], run_id, attempt)
-            validate_gate(args.workflow, report, json.loads(os.environ["NEEDS_JSON"]), jobs, run_id, attempt)
+            validate_gate(args.workflow, report, load_json(os.environ["NEEDS_JSON"]), jobs, run_id, attempt)
         report["success"] = True
     except Refusal as error:
         report = {"schema_version": 1, "success": False, "error": str(error)}
