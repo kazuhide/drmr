@@ -75,7 +75,46 @@ function Write-ArchiveCleanupDiagnostic {
     Write-Output ('DRMR_ARCHIVE_DIAGNOSTIC ' + ($result | ConvertTo-Json -Depth 8 -Compress))
 }
 
-$observerDirectory = Join-Path $parent ('drmr-archive-observer-' + [guid]::NewGuid().ToString('N'))
+function Remove-ArchiveNameRegressionDirectory {
+    param([string]$Path, [string]$Identity)
+    if (Test-Path -LiteralPath $Path) {
+        Assert-ArchiveCleanupTest ((Get-DrmrArchiveDirectoryIdentity $Path $python) -eq $Identity) 'The name regression directory changed'
+        Assert-NoDrmrArchiveReparsePoint $Path
+        # A name refusal must preserve the empty directory; remove only this
+        # fixture's unchanged entry, without recursive deletion or user cleanup.
+        [IO.Directory]::Delete($Path, $false)
+    }
+}
+
+$nameNonce = [guid]::NewGuid().ToString('N')
+$nameDirectory = Join-Path $parent ('q-' + $nameNonce)
+New-Item -ItemType Directory -Path $nameDirectory | Out-Null
+$nameIdentity = Get-DrmrArchiveDirectoryIdentity $nameDirectory $python
+try {
+    Assert-DrmrArchiveDirectory $nameDirectory $parent $nameIdentity $python
+    Complete-DrmrArchiveOwner -Directory $nameDirectory -ExpectedParent $parent -ExpectedIdentity $nameIdentity -Python $python -DirectoryCreated $true
+    Assert-ArchiveCleanupTest (-not (Test-Path -LiteralPath $nameDirectory)) 'The producer-shaped root was not cleaned'
+} finally {
+    Remove-ArchiveNameRegressionDirectory $nameDirectory $nameIdentity
+}
+foreach ($name in @(('q-' + $nameNonce.Substring(0, 31)), ('q-' + $nameNonce + '0'),
+        ('q-' + $nameNonce + '-retained'), ('Q-' + $nameNonce),
+        ('q-A' + $nameNonce.Substring(1)), ('q-g' + $nameNonce.Substring(1)), ('drmr-archive-' + $nameNonce))) {
+    $nameDirectory = Join-Path $parent $name
+    New-Item -ItemType Directory -Path $nameDirectory | Out-Null
+    $nameIdentity = Get-DrmrArchiveDirectoryIdentity $nameDirectory $python
+    try {
+        $refused = $false
+        try { Assert-DrmrArchiveDirectory $nameDirectory $parent $nameIdentity $python } catch { $refused = $true }
+        Assert-ArchiveCleanupTest $refused 'Cleanup accepted a malformed root name'
+        Assert-ArchiveCleanupTest (Test-Path -LiteralPath $nameDirectory -PathType Container) 'A name refusal changed the directory'
+    } finally {
+        Remove-ArchiveNameRegressionDirectory $nameDirectory $nameIdentity
+    }
+}
+Write-Output 'Archive root-name regression passed: producer cleanup and seven malformed-name refusals'
+
+$observerDirectory = Join-Path $parent ('q-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $observerDirectory | Out-Null
 $observerIdentity = Get-DrmrArchiveDirectoryIdentity $observerDirectory $python
 try {

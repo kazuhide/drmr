@@ -33,7 +33,7 @@ function Assert-DrmrArchiveDirectory {
     $full = [IO.Path]::GetFullPath($Directory).TrimEnd([char[]]'\/')
     $parent = [IO.Path]::GetFullPath($ExpectedParent).TrimEnd([char[]]'\/')
     if (-not [string]::Equals([IO.Path]::GetDirectoryName($full), $parent, [StringComparison]::OrdinalIgnoreCase) -or
-        -not [IO.Path]::GetFileName($full).StartsWith('drmr-archive-', [StringComparison]::Ordinal) -or
+        [IO.Path]::GetFileName($full) -cnotmatch '\Aq-[0-9a-f]{32}\z' -or
         -not $ExpectedIdentity -or (Get-DrmrArchiveDirectoryIdentity $full $Python) -ne $ExpectedIdentity) {
         throw 'The owned archive directory changed'
     }
