@@ -1,0 +1,17 @@
+{
+  "schema_version": 2,
+  "input": {
+    "hls_keys": [
+      {
+        "uri": "https://example.com/keys/content.key",
+        "key": "00112233445566778899aabbccddeeff"
+      }
+    ]
+  },
+  "outputs": {
+    "mp4": {
+      "kid": "101112131415161718191a1b1c1d1e1f",
+      "key": "ffeeddccbbaa99887766554433221100"
+    }
+  }
+}

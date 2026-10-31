@@ -1,0 +1,9 @@
+{
+  "schema_version": 2,
+  "outputs": {
+    "hls": {
+      "key": "ffeeddccbbaa99887766554433221100",
+      "hls_key_uri": "https://keys.example.invalid/content.key"
+    }
+  }
+}

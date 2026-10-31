@@ -1,0 +1,11 @@
+{
+  "schema_version": 3,
+  "outputs": [
+    {
+      "id": "hls",
+      "format": "hls",
+      "target": "clear",
+      "drms": []
+    }
+  ]
+}

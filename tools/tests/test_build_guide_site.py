@@ -22,7 +22,7 @@ class GuideBuilderTests(unittest.TestCase):
         for route, page in pages.items():
             html = page.decode()
             self.assertEqual(html.count('data-guide-chapter='), 18)
-            self.assertIn('<figure class=guide-example aria-labelledby=e1 data-code-language=sh>', html)
+            self.assertIn('<figure class=guide-example aria-labelledby=e1 data-code-language=json>', html)
             self.assertNotIn('role="group"', html)
             self.assertIn('<caption id=t1>', html)
             self.assertIn('scope=row', html)

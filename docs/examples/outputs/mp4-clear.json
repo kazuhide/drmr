@@ -1,0 +1,11 @@
+{
+  "schema_version": 3,
+  "outputs": [
+    {
+      "id": "mp4",
+      "format": "mp4",
+      "target": "clear",
+      "drms": []
+    }
+  ]
+}

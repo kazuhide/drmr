@@ -3,12 +3,12 @@ import { guideChapters, requireGuideLayout, requireGuideMovement, codeAriaTempla
   guideSourceExampleCount } from './guide.mjs';
 import { locales } from './locales.mjs';
 import { matrixRows, matrixColumns, matrixObservation, requireMatrixLayout, requireMatrixMovement, completeMatrixKey, MatrixKeyDeadline } from './matrix.mjs';
-import { matrixRecipes, matrixRecipeBatches, landingFocusTargetCounts, recipeObservation, requireRecipe,
+import { matrixRecipes, matrixRecipeExampleCount, matrixRecipeBatches, landingFocusTargetCounts, recipeObservation, requireRecipe,
   requireRecipeIdentity, requireRecipePosition, requireMatrixLinkExposure } from './recipes.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runInNewContext } from 'node:vm';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { assets, assetRoute, assetPath, digest, liveMode, allowedRequest } from './source.mjs';
 import * as identity from './source.mjs';
@@ -603,11 +603,13 @@ test('every matrix recipe belongs to one complete navigation batch including the
   assert.deepEqual(landingFocusTargetCounts, { en: 102, ja: 101 });
 });
 
-test('guide code inventory counts literal Markdown examples and all independently expected recipes', () => {
-  for (const language of ['en', 'ja']) {
+test('guide code inventory counts literal Markdown examples and every independently expected recipe figure', () => {
+  assert.equal(matrixRecipes.filter(recipe => recipe.target === 'clear').length, 20);
+  assert.equal(matrixRecipes.filter(recipe => recipe.target !== 'clear').length, 45);
+  assert.equal(matrixRecipeExampleCount, 65);
+  for (const [language, literalCount] of [['en', 45], ['ja', 45]]) {
     const source = readFileSync(new URL(`../../site-content/guide/${language}.md`, import.meta.url), 'utf8');
-    assert.equal(guideSourceExampleCount(source, matrixRecipes.length), 127);
-    assert.equal(guideSourceExampleCount(source, matrixRecipes.length) - matrixRecipes.length, 62);
+    assert.equal(guideSourceExampleCount(source, matrixRecipeExampleCount), literalCount + 65);
   }
   const source = '```sh\ndrmr --version\n```\n\n{{conversion-examples}}\n';
   assert.equal(guideSourceExampleCount(source, 65), 66);
@@ -622,162 +624,162 @@ test('guide code inventory counts literal Markdown examples and all independentl
 
 function recipeSample(recipe = matrixRecipes.find(value => value.id === 'recipe-hls-ts-video-dash-cbcs')) {
   const extension = recipe.row === 'mp4' ? 'mp4' : recipe.row === 'dash' ? 'mpd' : 'm3u8';
-  const profiles = recipe.row.startsWith('hls-ts-') ? ['Clear', 'AES-128', 'SAMPLE-AES']
-    : recipe.row === 'hls-fmp4' ? ['Clear', 'cenc', 'cbcs', 'AES-128'] : ['Clear', 'cenc', 'cbcs'];
-  const code = [[profiles[0]], profiles.slice(1)].map(group => {
-    const profile = group.join(' / ');
-    const clear = group.length === 1 && group[0] === 'Clear';
-    const name = clear ? 'clear' : 'encrypted';
-    const inputKeys = clear ? '' : ' --keys-file keys.json';
-    const runtimeKeys = clear && recipe.target === 'clear' ? '' : ' --keys-file keys.json';
-    const output = recipe.format === 'mp4' ? 'result.mp4' : 'result';
-    return [`# ${profile} input`, `drmr analyze "https://example.com/${name}.${extension}" \\`,
-      `  --download-dir src${inputKeys} &&`,
-      `drmr plan src/input.${extension} --to ${recipe.target} --format ${recipe.format} \\`,
-      `  --output ${output} --save plan.json${inputKeys} &&`,
-      `drmr convert --plan plan.json${runtimeKeys} &&`,
-      `drmr verify --plan plan.json${runtimeKeys}`].join('\n');
-  }).join('\n\n') + '\n';
+  const profiles = recipe.row.startsWith('hls-ts-') ? ['hls-aes128', 'hls-sample-aes']
+    : recipe.row === 'hls-fmp4' ? ['cenc-cbcs', 'hls-aes128'] : ['cenc-cbcs'];
+  const paragraph = (text, links = []) => ({ tag: 'P', text, links });
+  const root = 'https://github.com/kazuhide/drmr/blob/main/docs/examples/';
+  const encrypted = recipe.target !== 'clear';
+  const keyLink = mode => ({ text: mode === 'clear' ? 'keys.json'
+    : { 'cenc-cbcs': 'cenc / cbcs', 'hls-aes128': 'AES-128', 'hls-sample-aes': 'SAMPLE-AES' }[mode],
+    href: root + `keys/${recipe.format}-${recipe.target}-from-${mode}.json` });
+  const command = keys => `drmr convert "https://example.com/input.${extension}" \\\n  --download-dir src --outputs outputs.json --output result${keys ? ' --keys-file keys.json' : ''}\n`;
+  const code = encrypted ? command(true)
+    : '# Clear input\n' + command(false) + '\n# Encrypted input\n' + command(true);
+  const entrypoint = `result/${recipe.format}/` + (recipe.format === 'mp4' ? 'media.mp4'
+    : recipe.format === 'dash' ? 'manifest.mpd' : 'master.m3u8');
+  const blocks = [paragraph('outputs.json', [{ text: 'outputs.json', href: root + `outputs/${recipe.format}-${recipe.target}.json` }]),
+    paragraph(encrypted ? 'Clear input: keys.json.' : 'Clear input: no keys.json.', encrypted ? [keyLink('clear')] : []),
+    paragraph('Encrypted input: save the matching complete example as keys.json.', profiles.map(keyLink)),
+    { tag: 'FIGURE', figureClass: true, language: 'sh', preCount: 1, codeCount: 1, tabindex: '0', code, rendered: code },
+    paragraph('Result: ' + entrypoint)];
   return { id: recipe.id, tag: 'H3', tabindex: '-1', chapter: 'url-input', heading: 'HLS to DASH',
-    presented: true, setupTag: 'P', setupHrefs: ['#recipe-setup'], figureTag: 'FIGURE',
-    figureClass: true, language: 'sh', code, rendered: code };
+    presented: true, setupTag: 'P', setupHrefs: ['#recipe-setup'], blocks };
 }
 
-test('recipe checks refuse wrong destinations, hidden code, incomplete steps and mismatched saved plans', () => {
+function mutateRecipeCode(value, transform) {
+  const result = structuredClone(value);
+  const figure = result.blocks.find(block => block.tag === 'FIGURE');
+  figure.code = transform(figure.code); figure.rendered = figure.code;
+  return result;
+}
+
+test('recipe checks require complete file links, matching destinations and rendered commands', () => {
   const expected = matrixRecipes.find(value => value.id === 'recipe-hls-ts-video-dash-cbcs');
   const good = recipeSample(expected);
   requireRecipe(good, expected);
-  const changes = [
-    { id: 'recipe-hls-ts-video-dash-clear' }, { tag: 'H2' }, { tabindex: null }, { chapter: 'verification' },
-    { heading: '' }, { presented: false }, { setupTag: 'DIV' }, { setupHrefs: [] },
-    { setupHrefs: ['#recipe-setup', '#unrelated'] }, { figureTag: 'PRE' }, { figureClass: false },
-    { language: 'text' }, { rendered: '' },
-  ];
-  for (const change of changes) assert.throws(() => requireRecipe({ ...good, ...change }, expected));
-  for (const [before, after] of [
-    ['--to cbcs', '--to clear'], ['--format dash', '--format hls'], ['--output result', ''],
-    ['--save plan.json', ''], ['drmr convert --plan plan.json', 'drmr convert --plan stale.plan.json'],
-    ['--keys-file keys.json', '--keys-file other.json'], ['https://example.com/', 'src/'],
-    ['--download-dir src', ''], ['drmr verify', 'printf verify'], ['# Clear input\n', '# Clear input\nset -eu\n'],
-  ]) {
-    const code = good.code.replace(before, after);
-    assert.notEqual(code, good.code, before);
-    assert.throws(() => requireRecipe({ ...good, code, rendered: code }, expected), before);
+  for (const changed of [{ id: 'recipe-hls-ts-video-dash-clear' }, { tag: 'H2' }, { tabindex: null },
+    { chapter: 'verification' }, { heading: '' }, { presented: false }, { setupTag: 'DIV' },
+    { setupHrefs: [] }, { setupHrefs: ['#recipe-setup', '#unrelated'] }, { blocks: [] }]) {
+    assert.throws(() => requireRecipe({ ...good, ...changed }, expected));
+  }
+  for (let index = 0; index < good.blocks.length; index++) {
+    const changed = structuredClone(good); changed.blocks.splice(index, 1);
+    assert.throws(() => requireRecipe(changed, expected));
+  }
+  for (const field of [{ tag: 'PRE' }, { figureClass: false }, { language: 'text' },
+    { preCount: 2 }, { codeCount: 2 }, { tabindex: null }, { rendered: '' }]) {
+    const changed = structuredClone(good); Object.assign(changed.blocks[3], field);
+    assert.throws(() => requireRecipe(changed, expected));
   }
 });
 
-test('all format recipes require native acquisition and the matching retained entrypoint', () => {
+test('all 65 recipes link their exact output file and clear-input keys only when needed', () => {
   for (const expected of matrixRecipes) {
     const good = recipeSample(expected);
     requireRecipe(good, expected);
-    for (const code of [
-      good.code.replace('--download-dir src', '--download-dir other'),
-      good.code.replace(/src\/input\.(mp4|mpd|m3u8)/, 'src/download.bin'),
-      good.code.replace(/"https:\/\/[^"\n]+"/, url => url.slice(1, -1)),
-      good.code.replace('drmr analyze', 'curl https://example.com/other\ndrmr analyze'),
-    ]) assert.throws(() => requireRecipe({ ...good, code, rendered: code }, expected));
-  }
-});
-
-test('each recipe includes all supported input protection groups in order exactly once', () => {
-  const profiles = {
-    mp4: ['Clear', 'cenc', 'cbcs'], dash: ['Clear', 'cenc', 'cbcs'],
-    'hls-fmp4': ['Clear', 'cenc', 'cbcs', 'AES-128'],
-    'hls-ts-video': ['Clear', 'AES-128', 'SAMPLE-AES'],
-    'hls-ts-audio': ['Clear', 'AES-128', 'SAMPLE-AES'],
-  };
-  for (const expected of matrixRecipes) {
-    const good = recipeSample(expected);
-    requireRecipe(good, expected);
-    const groups = good.code.trimEnd().split('\n\n');
-    assert.deepEqual(groups.map(group => group.split('\n')[0]), [[profiles[expected.row][0]], profiles[expected.row].slice(1)].map(group => `# ${group.join(' / ')} input`));
-    for (let index = 0; index < groups.length; index++) {
-      const changes = [groups.filter((_, current) => current !== index), [...groups, groups[index]],
-        groups.map((group, current) => current === index ? group.replace(/^# .+ input/, '# cbc1 input') : group)];
-      for (const changed of changes) {
-        const code = changed.join('\n\n') + '\n';
-        assert.throws(() => requireRecipe({ ...good, code, rendered: code }, expected), `${expected.id}: ${index}`);
+    const indices = expected.target === 'clear' ? [0] : [0, 1];
+    for (const index of indices) {
+      for (const change of [links => [], links => [...links, links[0]], links => [{ ...links[0], text: 'other.json' }],
+        links => [{ ...links[0], href: links[0].href.replace('/examples/', '/examples/stale/') }]]) {
+        const changed = structuredClone(good); changed.blocks[index].links = change(good.blocks[index].links);
+        assert.throws(() => requireRecipe(changed, expected));
       }
     }
-    const code = [...groups].reverse().join('\n\n') + '\n';
-    assert.throws(() => requireRecipe({ ...good, code, rendered: code }, expected));
+    if (expected.target === 'clear') {
+      const changed = structuredClone(good);
+      changed.blocks[1].links = [{ text: 'keys.json', href: 'https://example.com/keys.json' }];
+      assert.throws(() => requireRecipe(changed, expected));
+    }
+    const changed = structuredClone(good); changed.blocks.at(-1).text = 'Result: result/incorrect.bin';
+    assert.throws(() => requireRecipe(changed, expected));
   }
 });
 
-test('key options are required only by the source and runtime protection roles', () => {
+test('each recipe links complete key files for every admitted encrypted input profile in order', () => {
   for (const expected of matrixRecipes) {
     const good = recipeSample(expected);
     requireRecipe(good, expected);
-    const groups = good.code.trimEnd().split('\n\n');
-    for (let index = 0; index < groups.length; index++) {
-      const lines = groups[index].split('\n');
-      const encryptedInput = lines[0] !== '# Clear input';
-      for (const [operation, line] of [2, 4, 5, 6].entries()) {
-        const required = encryptedInput || (operation >= 2 && expected.target !== 'clear');
-        assert.equal(lines[line].includes('--keys-file keys.json'), required);
-        const changed = [...lines];
-        changed[line] = required ? changed[line].replace(' --keys-file keys.json', '')
-          : changed[line].replace(/( &&)?$/, ' --keys-file keys.json$1');
-        const code = groups.map((group, current) => current === index ? changed.join('\n') : group).join('\n\n') + '\n';
-        assert.throws(() => requireRecipe({ ...good, code, rendered: code }, expected),
-          `${expected.id}: ${lines[0]}, operation ${operation + 1}`);
+    const paragraph = good.blocks[2];
+    assert.ok(paragraph.links.length >= 1);
+    for (let index = 0; index < paragraph.links.length; index++) {
+      for (const change of [links => links.filter((_, current) => current !== index),
+        links => [...links, links[index]], links => links.map((link, current) => current === index
+          ? { ...link, href: link.href.replace('-from-', '-unsupported-from-') } : link),
+        links => links.map((link, current) => current === index ? { ...link, text: '' } : link)]) {
+        const changed = structuredClone(good); changed.blocks[2].links = change(paragraph.links);
+        assert.throws(() => requireRecipe(changed, expected), expected.id);
       }
+    }
+    if (paragraph.links.length > 1) {
+      const changed = structuredClone(good); changed.blocks[2].links.reverse();
+      assert.throws(() => requireRecipe(changed, expected));
     }
   }
 });
 
-test('every input group retains literal continuations, stops on failure and verifies the same saved plan', () => {
-  for (const expected of matrixRecipes) {
-    const good = recipeSample(expected);
-    requireRecipe(good, expected);
-    const groups = good.code.trimEnd().split('\n\n');
-    for (let index = 0; index < groups.length; index++) {
-      const lines = groups[index].split('\n');
-      const changes = [];
-      for (const operation of [2, 4, 5]) {
-        for (const connector of ['', ';', ' ||']) {
-          const changed = [...lines];
-          changed[operation] = changed[operation].replace(/ &&$/, connector);
-          changes.push(changed);
-        }
+test('all linked output and key examples are complete matching schema-3 and schema-2 files', () => {
+  const directory = new URL('../../docs/examples/', import.meta.url);
+  const inspected = { outputs: new Set(), keys: new Set() };
+  for (const recipe of matrixRecipes) {
+    const sample = recipeSample(recipe);
+    const outputName = `${recipe.format}-${recipe.target}.json`;
+    const outputSpec = JSON.parse(readFileSync(new URL('outputs/' + outputName, directory), 'utf8'));
+    assert.deepEqual(outputSpec, { schema_version: 3, outputs: [
+      { id: recipe.format, format: recipe.format, target: recipe.target, drms: [] }] }, outputName);
+    inspected.outputs.add(outputName);
+    for (const link of [...sample.blocks[1].links, ...sample.blocks[2].links]) {
+      const name = link.href.split('/').at(-1);
+      const mode = name.slice(name.indexOf('-from-') + '-from-'.length, -'.json'.length);
+      const input = mode === 'clear' ? null : mode === 'cenc-cbcs'
+        ? { keys: [{ kid: '000102030405060708090a0b0c0d0e0f', key: '00112233445566778899aabbccddeeff' }] }
+        : { hls_keys: [{ uri: mode === 'hls-sample-aes' ? 'skd://source-content' : 'https://example.com/keys/content.key',
+          key: '00112233445566778899aabbccddeeff', ...(mode === 'hls-sample-aes'
+            ? { iv: '000102030405060708090a0b0c0d0e0f' } : {}) }] };
+      const outputs = {};
+      if (recipe.target !== 'clear') {
+        const key = { key: 'ffeeddccbbaa99887766554433221100' };
+        if (['cenc', 'cbcs'].includes(recipe.target)) key.kid = '101112131415161718191a1b1c1d1e1f';
+        if (['hls', 'hls-ts'].includes(recipe.format)) key.hls_key_uri = 'https://keys.example.invalid/content.key';
+        if (recipe.target === 'hls-sample-aes') key.iv = '000102030405060708090a0b0c0d0e0f';
+        outputs[recipe.format] = key;
       }
-      changes.push([...lines.slice(0, 6), lines[6] + ' &&']);
-      for (const operation of [1, 3]) {
-        const changed = [...lines];
-        changed[operation] = changed[operation].slice(0, -2);
-        changes.push(changed);
-        const trailingSpace = [...lines];
-        trailingSpace[operation] += ' ';
-        changes.push(trailingSpace);
-      }
-      for (const operation of [5, 6]) {
-        const changed = [...lines];
-        changed[operation] = changed[operation].replace('--plan plan.json', '--plan stale.plan.json');
-        changes.push(changed);
-      }
-      for (const changed of changes) {
-        const code = groups.map((group, current) => current === index ? changed.join('\n') : group).join('\n\n') + '\n';
-        assert.throws(() => requireRecipe({ ...good, code, rendered: code }, expected), `${expected.id}: ${index}`);
-      }
+      const content = readFileSync(new URL('keys/' + name, directory), 'utf8');
+      assert.deepEqual(JSON.parse(content), { schema_version: 2, ...(input ? { input } : {}), outputs }, name);
+      inspected.keys.add(name);
     }
   }
+  assert.equal(inspected.outputs.size, 13); assert.equal(inspected.keys.size, 48);
+  for (const role of ['outputs', 'keys']) assert.deepEqual(
+    readdirSync(new URL(role + '/', directory)).filter(name => name.endsWith('.json')).sort(), [...inspected[role]].sort());
 });
 
-test('recipe continuations cannot cross empty or whitespace-only physical lines', () => {
+test('identical keyed conversions share one exact command while clear output retains both key roles', () => {
   for (const expected of matrixRecipes) {
     const good = recipeSample(expected);
     requireRecipe(good, expected);
-    const groups = good.code.trimEnd().split('\n\n');
-    for (let index = 0; index < groups.length; index++) {
-      for (const continuation of [1, 3]) {
-        for (const blank of ['', ' \t ']) {
-          const lines = groups[index].split('\n');
-          lines.splice(continuation + 1, 0, blank);
-          const code = groups.map((group, current) => current === index ? lines.join('\n') : group).join('\n\n') + '\n';
-          assert.throws(() => requireRecipe({ ...good, code, rendered: code }, expected),
-            `${expected.id}: group ${index}, continuation ${continuation}, blank ${JSON.stringify(blank)}`);
-        }
-      }
+    const code = good.blocks[3].code;
+    assert.equal([...code.matchAll(/^drmr convert /gm)].length, expected.target === 'clear' ? 2 : 1);
+    const changes = [
+      ['drmr convert', 'drmr analyze'], ['--download-dir src', '--download-dir other'],
+      ['--outputs outputs.json', '--outputs stale.json'], ['--output result', '--output result.mp4'],
+      ['https://example.com/', 'src/'], ['input.', 'encrypted.'],
+      [' \\\n', '\n'], [' \\\n', ' \\ \n'], [' \\\n', ' \\\n\n'], [' \\\n', ' \\\n \t \n'],
+      ...(expected.target === 'clear' ? [['# Clear input', '# cbc1 input'], ['# Encrypted input', '# Clear input']] : []),
+    ];
+    for (const [before, after] of changes) assert.throws(() => requireRecipe(mutateRecipeCode(good,
+      value => value.replace(before, after)), expected), `${expected.id}: ${before}`);
+    for (const change of [value => value.replace(/"https:\/\/[^"\n]+"/, url => url.slice(1, -1)),
+      value => value + 'drmr verify --plan plan.json\n', value => value + ' &&\n',
+      value => '# Clear input\n' + value]) {
+      assert.throws(() => requireRecipe(mutateRecipeCode(good, change), expected));
+    }
+    if (expected.target === 'clear') assert.throws(() => requireRecipe(mutateRecipeCode(good,
+      value => value.split('\n\n').reverse().join('\n\n')), expected));
+    for (let index = 0; index < (expected.target === 'clear' ? 2 : 1); index++) {
+      const required = index === 1 || expected.target !== 'clear';
+      const change = value => value.split('\n\n').map((group, current) => current !== index ? group : required
+        ? group.replace(' --keys-file keys.json', '') : group + ' --keys-file keys.json').join('\n\n');
+      assert.throws(() => requireRecipe(mutateRecipeCode(good, change), expected));
     }
   }
 });
@@ -808,18 +810,30 @@ test('recipe identity is immutable and position rejects unfocused, nonfinite or 
   }
 });
 
-test('the actual recipe observer preserves independent EN/JA page locale and shell metadata through transport', () => {
+test('the actual recipe observer preserves all settings, commands and links independently of page locale', () => {
   const recipe = matrixRecipes.find(value => value.id === 'recipe-hls-ts-video-dash-cbcs');
-  const codeText = recipeSample(recipe).code;
+  const sample = recipeSample(recipe);
   for (const language of ['en', 'ja']) {
     const url = 'http://127.0.0.1:4173/drmr/' + (language === 'ja' ? 'ja/' : '') + 'guide/#' + recipe.id;
-    const code = Object.freeze({ textContent: codeText, innerText: codeText });
-    const figure = Object.freeze({ tagName: 'FIGURE',
-      classList: Object.freeze({ contains: name => name === 'guide-example' }),
-      getAttribute: name => name === 'data-code-language' ? 'sh' : null,
-      querySelector: selector => selector === 'pre code' ? code : null });
+    const nodes = sample.blocks.map(block => {
+      if (block.tag !== 'FIGURE') {
+        const links = block.links.map(link => Object.freeze({ textContent: link.text,
+          getAttribute: name => name === 'href' ? link.href : null }));
+        return { tagName: block.tag, textContent: block.text,
+          querySelectorAll: selector => selector === 'a' ? Object.freeze(links) : Object.freeze([]) };
+      }
+      const code = Object.freeze({ textContent: block.code, innerText: block.rendered });
+      const pre = Object.freeze({ getAttribute: name => name === 'tabindex' ? '0' : null });
+      return { tagName: 'FIGURE', classList: Object.freeze({ contains: name => name === 'guide-example' }),
+        getAttribute: name => name === 'data-code-language' ? block.language : null,
+        querySelector: selector => selector === 'pre code' ? code : selector === 'pre' ? pre : null,
+        querySelectorAll: selector => selector === 'pre' ? Object.freeze([pre])
+          : selector === 'pre code' ? Object.freeze([code]) : Object.freeze([]) };
+    });
+    for (let index = 0; index < nodes.length; index++) nodes[index].nextElementSibling = nodes[index + 1] ?? null;
+    nodes.forEach(Object.freeze);
     const link = Object.freeze({ getAttribute: name => name === 'href' ? '#recipe-setup' : null });
-    const setup = Object.freeze({ tagName: 'P', nextElementSibling: figure,
+    const setup = Object.freeze({ tagName: 'P', nextElementSibling: nodes[0],
       querySelectorAll: selector => selector === 'a' ? Object.freeze([link]) : Object.freeze([]) });
     const box = Object.freeze({ left: 16, right: 304, top: 24, bottom: 84, width: 288, height: 60 });
     const element = Object.freeze({ id: recipe.id, tagName: 'H3', textContent: 'HLS → DASH / cbcs',
@@ -836,13 +850,14 @@ test('the actual recipe observer preserves independent EN/JA page locale and she
     // This fixture checks that shape; it does not establish browser behavior.
     const observed = JSON.parse(JSON.stringify(raw));
     assert.equal(observed.pageLanguage, language);
-    assert.equal(observed.language, 'sh');
+    assert.deepEqual(observed.blocks, sample.blocks);
     assert.equal(observed.url, url);
     requireRecipeIdentity(observed, recipe, { url, language });
     requireRecipe(observed, recipe);
     requireRecipePosition(observed);
     assert.throws(() => requireRecipeIdentity({ ...observed, pageLanguage: 'sh' }, recipe, { url, language }));
-    assert.throws(() => requireRecipe({ ...observed, language }, recipe));
+    const changed = structuredClone(observed); changed.blocks[3].language = language;
+    assert.throws(() => requireRecipe(changed, recipe));
   }
 });
 
