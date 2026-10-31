@@ -63,7 +63,7 @@ def recipe_fixture(language="en", first_example=1):
                                    + '.json">' + mode_labels[mode] + "</a>" for mode in key_modes[index])
                 content.append("<p>Encrypted input: " + links + " → keys.json.</p>")
                 direct = ('drmr convert "https://example.com/input.' + suffix + '" \\\n'
-                          '  --download-dir src --outputs outputs.json --output result')
+                          '  --download-dir src --outputs outputs.json \\\n  --output result')
                 command = (direct + " --keys-file keys.json\n" if target != "clear" else
                            "# Clear input\n" + direct + "\n\n# Encrypted input\n" + direct + " --keys-file keys.json\n")
                 content.append(figure(command))
@@ -875,7 +875,7 @@ class ConversionExamples(unittest.TestCase):
                 self.check(original.replace(old, new, 1))
 
     def test_keys_follow_input_and_output_roles(self):
-        clear = 'drmr convert "https://example.com/input.mp4" \\\n  --download-dir src --outputs outputs.json --output result\n'
+        clear = 'drmr convert "https://example.com/input.mp4" \\\n  --download-dir src --outputs outputs.json \\\n  --output result\n'
         encrypted = clear.rstrip() + " --keys-file keys.json\n"
         CHECK.validate_recipe_commands(clear, "mp4", "mp4", "clear")
         CHECK.validate_recipe_commands(encrypted, "mp4", "mp4", "clear", True)
@@ -894,12 +894,27 @@ class ConversionExamples(unittest.TestCase):
                 self.check(original.replace(old, new, 1))
 
     def test_each_input_has_one_exact_command_without_shell_boilerplate(self):
-        code = 'drmr convert "https://example.com/input.mp4" \\\n  --download-dir src --outputs outputs.json --output result\n'
+        code = 'drmr convert "https://example.com/input.mp4" \\\n  --download-dir src --outputs outputs.json \\\n  --output result\n'
         for changed in (code.replace(" \\\n", "\n", 1), code.replace(" \\\n", " \\ \n", 1),
                         code.replace(" \\\n", " \\\u2028", 1), code.replace(" \\\n", " \\\n\n", 1),
                         code.replace(" \\\n", " \\\n \n", 1), code + " &&", code + "exit 0\n", code + code,
                         "set -eu\n" + code, "umask 077\n" + code, "mkdir work\n" + code, "(\n" + code + "\n)"):
             with self.subTest(changed=changed[:90]), self.assertRaisesRegex(CHECK.Failure, "site-guide-recipe-command"):
+                CHECK.validate_recipe_commands(changed, "mp4", "mp4", "clear")
+
+    def test_second_continuation_remains_adjacent_to_the_output_line(self):
+        code = ('drmr convert "https://example.com/input.mp4" \\\n'
+                '  --download-dir src --outputs outputs.json \\\n'
+                '  --output result\n')
+        lines = code.splitlines(keepends=True)
+        for changed in (
+                lines[0] + lines[1].replace("\\\n", "\n") + lines[2],
+                lines[0] + lines[1].replace("\\\n", "\\ \n") + lines[2],
+                lines[0] + lines[1] + "\n" + lines[2],
+                lines[0] + lines[1] + " \n" + lines[2],
+                lines[0] + lines[2] + lines[1],
+                lines[0] + lines[1].replace("\\\n", "") + lines[2]):
+            with self.subTest(changed=changed), self.assertRaisesRegex(CHECK.Failure, "site-guide-recipe-command"):
                 CHECK.validate_recipe_commands(changed, "mp4", "mp4", "clear")
 
 

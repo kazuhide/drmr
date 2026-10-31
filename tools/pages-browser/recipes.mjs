@@ -37,8 +37,10 @@ function requireCommands(value, expected) {
   assert.ok(value.code.trim(), 'Every recipe example must be complete and nonempty');
   assert.equal(value.code.trim().replace(/\s+/g, ' '), value.rendered.trim().replace(/\s+/g, ' '),
     'The complete recipe code must be rendered');
+  assert.ok(value.code.replace(/\r\n/g, '\n').split('\n').every(line => line.length <= 64),
+    'Recipe command lines must fit 64 columns for narrow-screen reading');
   const extension = expected.row === 'mp4' ? 'mp4' : expected.row === 'dash' ? 'mpd' : 'm3u8';
-  const command = keys => `drmr convert "https://example.com/input.${extension}" \\\n  --download-dir src --outputs outputs.json --output result${keys ? ' --keys-file keys.json' : ''}\n`;
+  const command = keys => `drmr convert "https://example.com/input.${extension}" \\\n  --download-dir src --outputs outputs.json \\\n  --output result${keys ? ' --keys-file keys.json' : ''}\n`;
   assert.equal(value.code.replace(/\r\n/g, '\n'), expected.target === 'clear'
     ? '# Clear input\n' + command(false) + '\n# Encrypted input\n' + command(true) : command(true),
     'Identical keyed conversions share one command; clear output retains both input key roles');
