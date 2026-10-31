@@ -75,7 +75,46 @@ function Write-ArchiveCleanupDiagnostic {
     Write-Output ('DRMR_ARCHIVE_DIAGNOSTIC ' + ($result | ConvertTo-Json -Depth 8 -Compress))
 }
 
-$observerDirectory = Join-Path $parent ('drmr-archive-observer-' + [guid]::NewGuid().ToString('N'))
+function Remove-ArchiveNameRegressionDirectory {
+    param([string]$Path, [string]$Identity)
+    if (Test-Path -LiteralPath $Path) {
+        Assert-ArchiveCleanupTest ((Get-DrmrArchiveDirectoryIdentity $Path $python) -eq $Identity) 'The name regression directory changed'
+        Assert-NoDrmrArchiveReparsePoint $Path
+        # A name refusal must preserve the empty directory; remove only this
+        # fixture's unchanged entry, without recursive deletion or user cleanup.
+        [IO.Directory]::Delete($Path, $false)
+    }
+}
+
+$nameNonce = [guid]::NewGuid().ToString('N')
+$nameDirectory = Join-Path $parent ('q-' + $nameNonce)
+New-Item -ItemType Directory -Path $nameDirectory | Out-Null
+$nameIdentity = Get-DrmrArchiveDirectoryIdentity $nameDirectory $python
+try {
+    Assert-DrmrArchiveDirectory $nameDirectory $parent $nameIdentity $python
+    Complete-DrmrArchiveOwner -Directory $nameDirectory -ExpectedParent $parent -ExpectedIdentity $nameIdentity -Python $python -DirectoryCreated $true
+    Assert-ArchiveCleanupTest (-not (Test-Path -LiteralPath $nameDirectory)) 'The producer-shaped root was not cleaned'
+} finally {
+    Remove-ArchiveNameRegressionDirectory $nameDirectory $nameIdentity
+}
+foreach ($name in @(('q-' + $nameNonce.Substring(0, 31)), ('q-' + $nameNonce + '0'),
+        ('q-' + $nameNonce + '-retained'), ('Q-' + $nameNonce),
+        ('q-A' + $nameNonce.Substring(1)), ('q-g' + $nameNonce.Substring(1)), ('drmr-archive-' + $nameNonce))) {
+    $nameDirectory = Join-Path $parent $name
+    New-Item -ItemType Directory -Path $nameDirectory | Out-Null
+    $nameIdentity = Get-DrmrArchiveDirectoryIdentity $nameDirectory $python
+    try {
+        $refused = $false
+        try { Assert-DrmrArchiveDirectory $nameDirectory $parent $nameIdentity $python } catch { $refused = $true }
+        Assert-ArchiveCleanupTest $refused 'Cleanup accepted a malformed root name'
+        Assert-ArchiveCleanupTest (Test-Path -LiteralPath $nameDirectory -PathType Container) 'A name refusal changed the directory'
+    } finally {
+        Remove-ArchiveNameRegressionDirectory $nameDirectory $nameIdentity
+    }
+}
+Write-Output 'Archive root-name regression passed: producer cleanup and seven malformed-name refusals'
+
+$observerDirectory = Join-Path $parent ('q-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $observerDirectory | Out-Null
 $observerIdentity = Get-DrmrArchiveDirectoryIdentity $observerDirectory $python
 try {
@@ -115,7 +154,7 @@ try {
 
 foreach ($mode in @('success', 'qualification-failure', 'public-copy-failure', 'setup-failure', 'reparse-refusal', 'report-type-refusal', 'replacement-refusal')) {
     $username = 'drmr_arc_' + [guid]::NewGuid().ToString('N').Substring(0, 10)
-    $directory = Join-Path $parent ('drmr-archive-check-' + [guid]::NewGuid().ToString('N'))
+    $directory = Join-Path $parent ('q-' + [guid]::NewGuid().ToString('N'))
     $external = Join-Path $parent ('drmr-archive-sentinel-' + [guid]::NewGuid().ToString('N'))
     $retained = $null
     $directoryCreated = $false
@@ -256,13 +295,17 @@ temporary.mkdir()
 if mode == 'success':
     guard_check = temporary / 'decoder-guard-check'
     guard_check.mkdir()
-    selected = ('import sys, unittest; sys.path.insert(0, sys.argv[1]); '
+    selected = ('import pathlib, sys, unittest; sys.path.insert(0, sys.argv[1]); '
+                'import test_roundtrip_paths; '
+                'paths = test_roundtrip_paths.temporary_path_regression(pathlib.Path(sys.argv[2]), (122, 136)); '
+                'assert [row["legacy_temp_length"] for row in paths] == [122, 136]; '
+                'assert sum(row["child_checks"] for row in paths) == 6; '
                 'suite = unittest.defaultTestLoader.loadTestsFromName('
                 '"test_release_roundtrip.ReleaseMatrix.test_conversion_runner_cannot_execute_external_decoders"); '
                 'result = unittest.TextTestRunner(verbosity=2).run(suite); '
                 'sys.exit(not (result.wasSuccessful() and result.testsRun == 1 and not result.skipped))')
     module.Runner(guard_check).run([sys.executable, '-B', '-W', 'error::ResourceWarning',
-                                   '-c', selected, str(helper.parent / 'tests')], 'headless-decoder-guards', 120)
+                                   '-c', selected, str(helper.parent / 'tests'), temporary], 'headless-decoder-guards', 120)
 if mode != 'reparse-refusal':
     private = temporary / 'private'
     private.mkdir()
@@ -291,7 +334,7 @@ Publish-FixtureStage 'report-checked'
 if ($context.mode -eq 'reparse-refusal') {
     New-Item -ItemType Junction -Path (Join-Path $PSScriptRoot 'temp/escape') -Target $context.external | Out-Null
 }
-@{ ordinary_sid = $identity.User.Value; private_acl_checked = ($context.mode -ne 'report-type-refusal'); private_acl_regression_checked = ($context.mode -eq 'success'); decoder_guards_checked = ($context.mode -eq 'success') } |
+@{ ordinary_sid = $identity.User.Value; private_acl_checked = ($context.mode -ne 'report-type-refusal'); private_acl_regression_checked = ($context.mode -eq 'success'); decoder_guards_checked = ($context.mode -eq 'success'); temporary_paths_checked = ($context.mode -eq 'success') } |
     ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $PSScriptRoot 'public-check.json')
 Publish-FixtureStage 'proof-written'
 # These failures occur after genuine production ACL creation, before owner cleanup.
@@ -322,7 +365,9 @@ Publish-FixtureStage 'complete'
             if ($mode -eq 'success') {
                 Assert-ArchiveCleanupTest $proof.private_acl_regression_checked 'The owner-only ACL regression was not checked'
                 Assert-ArchiveCleanupTest ($proof.decoder_guards_checked -eq $true) 'The headless decoder guard regression was not checked'
+                Assert-ArchiveCleanupTest ($proof.temporary_paths_checked -eq $true) 'The roundtrip temporary paths were not checked'
                 Write-Output 'Headless decoder guard regression passed: one real test as an ordinary user'
+                Write-Output 'Roundtrip temporary path regression passed: 122/136 legacy lengths and six real child creation/cleanup checks'
                 Write-Output 'Private ACL regression passed: helper 2 positive / 2 foreign-owner refusals; documentation 6 positive / 6 foreign-owner refusals'
             }
             if ($mode -ne 'report-type-refusal') {

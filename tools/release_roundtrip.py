@@ -9,6 +9,7 @@ import concurrent.futures
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import shutil
 import struct
@@ -25,6 +26,39 @@ import roundtrip_fixtures as FIXTURES
 SUPPORT = CONTRACT.module("qualify_cli_archive")
 PREPARE = CONTRACT.module("prepare_release")
 require = CONTRACT.require
+FAILURE_CODES = frozenset((
+    "command-unavailable", "command-failed", "command-cancelled", "command-output-limit", "command-deadline",
+    "command-cleanup-unconfirmed", "secret-displayed", "private-acl-unavailable", "owned-cleanup-unconfirmed",
+    "json-invalid", "roundtrip-cancelled", "roundtrip-source-changed", "roundtrip-output-profile-invalid",
+    "roundtrip-track-layout-invalid", "roundtrip-dash-profile-invalid", "roundtrip-hls-profile-invalid",
+    "roundtrip-hls-drm-profile-invalid", "roundtrip-container-invalid", "roundtrip-decoder-guard-invalid"))
+FAILURE_STAGES = frozenset((
+    "version", "convert", "independent-verify", "final-against-original", "decoder-guard", "fixture-video",
+    "fixture-aac44100", "fixture-aac48000", "fixture-probe-video", "fixture-probe-aac44100", "fixture-probe-aac48000"))
+
+
+def failure_fields(error, fallback, operation):
+    """Retain only fixed classifications, bounded status values and output digests."""
+    result = {"failure_code": fallback, "failed_operation": operation}
+    detail = {}
+    if isinstance(error, (CONTRACT.Failure, SUPPORT.Refusal)) and str(error) in FAILURE_CODES:
+        detail["code"] = str(error)
+    if isinstance(error, SUPPORT.Refusal):
+        if isinstance(error.stage, str) and error.stage in FAILURE_STAGES:
+            detail["stage"] = error.stage
+        evidence = error.evidence if type(error.evidence) is dict else {}
+        status = evidence.get("exit_code")
+        if type(status) is int and -(2 ** 31) <= status < 2 ** 32:
+            detail["exit_code"] = status
+        for field in ("stdout_sha256", "stderr_sha256"):
+            value = evidence.get(field)
+            if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value):
+                detail[field] = value
+        if isinstance(evidence.get("fixed_cli_code"), str) and evidence["fixed_cli_code"] in SUPPORT.CLI_FAILURE_CODES:
+            detail["fixed_cli_code"] = evidence["fixed_cli_code"]
+    if detail:
+        result["failure_detail"] = detail
+    return result
 
 
 def read(path, limit=2 * 1024 * 1024):
@@ -243,8 +277,9 @@ def fixture_profiles(executor, seeds, root):
                                 "source_graph_sha256": graph(seeds[layout])["sha256"],
                                 "verification": report["independent_verification"], "sample_rate": rate,
                                 "final_presented_samples": 240 if rate else None})
-            except (CONTRACT.Failure, SUPPORT.Refusal, OSError, ValueError, TypeError, KeyError, ET.ParseError):
-                reports.append({"id": identifier, "status": "failed", "failure_code": "fixture-profile-check-failed"})
+            except (CONTRACT.Failure, SUPPORT.Refusal, OSError, ValueError, TypeError, KeyError, ET.ParseError) as error:
+                reports.append({"id": identifier, "status": "failed",
+                                **failure_fields(error, "fixture-profile-check-failed", "fixture")})
     return profiles, reports
 
 
@@ -255,25 +290,33 @@ def execute_case(case, executor, profiles, root):
     if (case["layout"], source_profile) not in profiles:
         return {**case, "status": "not-checked", "failure_code": "source-fixture-unavailable"}
     source = profiles[(case["layout"], source_profile)]
-    before = graph(source)
-    workspace = SUPPORT.Workspace(parent=root)
+    workspace = None
+    operation = "source-check"
     try:
+        before = graph(source)
+        operation = "workspace"
+        workspace = SUPPORT.Workspace(parent=root)
         require(not executor.cancel.is_set(), "roundtrip-cancelled")
-        forward_path, forward = executor.convert(source, target_profile, case["layout"], workspace.path / "forward")
+        operation = "forward"
+        forward_path, forward = executor.convert(source, target_profile, case["layout"], workspace.path / "f")
         result = {**case, "status": "complete", "forward": forward, "source_unchanged": True}
         if case["kind"] == "roundtrip":
-            final_path, backward = executor.convert(forward_path, source_profile, case["layout"], workspace.path / "backward")
-            operation = workspace.path / "final"
-            operation.mkdir(mode=0o700)
-            key_file = executor.key_file(operation, source_profile)
+            operation = "backward"
+            final_path, backward = executor.convert(forward_path, source_profile, case["layout"], workspace.path / "b")
+            operation = "final"
+            final_root = workspace.path / "v"
+            final_root.mkdir(mode=0o700)
+            key_file = executor.key_file(final_root, source_profile)
             result.update(backward=backward, final_against_original=executor.verify(
-                executor.runner(operation), source, final_path, key_file, source_profile, "final-against-original"))
+                executor.runner(final_root), source, final_path, key_file, source_profile, "final-against-original"))
+        operation = "source-check"
         require(graph(source) == before, "roundtrip-source-changed")
         return result
-    except (CONTRACT.Failure, SUPPORT.Refusal, OSError, ValueError, TypeError, KeyError, ET.ParseError):
-        return {**case, "status": "failed", "failure_code": "roundtrip-operation-failed"}
+    except (CONTRACT.Failure, SUPPORT.Refusal, OSError, ValueError, TypeError, KeyError, ET.ParseError) as error:
+        return {**case, "status": "failed", **failure_fields(error, "roundtrip-operation-failed", operation)}
     finally:
-        workspace.close()
+        if workspace is not None:
+            workspace.close()
 
 
 def qualify(inputs, target, source_root, jobs):
@@ -321,8 +364,9 @@ def qualify(inputs, target, source_root, jobs):
                     records[index] = future.result()
                 except concurrent.futures.CancelledError:
                     records[index] = {**cases[index], "status": "not-checked"}
-                except BaseException:
-                    records[index] = {**cases[index], "status": "failed", "failure_code": "roundtrip-worker-failed"}
+                except BaseException as error:
+                    records[index] = {**cases[index], "status": "failed",
+                                      **failure_fields(error, "roundtrip-worker-failed", "worker")}
         require(SUPPORT.VERIFY.file_digest(snapshot) == archive_report["archive_sha256"]
                 and SUPPORT.VERIFY.file_digest(cli) == binary_hash, "roundtrip-artifact-changed")
         summary = {"expected": len(cases), "complete": sum(record["status"] == "complete" for record in records),
@@ -362,9 +406,9 @@ def main(argv=None):
                 and not args.report.resolve().is_relative_to(args.source.resolve()), "roundtrip-report-destination-invalid")
         report_path = args.report
         result = qualify(args.inputs.resolve(), args.target, args.source.resolve(), args.jobs)
-    except (CONTRACT.Failure, SUPPORT.Refusal, SUPPORT.VERIFY.Failure, OSError, ValueError, TypeError, KeyError):
+    except (CONTRACT.Failure, SUPPORT.Refusal, SUPPORT.VERIFY.Failure, OSError, ValueError, TypeError, KeyError) as error:
         result = {"schema_version": 1, "kind": "native-cli-release-roundtrip", "success": False,
-                  "failure_code": "roundtrip-qualification-failed"}
+                  **failure_fields(error, "roundtrip-qualification-failed", "qualification")}
     except KeyboardInterrupt:
         result = {"schema_version": 1, "kind": "native-cli-release-roundtrip", "success": False,
                   "failure_code": "roundtrip-qualification-interrupted"}

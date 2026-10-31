@@ -3,6 +3,7 @@
 import base64
 import copy
 import ctypes
+import hashlib
 import importlib.util
 import io
 import json
@@ -787,6 +788,14 @@ class ProcessTests(unittest.TestCase):
         self.assertEqual(denied.exception.stage, "version")
         self.assertEqual(denied.exception.evidence["exit_code"], 7)
         self.assertNotIn("secret", json.dumps(denied.exception.evidence))
+
+    def test_temporary_file_failure_is_retained_as_a_fixed_cli_code(self):
+        raw = json.dumps({"error": {"code": "temporary-file-unavailable"}})
+        script = "import sys;sys.stdout.buffer.write(" + repr((raw + "\n").encode()) + ");sys.exit(1)"
+        with self.assertRaisesRegex(module.Refusal, "^command-failed$") as denied:
+            self.runner.run([sys.executable, "-c", script], "convert", timeout=3)
+        self.assertEqual(denied.exception.evidence.get("fixed_cli_code"), "temporary-file-unavailable")
+        self.assertEqual(denied.exception.evidence["stdout_sha256"], hashlib.sha256((raw + "\n").encode()).hexdigest())
 
     def test_secret_output_cannot_be_accepted_even_with_a_zero_exit_code(self):
         with self.assertRaisesRegex(module.Refusal, "^secret-displayed$"):

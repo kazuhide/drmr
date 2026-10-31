@@ -12,7 +12,8 @@ $checkout = (Get-Location).Path
 $python = (Get-Command python).Source
 $shell = (Get-Command pwsh).Source
 $username = 'drmr_archive_test'
-$directory = Join-Path $env:RUNNER_TEMP ('drmr-archive-user-' + [guid]::NewGuid().ToString('N'))
+# Retain the full nonce and ownership checks without a long scratch label.
+$directory = Join-Path $env:RUNNER_TEMP ('q-' + [guid]::NewGuid().ToString('N'))
 $directoryCreated = $false
 $directoryIdentity = $null
 $user = $null

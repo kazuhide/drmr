@@ -84,6 +84,8 @@ class ReleaseMatrix(unittest.TestCase):
                    lambda value: value["records"][0]["forward"]["conversion"]["checks"].update(packet_timing_equal=False),
                    lambda value: value["records"][0]["final_against_original"].update(license_playback_verified=True),
                    lambda value: value["records"][0].update(private_key="synthetic-private-value"),
+                   lambda value: value["records"][0].update(failure_detail={"code": "command-failed"}),
+                   lambda value: value["fixture_profiles"][0].update(failed_operation="fixture"),
                    lambda value: value["counts"].update(not_checked=1),
                    lambda value: value["counts"].update(failed=False),
                    lambda value: value["fixture_profiles"][13].update(sample_rate=48000),
@@ -183,7 +185,7 @@ class ReleaseMatrix(unittest.TestCase):
             self.assertEqual(executor.convert.call_count, 2)
             self.assertEqual(executor.verify.call_args.args[1], source)
             self.assertEqual(executor.verify.call_args.args[-1], "final-against-original")
-            self.assertEqual(list(root.glob("drmr-cli-archive-*")), [])
+            self.assertEqual(set(root.iterdir()), {original})
 
     def test_failed_operation_cannot_become_a_completed_case(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -199,7 +201,67 @@ class ReleaseMatrix(unittest.TestCase):
                                             {("video", ("mp4", "clear")): source}, root)
             self.assertEqual(result["status"], "failed")
             self.assertNotIn("forward", result)
-            self.assertEqual(list(root.glob("drmr-cli-archive-*")), [])
+            self.assertEqual(set(root.iterdir()), {original})
+
+    def test_failed_conversion_retains_only_allowlisted_command_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            original = root / "original"
+            original.mkdir()
+            source = original / "asset.mp4"
+            source.write_bytes(b"source")
+            executor = Mock()
+            executor.cancel = threading.Event()
+            executor.convert.side_effect = ROUNDTRIP.SUPPORT.Refusal(
+                "command-failed", "convert", {"exit_code": 3221225794,
+                "stdout_sha256": "a" * 64, "stderr_sha256": "b" * 64,
+                "fixed_cli_code": "temporary-file-unavailable", "raw_stderr": "private-marker"})
+            result = ROUNDTRIP.execute_case(CONTRACT.cases()[0], executor,
+                                            {("video", ("mp4", "clear")): source}, root)
+            self.assertEqual(result["status"], "failed")
+            self.assertEqual(result["failed_operation"], "forward")
+            self.assertEqual(result["failure_detail"], {"code": "command-failed", "stage": "convert",
+                             "exit_code": 3221225794, "stdout_sha256": "a" * 64,
+                             "stderr_sha256": "b" * 64, "fixed_cli_code": "temporary-file-unavailable"})
+            self.assertNotIn("private-marker", json.dumps(result))
+
+    def test_failure_projection_drops_private_and_malformed_values(self):
+        errors = [OSError("private-marker"), CONTRACT.Failure("private-marker"),
+                  ROUNDTRIP.SUPPORT.Refusal("private-marker", "private-marker", {
+                      "exit_code": True, "stdout_sha256": "private-marker", "stderr_sha256": "A" * 64,
+                      "fixed_cli_code": "private-marker", "path": "private-marker"}),
+                  ROUNDTRIP.SUPPORT.Refusal("private-marker", ["private-marker"], {
+                      "exit_code": [], "stdout_sha256": {}, "fixed_cli_code": ["private-marker"]})]
+        for error in errors:
+            with self.subTest(error_type=type(error).__name__):
+                result = ROUNDTRIP.failure_fields(error, "roundtrip-operation-failed", "forward")
+                self.assertEqual(result, {"failure_code": "roundtrip-operation-failed",
+                                          "failed_operation": "forward"})
+                self.assertNotIn("private-marker", json.dumps(result))
+        for code in (-2147483649, 4294967296, 1.5, "private-marker"):
+            error = ROUNDTRIP.SUPPORT.Refusal("command-failed", "convert", {"exit_code": code})
+            result = ROUNDTRIP.failure_fields(error, "roundtrip-operation-failed", "forward")
+            self.assertNotIn("exit_code", result["failure_detail"])
+
+    def test_failed_fixture_and_qualification_preserve_fixed_stage_information(self):
+        error = ROUNDTRIP.SUPPORT.Refusal("command-deadline", "fixture-aac44100")
+        executor = Mock()
+        executor.convert.side_effect = error
+        with patch.object(CONTRACT, "LAYOUTS", ("video",)), patch.object(CONTRACT, "OUTPUTS", (("mp4", "clear"),)):
+            profiles, records = ROUNDTRIP.fixture_profiles(executor, {"video": Path("source")}, Path("unused"))
+        self.assertEqual(profiles, {})
+        self.assertEqual(records[0]["failed_operation"], "fixture")
+        self.assertEqual(records[0]["failure_detail"], {"code": "command-deadline", "stage": "fixture-aac44100"})
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            report = root / "report.json"
+            with patch.object(ROUNDTRIP, "qualify", side_effect=error), contextlib.redirect_stdout(io.StringIO()):
+                status = ROUNDTRIP.main(["--inputs", str(root), "--target", "aarch64-apple-darwin",
+                                         "--source", str(root / "source"), "--report", str(report)])
+            self.assertEqual(status, 1)
+            value = json.loads(report.read_bytes())
+            self.assertEqual(value["failed_operation"], "qualification")
+            self.assertEqual(value["failure_detail"], {"code": "command-deadline", "stage": "fixture-aac44100"})
 
     def test_missing_verified_fixture_is_reported_without_executing_its_case(self):
         executor = Mock()

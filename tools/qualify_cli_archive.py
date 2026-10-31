@@ -58,6 +58,11 @@ MEDIA_LIMITS = (
     "GUI, installer, signature, or build-origin certification.")
 ARCHIVE_ERRORS = (VERIFY.Failure, OSError, ValueError, TypeError, KeyError, EOFError, NotImplementedError,
                   tarfile.TarError, zipfile.BadZipFile, zlib.error)
+CLI_FAILURE_CODES = frozenset((
+    "media-tool-failed", "media-tool-unavailable-or-timeout", "temporary-workspace-unavailable",
+    "temporary-file-unavailable", "key-file-invalid", "native-manifest-lint-failed", "resource-budget",
+    "execution-plan-invalid", "execution-plan-source-changed", "invalid-input-media",
+    "round-trip-verification-failed", "source-normalization-verification-failed"))
 
 
 class Refusal(RuntimeError):
@@ -188,7 +193,9 @@ class Workspace:
     """Cleanup authority comes from this creation, plus the unchanged root identity."""
 
     def __init__(self, parent=None):
-        self.path = Path(tempfile.mkdtemp(prefix="drmr-cli-archive-", dir=parent)).resolve()
+        # Ownership comes from creation and identity; long labels only consume
+        # the legacy path budget of native media tools inside nested checks.
+        self.path = Path(tempfile.mkdtemp(prefix="q-", dir=parent)).resolve()
         metadata = self.path.lstat()
         self.identity = (metadata.st_dev, metadata.st_ino)
         try:
@@ -328,7 +335,7 @@ class Runner:
         self.stages = []
         self.cancel_event = cancel_event
         self.environment = {key: value for key, value in os.environ.items() if not key.startswith("DRMR_")}
-        temporary = workspace / "temporary"
+        temporary = workspace / "t"
         temporary.mkdir(mode=0o700)
         self.environment.update(TMPDIR=str(temporary), TMP=str(temporary), TEMP=str(temporary))
 
@@ -366,10 +373,7 @@ class Runner:
                     try:
                         payload = load_json(raw)
                         code = payload.get("error", {}).get("code") if isinstance(payload, dict) else None
-                        if code in {"media-tool-failed", "media-tool-unavailable-or-timeout", "temporary-workspace-unavailable",
-                                    "key-file-invalid", "native-manifest-lint-failed", "resource-budget",
-                                    "execution-plan-invalid", "execution-plan-source-changed", "invalid-input-media",
-                                    "round-trip-verification-failed", "source-normalization-verification-failed"}:
+                        if code in CLI_FAILURE_CODES:
                             evidence["fixed_cli_code"] = code
                     except (Refusal, TypeError, AttributeError):
                         pass

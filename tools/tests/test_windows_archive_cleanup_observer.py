@@ -8,10 +8,43 @@ import subprocess
 import tempfile
 import time
 import unittest
+import uuid
 
 
 SCRIPT = Path(__file__).resolve().parents[2] / ".github/scripts/test-windows-cli-archive-cleanup.ps1"
+CLEANUP = SCRIPT.with_name("windows-cli-archive-cleanup.ps1")
 SENTINEL = "synthetic-private-value"
+
+
+class ArchiveRootNameContracts(unittest.TestCase):
+    def accepts(self, name):
+        source = CLEANUP.read_text(encoding="utf-8")
+        body = source.split("function Assert-DrmrArchiveDirectory {", 1)[1].split("\n}\n", 1)[0]
+        pattern = re.search(r"-cnotmatch '([^']+)'", body)
+        if pattern:
+            # These anchors have the same strict meaning in .NET and Python.
+            return re.fullmatch(pattern[1].replace(r"\z", r"\Z"), name) is not None
+        legacy = re.search(r"\.StartsWith\('([^']+)', \[StringComparison\]::Ordinal\)", body)
+        self.assertIsNotNone(legacy, "The cleanup name contract is unrecognized")
+        return name.startswith(legacy[1])
+
+    def test_every_actual_producer_name_is_accepted_by_cleanup(self):
+        for script, variable in ((SCRIPT.with_name("windows-cli-archive.ps1"), "directory"),
+                                 (SCRIPT, "directory"), (SCRIPT, "observerDirectory")):
+            source = script.read_text(encoding="utf-8")
+            expression = re.search(r"\$" + variable + r" = Join-Path [^\n]+ \('([^']+)' \+ \[guid\]::NewGuid\(\)\.ToString\('N'\)\)", source)
+            self.assertIsNotNone(expression, "The producer must retain a complete GUID nonce")
+            with self.subTest(script=script.name, variable=variable):
+                self.assertTrue(self.accepts(expression[1] + uuid.uuid4().hex),
+                                "The actual producer root is refused by cleanup")
+
+    def test_cleanup_refuses_partial_or_ambiguous_root_names(self):
+        full = "q-" + "a" * 32
+        for name in ("q-", "q-" + "a" * 31, full + "a", full + "-retained", full + "\n",
+                     "Q-" + "a" * 32, "q-" + "A" * 32, "q-" + "g" * 32,
+                     "drmr-archive-" + "a" * 32):
+            with self.subTest(shape=len(name)):
+                self.assertFalse(self.accepts(name))
 
 
 class ArchiveAclObserverTests(unittest.TestCase):
