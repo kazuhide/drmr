@@ -1,6 +1,6 @@
 ---
 title: User guide
-updated: 2026-10-30
+updated: 2026-10-31
 version: 1.0.3
 ---
 
@@ -28,28 +28,36 @@ Check each release's **Pre-release** label and notes before use. For a source bu
 | Compare independently | `verify` | Reads original and result independently and checks complete media and timing |
 | Check only final manifests | `verify --manifest-only` | Native HLS/DASH linting; add --external-validator for external checks; no media comparison or decryption |
 
-Use normal `analyze`, `plan --save`, `convert --plan` and `verify --plan` to check the source, save the conversion request, execute it and compare the result. Add `--metadata-only` to `analyze` for a quick declaration check. Direct `convert INPUT` also remains available.
+Use direct `convert INPUT --outputs outputs.json` for conversion with its built-in checks. Use the separate operations when you need a preflight, a saved request or a later independent comparison. Add `--metadata-only` to `analyze` for a quick declaration check.
 
 Native Rust validation is the default for these four complete-media operations. It reads every selected sample or access unit, codec configuration, clock and supported playback window. Add `--decode` for complete decoding as an additional requirement. Conversion and fresh verification independently read the original and actual output; neither trusts only an earlier report. Unsupported or incomplete evidence is refused at both depths. Native equality does not establish that every compressed payload can be decoded; the optional decoder obtains that distinct evidence. Metadata-only analysis, planning without `--save` and manifest-only verification refuse `--decode`.
 
-## First local example
+## First conversion
 
-Start with a supported unencrypted local MP4. Create the output parent directory first and choose an output name that does not exist. The original is retained unchanged.
+For one output or several, describe the requested formats and encryption in `outputs.json` and pass it to `convert`. Add a private `keys.json` only when input or output is encrypted. See [key settings](#key-configuration), [output settings](#inspect-plan), and the [URL conversion examples](#url-input).
 
-```sh
-drmr --version
-drmr doctor --probe --route progressive-mp4
-drmr analyze --metadata-only original.mp4 --json
-drmr analyze original.mp4 --json
-drmr plan original.mp4 --to clear --format mp4 \
-  --output clear.mp4 --save clear.plan.json --json
-drmr convert --plan clear.plan.json --json
-drmr verify --plan clear.plan.json --json
+Save this as `outputs.json` to request one unencrypted MP4:
+
+```json
+{
+  "schema_version": 3,
+  "outputs": [
+    {"id": "mp4", "format": "mp4", "target": "clear", "drms": []}
+  ]
+}
 ```
 
-Encrypted input or output requires the private key configuration described in chapter 5. Unsupported media is refused even in this simple example. Input checks and a saved plan do not guarantee a later conversion: source bytes, runtime keys, tools and the requested output are checked again when used.
+Use a supported unencrypted `original.mp4`. Choose a new `result` directory under an existing parent:
 
-The CLI is the main interface. Docker provides an option with media tools included. The experimental local Web console and Desktop host support analysis, plan saving, conversion and verification using the same saved plans. They do not expose every CLI command.
+```sh
+drmr convert original.mp4 --outputs outputs.json --output result
+```
+
+The entrypoint is `result/mp4/media.mp4`. The output ID `mp4` names its directory. Clear input and output need no key file. A single `convert` checks the source, converts it and compares the result with the original. HLS/DASH also receive native manifest checks; explicitly selected DRM declarations are checked too. Separate `analyze`, `plan` and `verify` commands are optional.
+
+Use `analyze` for a separate preflight, `plan --save` to fix conditions for later execution, and `verify --plan` to read a completed result again. Chapters 6 and 9 explain those workflows.
+
+The CLI is the main interface. Docker provides media tools in one environment. The experimental local Web console and Desktop host share analysis, plan saving, conversion and verification, but do not expose every CLI command.
 
 # 2. Formats, encryption and DRM
 
@@ -92,19 +100,28 @@ Common `plan`, `convert` and `verify` commands accept an output list for DASH wi
 
 Complete media admission accepts the implemented AVC (H.264) and typed AAC profiles. Metadata-only identification of HEVC, AV1, VP9, AC-3, E-AC-3, Opus or FLAC does not establish complete validation. Full operations refuse unimplemented native codec profiles with `native-codec-profile-not-supported`, even with `--decode`. Container and encryption tables do not qualify every codec those formats can carry.
 
-## Select the container
+## Accepted input containers
 
-These combinations describe generic `convert` for completed local media. Codec, track, clock and encryption-layout conditions still apply. URL acquisition has additional restrictions.
+Choose an input and an output independently within these profiles. Codec, track, clock, playback-window and encryption-layout conditions still apply. URL acquisition has its own bounds.
 
-| Input | MP4 output | DASH output | fMP4 HLS output | TS HLS output |
-| --- | --- | --- | --- | --- |
-| MP4 | clear / cenc / cbcs; joint tracks conditional | clear / cenc / cbcs | clear / cenc / cbcs / AES-128 | clear / AES-128 / SAMPLE-AES; fragmented input only |
-| DASH / fMP4 | clear / cenc / cbcs; one track | clear / cenc / cbcs | clear / cenc / cbcs / AES-128 | clear / AES-128 / SAMPLE-AES |
-| HLS / fMP4 | clear / cenc / cbcs; one track | clear / cenc / cbcs | clear / cenc / cbcs / AES-128 | clear / AES-128 / SAMPLE-AES |
-| HLS / TS with video | clear / cenc / cbcs; one video and optional audio | clear / cenc / cbcs | clear / cenc / cbcs / AES-128 | clear / AES-128 / SAMPLE-AES |
-| HLS / TS, audio only | clear / cenc / cbcs | clear / cenc / cbcs | clear / cenc / cbcs / AES-128 | clear / AES-128 / SAMPLE-AES |
+| Input | Accepted protection | Track and output conditions |
+| --- | --- | --- |
+| MP4 | clear, cenc, cbcs | Joint MP4 output is conditional; TS output requires fragmented input |
+| DASH / fMP4 | clear, cenc, cbcs | Each representation has one track; single MP4 output requires one source track |
+| HLS / fMP4 | clear, cenc, cbcs, AES-128 | Each media playlist has one track; single MP4 output requires one source track |
+| HLS / TS with video | clear, AES-128, SAMPLE-AES | One video with optional audio per admitted program; MP4 output selects one video and associated audio |
+| HLS / TS, audio only | clear, AES-128, SAMPLE-AES | One supported AAC-LC audio stream |
 
-Joint MP4 output accepts qualified tracks from one progressive MP4 or up to one video and one audio track from HLS TS. Separate DASH/fMP4 HLS tracks and unrelated files are not combined into one MP4.
+## Output formats and encryption
+
+| `outputs[].format` | `outputs[].target` choices | Generated entrypoint under the output ID |
+| --- | --- | --- |
+| `mp4` | `clear`, `cenc`, `cbcs` | `media.mp4` |
+| `dash` | `clear`, `cenc`, `cbcs` | `manifest.mpd` |
+| `hls` (fMP4) | `clear`, `cenc`, `cbcs`, `hls-aes128` | `master.m3u8` |
+| `hls-ts` (MPEG-TS) | `clear`, `hls-aes128`, `hls-sample-aes` | `master.m3u8` |
+
+The support matrix on the home page links each input/output choice to its concrete configuration and command. Joint MP4 output accepts qualified tracks from one progressive MP4 or up to one video and one audio track from HLS TS. Separate DASH/fMP4 HLS tracks and unrelated files are not combined into one MP4.
 
 ## HLS input protection
 
@@ -134,11 +151,7 @@ This is an MP4 playback-metadata profile, not a separate codec. An edit list can
 
 The complete progressive source must contain one AAC-LC audio track (`mp4a`), optionally with one H.264 video track (`avc1`). The audio edit must be one normal-rate continuous window, have a nonnegative start and convert exactly into integer audio clock units.
 
-| Input protection | MP4 output | DASH output | fMP4 HLS output |
-| --- | --- | --- | --- |
-| clear | clear / cenc / cbcs | clear / cenc / cbcs | clear / cenc / cbcs / AES-128 |
-| cenc | clear / cenc / cbcs | clear / cenc / cbcs | clear / cenc / cbcs / AES-128 |
-| cbcs | clear / cenc / cbcs | clear / cenc / cbcs | clear / cenc / cbcs / AES-128 |
+The qualified clear, cenc and cbcs inputs share the output choices above: MP4/DASH clear, cenc or cbcs; fMP4 HLS also permits AES-128.
 
 Clear MP4 retains progressive sample tables. Encrypted MP4 is fragmented and can retain the two qualified tracks in one file. DASH/HLS uses separate tracks. Every encrypted source track needs its own key mapping.
 
@@ -223,163 +236,104 @@ See [requirements](https://github.com/kazuhide/drmr/blob/main/docs/requirements.
 
 # 5. Key configuration and confidentiality
 
-## Separate input and output roles
+## Files and key roles
 
-Store generic conversion keys in an owner-only JSON file outside output directories. On Unix, use an owner-only directory and mode 600. Do not commit real keys. Windows ACL preparation is in chapter 12.
+Use a schema-2 `keys.json` with `--outputs`, for one named output or several. Input keys decrypt the original; output keys encrypt and verify each result. The output ID in `outputs.json` must match the corresponding member of `keys.json.outputs`. These are separate files, with independent schema versions. A saved plan is a third file generated by `plan --save`; it does not contain keys.
 
-`analyze` and `plan --save` also accept `--keys-file` when source checks need input keys. Saving a plan does not require an output key; `convert --plan` and `verify --plan` receive runtime keys separately.
+| Conversion | `keys.json` content |
+| --- | --- |
+| clear → clear | No key file and no `--keys-file` |
+| clear → encrypted | Only `outputs` for encrypted output IDs; omit `input` |
+| encrypted → clear | `input` and an empty `outputs` object |
+| encrypted → encrypted | `input` and `outputs` for encrypted output IDs |
 
-```sh
-umask 077
-mkdir config
-chmod 700 config
-```
+`analyze` and `plan --save` need only the input keys when the original is encrypted. `convert` and later `verify --plan` need the input and output keys that their work requires. Keys are not filled from environment variables. Supply every encrypted source track's key, including separate video/audio KIDs.
 
-Create the private file before entering secret values, then protect and edit it:
+A KID (key identifier) selects a key; it is not the secret key. Keys and KIDs use 16 bytes written as 32 hexadecimal digits. An IV (initialization vector) sets the encryption starting state. Published metadata can contain KIDs and media IVs.
 
-```sh
-chmod 600 config/keys.json
-```
+Use an owner-only work directory. On macOS/Linux, protect a new file before entering secrets; for an existing private `keys.json`, use `chmod 600 keys.json`. Chapter 12 explains Windows ACLs. The CLI refuses unsafe files, symbolic links, multiple hard links, duplicate or unknown fields, unsupported schemas and oversized settings. Keep keys outside source/result directories and version control.
 
-The examples below are complete schemas. Replace the angle-bracket placeholders with valid hexadecimal values. A KID is 16 bytes (32 hex digits); a content key is also 16 bytes. Invalid lengths, duplicate or unknown fields and unsafe files are refused.
+## Complete named-output key examples
 
-## MP4 sample keys
-
-For clear input and encrypted output:
-
-```json
-{
-  "schema_version": 1,
-  "output": {
-    "kid": "<32-hex-output-kid>",
-    "key": "<32-hex-output-key>"
-  }
-}
-```
-
-For encrypted input, list every source-track key under `input.keys`; the output key is a separate role:
-
-```json
-{
-  "schema_version": 1,
-  "input": {
-    "keys": [
-      {"kid": "<32-hex-video-kid>", "key": "<32-hex-video-key>"},
-      {"kid": "<32-hex-audio-kid>", "key": "<32-hex-audio-key>"}
-    ]
-  },
-  "output": {
-    "kid": "<32-hex-output-kid>",
-    "key": "<32-hex-output-key>"
-  }
-}
-```
-
-Source and result KIDs need not be the same. Independent `verify` still uses `input` for the original and `output` for the candidate. Do not swap roles to accommodate a failure. Existing encrypted verification can support profiles that conversion deliberately refuses, including some input PSSH metadata; that is not conversion permission.
-
-## HLS key URI and IV
-
-HLS input keys map the exact URI string from the playlist. drmr does not fetch a playlist key URI. For SAMPLE-AES input, associate the IV with the same input key entry, as in this example:
-
-```json
-{
-  "schema_version": 1,
-  "input": {
-    "hls_keys": [{
-      "uri": "skd://source-content",
-      "key": "<32-hex-source-key>",
-      "iv": "<32-hex-associated-iv>"
-    }]
-  }
-}
-```
-
-For AES-128 HLS output, supply the output key and key URI:
-
-```json
-{
-  "schema_version": 1,
-  "output": {
-    "key": "<32-hex-output-key>",
-    "hls_key_uri": "https://keys.example.invalid/content.key"
-  }
-}
-```
-
-For SAMPLE-AES TS output, supply the common key, IV and HLS key URI:
-
-```json
-{
-  "schema_version": 1,
-  "output": {
-    "key": "<32-hex-output-key>",
-    "iv": "<32-hex-associated-iv>",
-    "hls_key_uri": "skd://output-content"
-  }
-}
-```
-
-These fields belong under `output`; `input.hls_keys[].iv` belongs to its source key. The HLS URI is signaling and can appear in generated manifests. It is not an instruction for drmr to retrieve a key. An `skd://` URI alone does not establish FairPlay licensing or playback.
-
-## One key configuration for several outputs
-
-When keys or DRM metadata are required, an output list uses a protected schema-version-2 key file. Shared source keys belong under `input`; output keys and DRM metadata belong under `outputs`, indexed by the IDs in the output list. Encrypted outputs require their own entry, clear outputs have no entry, and extra or missing IDs are refused. The following template is for the `dash` and `hls` outputs in chapter 6. Replace every placeholder before use.
+The following values are public test data. Replace them with your own keys and identifiers. For clear input and a `dash` output using cenc or cbcs, save this complete file as `keys.json`:
 
 ```json
 {
   "schema_version": 2,
   "outputs": {
     "dash": {
-      "kid": "<32-hex-dash-kid>",
-      "key": "<32-hex-dash-key>",
-      "signaling": {
-        "system": "multi-drm",
-        "widevine_pssh": "<complete Widevine PSSH box in hex or base64>",
-        "playready_license_url": "https://license.example.invalid/playready"
-      }
-    },
-    "hls": {
-      "kid": "<32-hex-hls-kid>",
-      "key": "<32-hex-hls-key>",
-      "hls_key_uri": "skd://<content-identifier>",
-      "signaling": {
-        "system": "multi-drm",
-        "widevine_pssh": "<complete Widevine PSSH box in hex or base64>",
-        "playready_license_url": "https://license.example.invalid/playready",
-        "fairplay": true
-      }
+      "kid": "000102030405060708090a0b0c0d0e0f",
+      "key": "00112233445566778899aabbccddeeff"
     }
   }
 }
 ```
 
-Supply a complete Widevine PSSH box whose declared KIDs match that output's `kid`. Any declared protection scheme must match the output target, `cenc` or `cbcs`. drmr validates the supplied box.
-
-PlayReady records contain the selected KID and license URL. CENC uses version-4.1.0.0 AESCTR headers and computes a checksum with the output key. CBCS uses version-4.3.0.0 AESCBC headers without that checksum.
-
-HLS CBCS supports all three DRM systems with one encrypted media set. The example selects all three; omit unselected DRM fields for a smaller set. For HLS CENC, use `target: "cenc"` and `drms: ["widevine", "playready"]` in the output list, set `fairplay: false`, and omit `hls_key_uri`. FairPlay requires CBCS and its `skd://` URI; CENC HLS does not support FairPlay. A single-output key file puts the same settings under `output` in schema 1. Runtime DRM selections must match the saved plan. No license or key URI is contacted.
-
-HLS uses `SAMPLE-AES` for CBCS and `SAMPLE-AES-CTR` for CENC. Each DRM has its own `KEYFORMAT`: Widevine UUID, PlayReady `com.microsoft.playready`, or FairPlay `com.apple.streamingkeydelivery`. These identify the DRM, not another encryption mode. Widevine PSSH and PlayReady records use data URIs; FairPlay uses its `skd://` URI. See [HLS DRM declarations](https://github.com/kazuhide/drmr/blob/main/docs/drm-signaling.md).
-
-For a FairPlay TS output named `hls-ts`, replace the HLS entry with this member of `outputs`:
+For cenc/cbcs input and a clear output, the complete file instead contains only input keys and the required empty output map:
 
 ```json
 {
-  "hls-ts": {
-    "key": "<32-hex-ts-key>",
-    "iv": "<32-hex-associated-iv>",
-    "hls_key_uri": "skd://<content-identifier>",
-    "signaling": {
-      "system": "multi-drm",
-      "fairplay": true
-    }
-  }
+  "schema_version": 2,
+  "input": {
+    "keys": [{"kid": "000102030405060708090a0b0c0d0e0f", "key": "00112233445566778899aabbccddeeff"}]
+  },
+  "outputs": {}
 }
 ```
 
-TS SAMPLE-AES requires the associated IV in the runtime key configuration and uses no MP4 KID. Its playlist may omit the `IV` attribute when the associated IV is supplied separately; an explicitly declared conflicting IV is refused. For fMP4 FairPlay, a playlist IV can also be absent when the initialization segment's track-encryption metadata (`tenc`) supplies the required constant IV. The actual media and IV declarations are checked, rather than assuming that an omitted playlist attribute means unencrypted media.
+| Field | Required when | Meaning |
+| --- | --- | --- |
+| `schema_version` | Always | `2` for named-output key files |
+| `input.keys` | cenc/cbcs input | Array of complete `kid`/`key` mappings |
+| `input.hls_keys` | AES-128 or TS SAMPLE-AES input | Array of exact key URI and key mappings; associated IV when needed |
+| `outputs` | Always in schema 2 | Object keyed by encrypted output ID; empty when every output is clear |
+| `outputs.ID.kid` | cenc/cbcs output | MP4 key identifier; omit for AES-128 and TS SAMPLE-AES |
+| `outputs.ID.key` | Every encrypted output | Content key |
+| `outputs.ID.hls_key_uri` | AES-128, TS SAMPLE-AES, generic encrypted HLS or FairPlay | Declaration written to playlists; not a destination where drmr publishes a key |
+| `outputs.ID.iv` | TS SAMPLE-AES output | Associated IV; refused for other targets |
+| `outputs.ID.signaling` | Explicit DRM selected in `drms` | Matching DRM initialization information; chapter 7 has a complete example |
 
-Recipes use versions 1–3, key files 1/2, and new saved plans 9 (single) or 10 (named outputs). Recipes 2/3 allow per-output processing; 3 also allows DASH references. Existing plans keep their saved processing and verification minimum.
+Do not add entries for clear outputs. Missing or extra output IDs are refused. Generic cenc/cbcs HLS with `drms: []` needs a key URI; explicit Widevine/PlayReady-only HLS does not. FairPlay uses `skd://`.
+
+## HLS input keys and output IVs
+
+For AES-128 input, the URI must match the playlist's resolved key identifier. A relative `keys/content.key` in `https://example.com/media.m3u8` resolves to `https://example.com/keys/content.key`. Absolute `skd:` identifiers remain unchanged. drmr does not fetch keys or licenses.
+
+This complete schema-2 file decrypts AES-128 input to a clear output:
+
+```json
+{
+  "schema_version": 2,
+  "input": {
+    "hls_keys": [{"uri": "https://example.com/keys/content.key", "key": "00112233445566778899aabbccddeeff"}]
+  },
+  "outputs": {}
+}
+```
+
+For TS SAMPLE-AES input, use the actual URI and its associated IV. This is a complete clear-output example:
+
+```json
+{
+  "schema_version": 2,
+  "input": {
+    "hls_keys": [{"uri": "skd://source-content", "key": "00112233445566778899aabbccddeeff", "iv": "000102030405060708090a0b0c0d0e0f"}]
+  },
+  "outputs": {}
+}
+```
+
+A declared SAMPLE-AES IV must match the configured associated IV. A sequence number is not a substitute. AES-128 instead follows the declared IV or the HLS sequence-derived IV rules.
+
+AES-128 output uses `key` and `hls_key_uri`, without `kid` or `iv`; drmr creates a new IV for each output resource. TS SAMPLE-AES output uses `key`, `iv` and `hls_key_uri`, without `kid`. Its video/audio use the same configured output key and IV. The [conversion recipes](#url-input) provide complete output settings and input-specific key files for each case.
+
+## DRM information and compatibility formats
+
+Widevine PSSH (Protection System Specific Header) must be a complete box in hexadecimal or Base64, with matching output KIDs and, when declared, the selected cenc/cbcs scheme. PlayReady information is generated from the KID and license URL: CENC uses an AESCTR 4.1.0.0 header and key checksum; CBCS uses an AESCBC 4.3.0.0 header without that checksum. Chapter 7 shows complete JSON for DASH Widevine/PlayReady and HLS with all three DRMs.
+
+In fMP4 HLS, CBCS is declared as `SAMPLE-AES`, CENC as `SAMPLE-AES-CTR`. `KEYFORMAT` distinguishes the DRM systems. FairPlay needs CBCS and a `skd://` identifier; it cannot be selected for CENC. The configured DRM set must match the requested output. These declarations do not establish license acquisition or device playback.
+
+Schema 1 remains supported for the direct `--to`/`--format` interface and its direct `verify OUTPUT --source INPUT`: it uses one `output` object, not schema 2's `outputs` map. Named-output verification uses `verify --plan` with schema 2. There is no `verify --outputs` option. See the [configuration reference](https://github.com/kazuhide/drmr/blob/main/docs/configuration.md) for the full field reference and compatibility format.
 
 ## Logs, memory and temporary files
 
@@ -389,7 +343,36 @@ Some workflows create private temporary key/configuration files. Cleanup and zer
 
 See [local security](https://github.com/kazuhide/drmr/blob/main/docs/security.md).
 
-# 6. Analyze metadata and plan
+# 6. Output settings, analysis and saved plans
+
+## outputs.json and the saved plan
+
+`outputs.json` is an output list that you create. `plan` and `convert` read it through `--outputs`; `plan` does not generate it. Use schema 3 for new examples. This complete file requests one generic CBCS HLS output:
+
+```json
+{
+  "schema_version": 3,
+  "outputs": [
+    {"id": "hls", "format": "hls", "target": "cbcs", "drms": []}
+  ]
+}
+```
+
+| Field | Requirement or default | Meaning |
+| --- | --- | --- |
+| `schema_version` | Required, `3` | Output-list format; independent of the key-file and saved-plan schemas |
+| `outputs` | Required, 1–8 entries | Each requested output; one entry also uses this interface |
+| `outputs[].id` | Required, unique | Result directory and matching key-file output name; 1–32 lowercase ASCII characters, letter first, then letters/digits/hyphens; reserved device names refused |
+| `outputs[].format` | Required | `mp4`, `dash`, `hls` (fMP4) or `hls-ts` |
+| `outputs[].target` | Required | Protection from chapter 3's output choices |
+| `outputs[].drms` | Required | `[]` for no service-specific signaling, or the supported DRM names from chapter 3 |
+| `outputs[].processing` | Optional, CLI default `auto` | `auto`, `segments` or `stitch`; chapter 9 explains boundaries |
+| `outputs[].dash_addressing` | DASH only; optional, CLI default `template` | `template`, `template-timeline`, `list` or `base` |
+| `outputs[].conformance` | Optional, `none` | `required` additionally requires external manifest validation; native checks run either way |
+
+Each result is under `result/ID/`: `media.mp4`, `manifest.mpd` or `master.m3u8`. Clear outputs have no key-file entry. Unknown fields, duplicate IDs and unsupported combinations are refused. An empty `drms` array does not disable media or manifest checks. Requesting external checks requires the tools described in chapter 9; MP4 refuses `conformance: "required"`.
+
+Recipe schemas 1 and 2 remain readable: schema 2 adds per-output `processing`; schema 3 also adds DASH addressing. New saved plans use separate schemas 9 (single output) and 10 (named outputs). Usually edit `outputs.json`, not the generated plan. The [configuration reference](https://github.com/kazuhide/drmr/blob/main/docs/configuration.md) explains all three file roles.
 
 ## Read declarations without keys
 
@@ -483,214 +466,128 @@ drmr verify --plan conversion.plan.json
 
 The plan saves the choice. `convert --plan` refuses `--dash-addressing`, including the default value. For several outputs, output-recipe schema 3 permits `dash_addressing` on DASH rows; rows without a value use the CLI default. Schemas 1/2 remain accepted and refuse that field. Schema 3 also accepts per-output `processing`; these recipe versions are separate from key-file versions.
 
-## Save several explicitly named outputs
+## Separate analysis, saved planning, conversion and verification
 
-Use `--outputs` when all listed outputs must be produced together. Save this public recipe as `outputs.json`:
+Use chapter 7's files if you want to inspect each stage. Direct conversion already includes its checks. `&&` proceeds only after success:
+
+```sh
+drmr analyze "https://example.com/vod/master.m3u8" \
+  --download-dir source &&
+drmr plan source/input.m3u8 --outputs outputs.json \
+  --output result --save conversion.plan.json &&
+drmr convert --plan conversion.plan.json --keys-file keys.json &&
+drmr verify --plan conversion.plan.json --keys-file keys.json
+```
+
+Clear input needs no keys during analysis or planning. For encrypted input, pass the input-key file to both. DASH/MP4 use `source/input.mpd` or `source/input.mp4` instead.
+
+`plan --outputs` requires `--save` and refuses `--to`/`--format`. The plan fixes original filenames and hashes, the result root, formats, protection, DRM selections, processing, addressing and external-check policies. Keys and license addresses remain separate. Execution rechecks source conditions. Later `verify --plan` reads the actual original and result again. Existing outputs are never replaced.
+
+A saved `conformance: "required"` makes external checks mandatory during conversion and later verification. Plan saving does not establish that those tools will be available. See [processing routes](https://github.com/kazuhide/drmr/blob/main/docs/processing-routes.md).
+
+# 7. Convert with configuration files
+
+## One output or several
+
+Chapter 1 has a complete single-output example. Chapter 8 covers each input/container/protection choice. Both use `outputs.json`, a `keys.json` only when needed, and one `convert`. Local input uses a file path; URL input also needs `--download-dir`.
+
+## DASH Widevine/PlayReady and HLS with three DRMs
+
+This example produces CBCS DASH and CBCS HLS from qualified clear TS HLS. One encrypted HLS media set carries Widevine, PlayReady and FairPlay declarations; DASH carries Widevine and PlayReady.
+
+Save the complete file as `outputs.json`:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 3,
   "outputs": [
     {
       "id": "dash",
       "format": "dash",
       "target": "cbcs",
-      "drms": ["widevine", "playready"],
-      "conformance": "required"
+      "drms": [
+        "widevine",
+        "playready"
+      ]
     },
     {
       "id": "hls",
       "format": "hls",
       "target": "cbcs",
-      "drms": ["widevine", "playready", "fairplay"],
-      "conformance": "required"
+      "drms": [
+        "widevine",
+        "playready",
+        "fairplay"
+      ]
     }
   ]
 }
 ```
 
-For FairPlay TS instead of fMP4 HLS, use an output with `id: "hls-ts"`, `format: "hls-ts"`, `target: "hls-sample-aes"` and `drms: ["fairplay"]`. Supply the matching TS key entry from chapter 5. Up to eight outputs are accepted. IDs contain one to 32 lowercase ASCII characters, start with a letter, and continue with letters, digits or hyphens; reserved device names are refused. Duplicate IDs, unknown fields and arbitrary child paths are invalid. The recipe contains no keys or DRM initialization data and may be a normal readable JSON file.
-
-```sh
-drmr plan clear-ts/master.m3u8 --outputs outputs.json \
-  --output result --save multi.plan.json --json
-```
-
-Output-recipe schemas 2/3 accept per-output `processing`; schema 1 has no such field. Schema 3 also accepts `dash_addressing` for DASH outputs. The saved version-10 plan binds one original file graph to every output's format, protection, DRM selection and external manifest-check policy. The result root and source fingerprints are fixed. `--outputs` requires `--save` for `plan` and replaces `--to` and `--format`; a comma-separated `--format` in the older metadata-only mode still describes alternatives.
-
-`conformance: "required"` makes the external manifest check mandatory during both conversion and independent plan verification. `"none"`, the default when omitted, requests no external check. Native manifest linting and complete media verification run in both cases. Prepare the tools described in chapter 9 before executing a required check; planning itself does not establish that those tools are available.
-
-# 7. Local conversion examples
-
-## Common rules
-
-Choose a new destination with an existing safe parent. Generic conversion leaves the original unchanged and publishes only after verification and source/Stop checks. Existing output is refused rather than replaced. Use `--keys-file` when input or output protection requires keys.
-
-Omitting `--format` follows the inspected MP4/DASH/HLS input category. HLS defaults to fMP4 HLS even when its input media is TS. Request `--format hls-ts` explicitly for TS output.
-
-## Execute the complete output list
-
-Use the version-2 key file from chapter 5 with the saved multi-output plan:
-
-```sh
-drmr convert --plan multi.plan.json \
-  --keys-file config/multi-keys.json --json
-drmr verify --plan multi.plan.json \
-  --keys-file config/multi-keys.json --json
-```
-
-The example creates `result/dash/manifest.mpd` and `result/hls/master.m3u8`, with their media and child playlists. A requested `hls-ts` output has its own TS resources. Each output is packaged separately; DASH and fMP4 HLS do not share physical media files in this implementation.
-
-All requested outputs are checked inside a private working directory. The new result root is published in one filesystem operation after every output passes its media, requested DRM and required manifest checks. Failure or cancellation does not publish a subset. Existing results are refused, and the retained original remains available.
-
-For an immediate local operation without saving a plan:
-
-```sh
-drmr convert clear-ts/master.m3u8 --outputs outputs.json \
-  --output result --keys-file config/multi-keys.json --json
-```
-
-Use a saved plan when a later `verify --plan` must also enforce the original fingerprints and the complete output list. The single-output examples below remain supported.
-
-Direct `convert` shares source qualification and planning, then creates and checks outputs with bounded parallel workers. Clear HLS TS to two or more `stitch` fMP4 HLS/DASH outputs also shares joining and clear-track preparation. Each output gets its own working copy; final source comparisons and publication checks remain. Separate saved-plan execution and `verify` check the current files again.
-
-## MP4 to MP4 or DASH
-
-```sh
-drmr convert original.mp4 --to cenc --format mp4 \
-  --output encrypted.mp4 --keys-file config/output.json
-drmr verify encrypted.mp4 --source original.mp4 \
-  --keys-file config/output.json --json
-```
-
-Encrypted output uses the separately configured output key. Joint MP4 remains limited to the qualified progressive source profile.
-
-```sh
-drmr convert original.mp4 --to cbcs --format dash \
-  --output result-dash --keys-file config/output.json
-drmr verify result-dash/manifest.mpd --source original.mp4 \
-  --keys-file config/output.json --json
-```
-
-## Decrypt or re-encrypt DASH
-
-```sh
-drmr convert protected/manifest.mpd --to clear --format dash \
-  --output clear-dash --keys-file config/source.json
-drmr verify clear-dash/manifest.mpd \
-  --source protected/manifest.mpd --keys-file config/source.json --json
-```
-
-```sh
-drmr convert cenc-source/manifest.mpd --to cbcs --format dash \
-  --output cbcs-result --keys-file config/both.json
-drmr verify cbcs-result/manifest.mpd \
-  --source cenc-source/manifest.mpd --keys-file config/both.json --json
-```
-
-Fresh verification points to the actual generated manifest, not just its directory. Input and output keys keep their roles even when protection changes.
-
-## fMP4 HLS and transport-stream inputs
-
-```sh
-drmr convert source/master.m3u8 --to cbcs --format hls \
-  --output cbcs-hls --keys-file config/hls-output.json
-drmr verify cbcs-hls/master.m3u8 --source source/master.m3u8 \
-  --keys-file config/hls-output.json --json
-```
-
-Create unencrypted or CBCS DASH from supported completed TS HLS:
-
-```sh
-drmr convert ts-source/media.m3u8 --to clear --format dash \
-  --output clear-dash
-drmr verify clear-dash/manifest.mpd --source ts-source/media.m3u8 --json
-```
-
-```sh
-drmr convert ts-source/media.m3u8 --to cbcs --format dash \
-  --output protected-dash --keys-file config/output.json
-drmr verify protected-dash/manifest.mpd \
-  --source ts-source/media.m3u8 --keys-file config/output.json --json
-```
-
-Absolute packet PTS and DTS, complete encoded units, relative audio/video offsets and the final playback end must match. Packet durations preserve those clocks; the 44.1 kHz TS/MP4 representation difference is explained in [chapter 9](#verification). drmr does not shift or trim the original to make a route pass.
-
-## Audio-only TS to fMP4 HLS
-
-A completed audio-only TS playlist can produce clear, CBCS or AES-128 fMP4 HLS. For CBCS, use an output key with `output.hls_key_uri`; encrypted source playlists also need their own input key-URI mapping.
-
-```sh
-drmr convert audio-ts/master.m3u8 --to cbcs --format hls \
-  --output audio-fmp4-hls --keys-file config/hls-output.json
-drmr verify audio-fmp4-hls/master.m3u8 \
-  --source audio-ts/master.m3u8 --keys-file config/hls-output.json --json
-```
-
-drmr separates the complete audio track and uses Shaka Packager to create new segments. For 44.1 kHz AAC, a Rust reader first copies the validated frames into a private fragmented MP4 with the original 90 kHz clocks and actual 44,100-sample audio rate; the 48 kHz path uses Shaka demultiplexing. Rust provides complete native frame, configuration and clock evidence. Optional `--decode` adds complete FFmpeg decoding and decoded hash comparisons. The original ordered PES, every AAC frame and absolute PTS/DTS remain authoritative. A two-second segment target does not permit trimming an AAC frame. The existing 48 kHz, 470-frame TS regression retains 481,280 samples per channel; the progressive source with a finite 480,000-sample window is a different presentation.
-
-## SAMPLE-AES TS
-
-```sh
-drmr convert clear-ts/media.m3u8 --to hls-sample-aes --format hls-ts \
-  --output fairplay-ts --keys-file config/sample-aes-output.json
-drmr verify fairplay-ts/master.m3u8 --source clear-ts/media.m3u8 \
-  --keys-file config/sample-aes-output.json --json
-```
-
-```sh
-drmr convert encrypted-ts/media.m3u8 --to clear --format hls-ts \
-  --output clear-ts --keys-file config/sample-aes-source.json
-drmr verify clear-ts/master.m3u8 --source encrypted-ts/media.m3u8 \
-  --keys-file config/sample-aes-source.json --json
-```
-
-Supply output key/IV/URI or source URI/IV mappings as applicable. Clear, AES-128 and SAMPLE-AES TS outputs use the qualified source profile; license/device qualification is separate.
-
-## Explicit PlayReady signaling
-
-The following `system: "playready"` setting has its own input restrictions. For `system: "multi-drm"`, even with PlayReady alone, use [chapter 5](#key-configuration) and chapter 3's input conditions.
-
-This `auto`/`stitch` profile produces CENC or CBCS DASH from a qualified clear MP4 source and refuses source DRM records. The `segments` source conditions are in chapter 3. Supply the output key identifier (KID), key and license URL below. drmr generates the PlayReady Object (PRO) and Protection System Specific Header (PSSH), then checks the initialization segments and DASH manifest.
+Save the complete file below as an owner-only `keys.json`, following chapter 5. Every value is public test data, including a complete PSSH matching its KID. Replace keys, KIDs, PSSH, license URLs and key URIs with matching values for production. Clear input has no `input` object. Output keys are independent even though this example uses the same dummy values:
 
 ```json
 {
-  "schema_version": 1,
-  "output": {
-    "kid": "<32-hex-output-kid>",
-    "key": "<32-hex-output-key>",
-    "signaling": {
-      "system": "playready",
-      "license_url": "https://license.example.invalid/acquire"
+  "schema_version": 2,
+  "outputs": {
+    "dash": {
+      "kid": "00000000000000000000000000000001",
+      "key": "00112233445566778899aabbccddeeff",
+      "signaling": {
+        "system": "multi-drm",
+        "widevine_pssh": "000000327073736800000000edef8ba979d64acea3c827dcd51d21ed00000012121000000000000000000000000000000001",
+        "playready_license_url": "https://license.example.invalid/playready"
+      }
+    },
+    "hls": {
+      "kid": "00000000000000000000000000000001",
+      "key": "00112233445566778899aabbccddeeff",
+      "hls_key_uri": "skd://example",
+      "signaling": {
+        "system": "multi-drm",
+        "widevine_pssh": "000000327073736800000000edef8ba979d64acea3c827dcd51d21ed00000012121000000000000000000000000000000001",
+        "playready_license_url": "https://license.example.invalid/playready",
+        "fairplay": true
+      }
     }
   }
 }
 ```
 
-```sh
-drmr convert qualified-clear.mp4 --to cbcs --format dash \
-  --output playready-dash --keys-file config/playready.json
-```
-
-The explicit signaling regression uses a derived fragmented clear MP4. It does not separately establish a finite-progressive-plus-signaling playback matrix. Matching DRM declarations and known-key media checks do not validate a license server.
-
-# 8. Acquire and analyze a URL
-
-## A retained download directory is mandatory
-
-This example uses clear HLS and a CBCS DASH output. Prepare chapter 5's `config/keys.json` with only the output key. `&&` proceeds only after success. The optional metadata-only command summarizes the retained declarations; omit it if this summary is unnecessary.
+For a retained local source, one command checks the input, converts it, compares the result with the original, lints manifests and checks DRM declarations:
 
 ```sh
-drmr analyze "https://example.com/vod/master.m3u8" \
-  --download-dir ./saved-source &&
-drmr analyze --metadata-only ./saved-source/input.m3u8 &&
-drmr plan ./saved-source/input.m3u8 --to cbcs --format dash \
-  --output ./converted-dash --save ./conversion.plan.json &&
-drmr convert --plan ./conversion.plan.json --keys-file config/keys.json &&
-drmr verify --plan ./conversion.plan.json --keys-file config/keys.json
+drmr convert source/input.m3u8 --outputs outputs.json \
+  --keys-file keys.json --output result
 ```
 
-Full URL analysis requires a new `--download-dir` under an existing parent. The plan file and result destination must also be new and separate from the source. Format detection uses the response content, so URLs need no filename extension. Queries and allowed redirects do not select the format.
+Entrypoints are `result/dash/manifest.mpd` and `result/hls/master.m3u8`. Media directories follow the source layout. HLS and DASH are generated separately; shared physical segments are not promised. All outputs must pass before the result root is published; a subset is not published on failure.
+
+Encrypted input requires its `input.keys` or `input.hls_keys` mapping. See chapter 3 for admission conditions and chapter 8 for complete key files. To compare the result in a later process, use chapter 6's saved plan and `verify --plan`.
+
+## Select other outputs
+
+For CENC DASH/HLS, select `target: "cenc"` and `drms: ["widevine", "playready"]`. Omit FairPlay and `hls_key_uri` from HLS settings; any PSSH scheme declaration must match cenc. FairPlay is not available with CENC.
+
+For FairPlay TS, use `format: "hls-ts"`, `target: "hls-sample-aes"`, `drms: ["fairplay"]` and an output key entry with `key`, explicit `iv`, `hls_key_uri` and FairPlay signaling, without an MP4 KID. Chapter 8 has TS output recipes. See the [multiple-output guide](https://github.com/kazuhide/drmr/blob/main/docs/multiple-outputs.md).
+
+The older single-output `system: "playready"` has separate source conditions. Distinguish it from these `system: "multi-drm"` examples. See [DRM signaling](https://github.com/kazuhide/drmr/blob/main/docs/drm-signaling.md).
+
+# 8. Acquire and convert a URL
+
+## Convert directly from a URL
+
+Pass the URL to `convert` with chapter 7's `outputs.json` and `keys.json`. One operation acquires and admits the input, converts it, compares media, lints manifests and checks selected DRM declarations:
+
+```sh
+drmr convert "https://example.com/vod/master.m3u8" \
+  --download-dir source --outputs outputs.json \
+  --keys-file keys.json --output result
+```
+
+The retained source directory and result root must be distinct new paths under existing parents. Existing downloads are not automatically reused and existing results are never overwritten. Local input needs no `--download-dir` or `--fetch-policy`. For separate analysis and saved planning, use chapter 6.
+
+MP4, static DASH and completed HLS are accepted within their profiles. The response content determines the format; extensions, queries and allowed redirects do not select it.
 
 | URL input | Retained local entrypoint | Acquisition profile |
 | --- | --- | --- |
@@ -698,7 +595,7 @@ Full URL analysis requires a new `--download-dir` under an existing parent. The 
 | DASH | `saved-source/input.mpd` | One static `Period`, finite templates or lists, or a supported single-file index |
 | HLS | `saved-source/input.m3u8` | Completed TS/fMP4 playlists within the supported input profiles |
 
-For DASH or MP4, change the local input path above accordingly. DASH saves every referenced initialization and media file. Its localized `input.mpd` retains protection declarations, PSSH DRM initialization data and the timeline. HLS localizes media references and relative key identifiers. Original manifests are kept separately and may contain signed URLs. Acquisition leaves encrypted media and initialization bytes unchanged.
+For offline reuse of DASH or MP4, choose the local entrypoint from the table. DASH saves every referenced initialization and media file. Its localized `input.mpd` retains protection declarations, PSSH DRM initialization data and the timeline. HLS localizes media references and relative key identifiers. Original manifests are kept separately and may contain signed URLs. Acquisition leaves encrypted media and initialization bytes unchanged.
 
 The same local codec, track, encryption and timing restrictions still apply. Live input, HLS byte ranges, multiple DASH periods, hierarchical or external DASH indexes, and negative timeline repeats remain outside this acquisition profile. DASH objects used through supported byte ranges are retained in full. These are implementation limits, rather than technical impossibilities of the formats.
 
@@ -706,45 +603,20 @@ Encrypted HLS accepts AES-128 TS/fMP4, SAMPLE-AES TS and CENC/CBCS fMP4 under th
 
 The acquisition graph, preserved paths, ownership records and overlapping verification inventories share a 128 MiB metadata limit. Deep or long paths can reach it before the resource-count limit. Metadata is admitted before files are created and remains included in the memory budget while the downloaded source is in use. Resource bodies stream to private files; worker buffers and transient acquisition state are budgeted separately.
 
-In this workflow, only the first full `analyze` needs the server. Completed downloads survive later failures; incomplete downloads are refused. `convert URL --download-dir NEW_DIR` combines acquisition and conversion without saving a plan.
+Direct URL conversion uses the retained original for the remaining processing and comparison; subsequent local operations need no connection to the source server.
 
-## URL to several DRM outputs
-
-For a supported clear TS HLS URL, use the same public `outputs.json` and private version-2 key file as the local workflow:
+## Reuse a retained source
 
 ```sh
-drmr analyze "https://example.com/vod/master.m3u8" \
-  --download-dir ./multi-source --json
-drmr plan ./multi-source/input.m3u8 --outputs outputs.json \
-  --output multi-result --save multi.plan.json --json
-drmr convert --plan multi.plan.json \
-  --keys-file config/multi-keys.json --json
-drmr verify --plan multi.plan.json \
-  --keys-file config/multi-keys.json --json
+drmr convert source/input.m3u8 --outputs outputs.json \
+  --keys-file keys.json --output retry-result
 ```
 
-All outputs use one retained source. Acquisition does not extend the processing route's DRM input conditions in chapter 3. For direct acquisition and conversion:
+A completed source can be used offline, including after a later conversion failure. DASH uses `source/input.mpd`; MP4 uses `source/input.mp4`. Incomplete downloads are refused.
 
-```sh
-drmr convert "https://example.com/vod/master.m3u8" \
-  --download-dir ./multi-source --outputs outputs.json \
-  --output multi-result --keys-file config/multi-keys.json --json
-```
+Source bytes and local references are checked through final publication. Changed or missing source files prevent publication. To retry, use the local entrypoint instead of passing an existing download directory to another URL acquisition.
 
-Choose fresh source and result directory names when running either example. The direct URL operation retains acquisition ownership and source byte checks through final publication of the complete result root.
-
-## Reuse offline
-
-After a successful acquisition, the local retained input can be used without the remote server:
-
-```sh
-drmr convert saved-source/input.m3u8 --to cbcs --format hls \
-  --output retry-hls --keys-file config/hls-output.json
-drmr verify retry-hls/master.m3u8 --source saved-source/input.m3u8 \
-  --keys-file config/hls-output.json --json
-```
-
-Do not reuse an existing download directory for a new acquisition. Partial failed acquisition is not a complete saved source. Source byte identity and physical ownership are checked before final publication; cancellation or mutation prevents success. `convert --plan` preserves its recorded destination and refuses intent overrides or an existing result. Choose a new plan for a different destination; use `verify --plan` to recheck an already published result.
+`convert --plan` refuses overrides of source, format, protection and destination. Create a new plan for different conditions or a different destination. Use `verify --plan` for a later independent check of a completed result.
 
 ## Fetch policy
 
@@ -788,19 +660,17 @@ Unknown fields, duplicates, present null values and invalid ranges are refused. 
 
 See [URL conversion](https://github.com/kazuhide/drmr/blob/main/docs/usage.md).
 
-## Example prerequisites and key file {#recipe-setup}
+## Example prerequisites and key files {#recipe-setup}
 
-Select an output in the matrix and **one four-command group** for your input's protection. Clear and encrypted inputs have separate groups. The listed encrypted modes share the same commands; choose the matching input-key configuration. In a POSIX shell on macOS/Linux, `\` continues a command on the next line and `&&` stops the sequence on failure. These commands share files; `|` instead passes standard output. Replace the `https://example.com` URL.
+Each recipe links a complete `outputs.json` and the input-specific `keys.json` when needed. Save the output list as `outputs.json` and the matching key file as `keys.json`. Encrypted-input files include both source and output settings; no fragments need to be combined. Chapters 5–7 explain the JSON fields with complete representative examples. Where two commands are shown, run only the one matching your input.
 
-Use an existing private working directory. drmr saves the input in `src` and creates `plan.json` and `result` (MP4: `result.mp4`); these paths must be new. No `mkdir` or `cd` is needed. For another run, change all paths consistently or use another directory. For [fetch policy settings](#url-input), add `--fetch-policy config/fetch.json` to `analyze`.
+All values are public test data. Replace URLs, source KIDs, keys, key URIs, associated IVs and output keys with matching values. Output lists use schema 3; named key files use schema 2. Clear input has no `input`; clear output has no output key. Clear → clear needs no key file. Match output IDs and key-file names.
 
-When needed, prepare `keys.json` here using [chapter 5's schemas and permissions](#key-configuration), replacing its `config/keys.json` path. Keep it outside source/output directories. Use `schema_version: 1`; omit the clear side's `input` or `output` role. `analyze` and `plan` need only input keys when encrypted; `convert` and `verify` need keys for each encrypted side. Clear → Clear needs no key file.
+Use an owner-only work directory and protect key files as described in [chapter 5](#key-configuration). `src` and `result` must be new paths. No `mkdir`, `cd` or plan file is required. Retry with new destinations or the retained local input. For extra origins or authentication, add `--fetch-policy config/fetch.json` to `convert`; this chapter has the policy example.
 
-CENC/CBCS input uses `input.keys`; AES-128 and TS SAMPLE-AES use `input.hls_keys` with absolute key URIs and required IVs. Cenc/cbcs output needs `output.kid` and `output.key`; generic HLS also needs `output.hls_key_uri` for its identity declaration. Other output fields and explicit DRM settings are in chapter 5. Input and output keys may differ; no key or license URL is fetched.
+Input must satisfy [chapter 3](#supported-profiles). MP4, DASH and fMP4 HLS examples assume one video track. MP4-to-TS needs qualified fragmented input. TS-to-MP4 admits one video and one audio at most: narrow a multi-quality master to the chosen video and associated audio. Audio-only TS uses 44.1 or 48 kHz AAC-LC. TS output containing video and audio uses separate playlists.
 
-Inputs must meet [chapter 3's profiles](#supported-profiles). MP4, DASH and fMP4 HLS examples assume one video track. MP4-to-TS requires fragmented MP4 and the TS presentation conditions above. TS-to-MP4 accepts one video and optional audio; restrict a multi-quality master to the desired video and associated audio. TS video may include audio; audio-only TS uses 44.1 or 48 kHz AAC-LC. Joint TS output has separate audio/video playlists.
-
-Explicit HLS or DASH DRM signaling uses [chapter 6's multiple-output workflow](#inspect-plan) and its input/runtime requirements.
+These recipes request encryption without explicit DRM signaling. For Widevine, PlayReady or FairPlay declarations, use [chapter 7's complete example](#local-conversion). Key/license URIs are not fetched. Commands use POSIX shell syntax; a trailing `\` continues the same command.
 
 {{conversion-examples}}
 

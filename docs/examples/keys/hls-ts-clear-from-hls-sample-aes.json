@@ -1,0 +1,13 @@
+{
+  "schema_version": 2,
+  "input": {
+    "hls_keys": [
+      {
+        "uri": "skd://source-content",
+        "key": "00112233445566778899aabbccddeeff",
+        "iv": "000102030405060708090a0b0c0d0e0f"
+      }
+    ]
+  },
+  "outputs": {}
+}

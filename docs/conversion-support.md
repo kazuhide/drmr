@@ -22,11 +22,31 @@ for the corresponding same-container DRM outputs. See the
 
 `drmr convert` processes local, completed on-demand media with keys supplied by its operator. It preserves encoded video/audio and verifies the result against the original source. The tables distinguish supported input profiles from tested protection routes. Native Rust verification reads every selected sample, codec configuration, clock and supported playback window. Add `--decode` for complete source decoding and decoded comparison; it cannot bypass native refusals. Historical results below retain their recorded complete-decoding scope and do not establish qualification of a later source build. See [verification depth and evidence](verification.md). DRM license and device playback support are separate.
 
-For public-URL command examples, select an output protection in the
-[linked input/output matrix](https://kazuhide.github.io/drmr/#support). Each example
-covers acquisition, analysis, a saved execution plan, conversion and independent
-verification. All examples use `analyze URL --download-dir` to retain the source
-before planning; no separate download command is needed.
+For public-URL examples, select an output protection in the
+[linked input/output matrix](https://kazuhide.github.io/drmr/#support). Each recipe
+links complete output and input-specific key files and provides one direct
+`convert` command for the selected input. Read the
+[configuration reference](configuration.md) for file formats and defaults.
+Separate analysis, saved planning and later independent verification are optional
+workflows; they are not prerequisites for direct conversion.
+
+## Choose the output
+
+The admitted input and output container can be selected independently within the
+conditions below. This avoids repeating the same output choices for each input
+protection scheme:
+
+| `format` | `target` choices | Entry point under `result/ID/` |
+| --- | --- | --- |
+| `mp4` | `clear`, `cenc`, `cbcs` | `media.mp4` |
+| `dash` | `clear`, `cenc`, `cbcs` | `manifest.mpd` |
+| `hls` (fMP4) | `clear`, `cenc`, `cbcs`, `hls-aes128` | `master.m3u8` |
+| `hls-ts` (MPEG-TS) | `clear`, `hls-aes128`, `hls-sample-aes` | `master.m3u8` |
+
+These are container/protection capabilities, not qualification of every codec,
+track layout or playback window. MP4 input must be fragmented for TS output.
+DASH/fMP4 HLS to one MP4 requires a single track; the TS-to-MP4 profile can retain
+one video and one associated audio. See the corresponding conditions below.
 
 ## HLS inputs and containers
 
@@ -34,15 +54,10 @@ Clear HLS input is supported. HLS describes playlists; their media can use eithe
 fragmented MP4 (fMP4) or MPEG transport stream (MPEG-TS) segments. Clear means
 unencrypted media. The two containers have different conversion limits:
 
-| HLS input | Input container | DASH output protection | fMP4 HLS output protection | MPEG-TS HLS output protection |
-| --- | --- | --- | --- | --- |
-| Clear HLS | fMP4 | Clear, `cenc`, `cbcs` | Clear, `cenc`, `cbcs`, AES-128 | Clear, AES-128, SAMPLE-AES |
-| `cenc` HLS | fMP4 | Clear, `cenc`, `cbcs` | Clear, `cenc`, `cbcs`, AES-128 | Clear, AES-128, SAMPLE-AES |
-| `cbcs` HLS | fMP4 | Clear, `cenc`, `cbcs` | Clear, `cenc`, `cbcs`, AES-128 | Clear, AES-128, SAMPLE-AES |
-| AES-128 HLS | fMP4 | Clear, `cenc`, `cbcs` | Clear, `cenc`, `cbcs`, AES-128 | Clear, AES-128, SAMPLE-AES |
-| Clear HLS | MPEG-TS | Clear, `cenc`, `cbcs` | Clear, `cenc`, `cbcs`, AES-128 | Clear, AES-128, SAMPLE-AES |
-| AES-128 HLS | MPEG-TS | Clear, `cenc`, `cbcs` | Clear, `cenc`, `cbcs`, AES-128 | Clear, AES-128, SAMPLE-AES |
-| SAMPLE-AES HLS | MPEG-TS | Clear, `cenc`, `cbcs` | Clear, `cenc`, `cbcs`, AES-128 | Clear, AES-128, SAMPLE-AES |
+| HLS input container | Accepted input protection | Key mapping |
+| --- | --- | --- |
+| fMP4 | Clear, `cenc`, `cbcs`, AES-128 | cenc/cbcs by KID; AES-128 by exact resolved key URI |
+| MPEG-TS | Clear, AES-128, SAMPLE-AES | Encrypted input by exact resolved key URI; SAMPLE-AES needs its associated IV |
 
 Choose `--format hls` for fMP4 HLS or `--format hls-ts` for MPEG-TS HLS.
 For FairPlay transport-stream encryption, use `--to hls-sample-aes`.

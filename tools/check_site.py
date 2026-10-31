@@ -11,7 +11,6 @@ from html.parser import HTMLParser
 import json
 from pathlib import Path, PurePosixPath
 import re
-import shlex
 import stat
 from urllib.parse import unquote, urljoin, urlsplit
 
@@ -405,42 +404,121 @@ def validate_matrix(text, language):
     return {"rows": 5, "output_columns": 4, "cells": 20, "caption": locale["caption"], "recipe_links": 65}
 
 
-def validate_recipe_commands(code, row, output_format, target):
+KEY_EXAMPLE_ROOT = "https://github.com/kazuhide/drmr/blob/main/docs/examples/keys/"
+OUTPUT_EXAMPLE_ROOT = "https://github.com/kazuhide/drmr/blob/main/docs/examples/outputs/"
+KEY_EXAMPLE_MODES = ("cenc-cbcs", "hls-aes128", "hls-sample-aes")
+RECIPE_KEY_MODES = {
+    "mp4": ("cenc-cbcs",), "dash": ("cenc-cbcs",),
+    "hls-fmp4": ("cenc-cbcs", "hls-aes128"),
+    "hls-ts-video": ("hls-aes128", "hls-sample-aes"),
+    "hls-ts-audio": ("hls-aes128", "hls-sample-aes"),
+}
+KEY_MODE_LABELS = {"cenc-cbcs": "cenc / cbcs", "hls-aes128": "AES-128", "hls-sample-aes": "SAMPLE-AES"}
+
+
+def recipe_key_config(output_format, target, mode="clear"):
+    """Independent expected key roles for the documented public dummy values."""
+    result = {"schema_version": 2, "outputs": {}}
+    if mode == "cenc-cbcs":
+        result["input"] = {"keys": [{"kid": "000102030405060708090a0b0c0d0e0f",
+                                     "key": "00112233445566778899aabbccddeeff"}]}
+    elif mode in ("hls-aes128", "hls-sample-aes"):
+        source = {"uri": "https://example.com/keys/content.key", "key": "00112233445566778899aabbccddeeff"}
+        if mode == "hls-sample-aes":
+            source.update(uri="skd://source-content", iv="000102030405060708090a0b0c0d0e0f")
+        result["input"] = {"hls_keys": [source]}
+    else:
+        require(mode == "clear", "site-guide-recipe-key")
+    if target != "clear":
+        key = {"key": "ffeeddccbbaa99887766554433221100"}
+        if target in ("cenc", "cbcs"):
+            key["kid"] = "101112131415161718191a1b1c1d1e1f"
+        if output_format in ("hls", "hls-ts"):
+            key["hls_key_uri"] = "https://keys.example.invalid/content.key"
+        if target == "hls-sample-aes":
+            key["iv"] = "000102030405060708090a0b0c0d0e0f"
+        result["outputs"][output_format] = key
+    return result
+
+
+def complete_example_json(text, expected, token):
+    def unique_fields(pairs):
+        result = {}
+        for name, value in pairs:
+            if name in result:
+                raise ValueError("duplicate-field")
+            result[name] = value
+        return result
+
+    def reject_constant(value):
+        raise ValueError("non-json-constant")
+
+    try:
+        actual = json.loads(text, object_pairs_hook=unique_fields, parse_constant=reject_constant)
+    except (ValueError, TypeError):
+        raise Failure(token) from None
+    # Preserve JSON types: integer schema versions are not interchangeable with floats.
+    require(json.dumps(actual, sort_keys=True) == json.dumps(expected, sort_keys=True), token)
+
+
+def validate_example_files(repository, name, expected):
+    token = "site-guide-" + ("key" if name == "keys" else "output") + "-examples"
+    directory = repository / "docs/examples" / name
+    try:
+        for relative in ("docs", "docs/examples", "docs/examples/" + name):
+            info = (repository / relative).lstat()
+            require(not linked(info) and stat.S_ISDIR(info.st_mode), token)
+        require({path.name for path in directory.iterdir()} == set(expected), token)
+        for filename, config in expected.items():
+            path = directory / filename
+            info = path.lstat()
+            require(not linked(info) and stat.S_ISREG(info.st_mode) and info.st_nlink == 1
+                    and info.st_size <= 4096, token)
+            complete_example_json(path.read_text(encoding="utf-8"), config, token)
+    except (OSError, UnicodeError):
+        raise Failure(token) from None
+    return len(expected)
+
+
+def validate_key_examples(repository):
+    expected = {}
+    for output_format, protections in zip(MATRIX_FORMATS, STANDARD_OUTPUTS):
+        for protection in protections:
+            target = MATRIX_TARGETS[protection]
+            modes = KEY_EXAMPLE_MODES + (("clear",) if target != "clear" else ())
+            for mode in modes:
+                expected[f"{output_format}-{target}-from-{mode}.json"] = recipe_key_config(output_format, target, mode)
+    return validate_example_files(repository, "keys", expected)
+
+
+def validate_output_examples(repository):
+    expected = {}
+    for output_format, protections in zip(MATRIX_FORMATS, STANDARD_OUTPUTS):
+        for protection in protections:
+            target = MATRIX_TARGETS[protection]
+            expected[f"{output_format}-{target}.json"] = {"schema_version": 3, "outputs": [
+                {"id": output_format, "format": output_format, "target": target, "drms": []}]}
+    return validate_example_files(repository, "outputs", expected)
+
+
+def recipe_figure_code(figure, language):
+    token = "site-guide-recipe"
+    require(figure.tag == "figure" and figure.attrs.get("class") == "guide-example"
+            and figure.attrs.get("data-code-language") == language, token)
+    pres, codes = list(figure.descendants("pre")), list(figure.descendants("code"))
+    require(len(pres) == 1 and pres[0].attrs.get("tabindex") == "0" and len(codes) == 1
+            and list(pres[0].descendants("code")) == codes, token)
+    return codes[0].text()
+
+
+def validate_recipe_commands(code, row, output_format, target, encrypted_input=False):
     token = "site-guide-recipe-command"
-    profiles = dict(MATRIX_ROWS).get(row)
-    # Blank lines separate complete groups; they must not hide broken continuations.
-    groups = re.split(r"\n[ \t]*\n", code.replace("\r\n", "\n").strip("\n"))
-    require(profiles and len(groups) == 2, token)
-    profiles = ((profiles[0],), profiles[1:])
+    require(row in RECIPE_KEY_MODES and output_format in MATRIX_FORMATS, token)
     extension = "mp4" if row == "mp4" else "mpd" if row == "dash" else "m3u8"
-    output = "result.mp4" if output_format == "mp4" else "result"
-    for index, profile in enumerate(profiles):
-        lines = groups[index].split("\n")
-        label = " / ".join(profile)
-        clear = profile == ("Clear",)
-        require(len(lines) == 7 and lines[0] == f"# {label} input", token)
-        physical = [line.lstrip() for line in lines[1:]]
-        require(physical[0].endswith(" \\") and physical[2].endswith(" \\"), token)
-        steps = [physical[0][:-2] + " " + physical[1], physical[2][:-2] + " " + physical[3],
-                 physical[4], physical[5]]
-        require(all(line.endswith(" &&") for line in steps[:3])
-                and not steps[3].endswith(" &&"), token)
-        try:
-            commands = [shlex.split(line[:-3] if offset < 3 else line)
-                        for offset, line in enumerate(steps)]
-        except ValueError:
-            raise Failure(token) from None
-        input_keys = [] if clear else ["--keys-file", "keys.json"]
-        runtime_keys = [] if clear and target == "clear" else ["--keys-file", "keys.json"]
-        name = "clear" if clear else "encrypted"
-        url = f"https://example.com/{name}.{extension}"
-        require(steps[0].startswith(f'drmr analyze "{url}" ')
-                and commands[0] == ["drmr", "analyze", url,
-                                "--download-dir", "src"] + input_keys, token)
-        require(commands[1] == ["drmr", "plan", f"src/input.{extension}", "--to", target,
-                                "--format", output_format, "--output", output, "--save", "plan.json"] + input_keys
-                and commands[2] == ["drmr", "convert", "--plan", "plan.json"] + runtime_keys
-                and commands[3] == ["drmr", "verify", "--plan", "plan.json"] + runtime_keys, token)
+    keys = " --keys-file keys.json" if encrypted_input or target != "clear" else ""
+    expected = (f'drmr convert "https://example.com/input.{extension}" \\\n'
+                f'  --download-dir src --outputs outputs.json --output result{keys}\n')
+    require(code.replace("\r\n", "\n") == expected, token)
 
 
 def validate_conversion_examples(chapter, language):
@@ -453,19 +531,46 @@ def validate_conversion_examples(chapter, language):
     require(len(headings) == 65 and [node.attrs.get("id") for node in headings]
             == [example[0] for example in expected], token)
     children = [node for node in chapter.children if isinstance(node, Element)]
-    for heading, (identifier, label, row, output_format, target) in zip(headings, expected):
+    for index, (heading, (identifier, label, row, output_format, target)) in enumerate(zip(headings, expected)):
         require(heading.tag == "h3" and heading.attrs.get("id") == identifier
                 and heading.attrs.get("tabindex") == "-1" and matrix_text(heading) == label
                 and heading in children, token)
         position = children.index(heading)
-        require(position + 2 < len(children), token)
-        paragraph, example = children[position + 1:position + 3]
-        links = list(paragraph.descendants("a"))
-        require(paragraph.tag == "p" and len(links) == 1 and links[0].attrs.get("href") == "#recipe-setup"
-                and example.tag == "figure" and example.attrs.get("data-code-language") == "sh", token)
-        codes = list(example.descendants("code"))
-        require(len(codes) == 1, token)
-        validate_recipe_commands(codes[0].text(), row, output_format, target)
+        end = children.index(headings[index + 1]) if index + 1 < len(headings) else len(children)
+        blocks = children[position + 1:end]
+        require([node.tag for node in blocks] == ["p", "p", "p", "p", "figure", "p"], token)
+        preparation, output_label, clear_label, encrypted_label, shell, result = blocks
+        links = list(preparation.descendants("a"))
+        require(len(links) == 1 and links[0].attrs.get("href") == "#recipe-setup"
+                and matrix_text(preparation), token)
+        require(matrix_text(output_label) == "outputs.json"
+                and [(matrix_text(link), link.attrs.get("href")) for link in output_label.descendants("a")]
+                == [("outputs.json", OUTPUT_EXAMPLE_ROOT + f"{output_format}-{target}.json")],
+                "site-guide-recipe-output-link")
+        clear_text = matrix_text(clear_label)
+        clear_links = [("keys.json", KEY_EXAMPLE_ROOT + f"{output_format}-{target}-from-clear.json")] if target != "clear" else []
+        require("keys.json" in clear_text and clear_text.startswith("Clear")
+                and (target != "clear" or re.search(r"no.*keys\.json|不要", clear_text))
+                and [(matrix_text(link), link.attrs.get("href")) for link in clear_label.descendants("a")]
+                == clear_links, "site-guide-recipe-key-link")
+        expected_links = [(KEY_MODE_LABELS[mode], KEY_EXAMPLE_ROOT + f"{output_format}-{target}-from-{mode}.json")
+                          for mode in RECIPE_KEY_MODES[row]]
+        require("keys.json" in matrix_text(encrypted_label)
+                and [(matrix_text(link), link.attrs.get("href")) for link in encrypted_label.descendants("a")]
+                == expected_links, "site-guide-recipe-key-link")
+        code = recipe_figure_code(shell, "sh").replace("\r\n", "\n")
+        if target != "clear":
+            validate_recipe_commands(code, row, output_format, target)
+        else:
+            require(code.endswith("\n"), "site-guide-recipe-command")
+            groups = code[:-1].split("\n\n")
+            require(len(groups) == 2, "site-guide-recipe-command")
+            for group, prefix, encrypted_input in zip(groups, ("# Clear input\n", "# Encrypted input\n"), (False, True)):
+                require(group.startswith(prefix), "site-guide-recipe-command")
+                validate_recipe_commands(group[len(prefix):] + "\n", row, output_format, target, encrypted_input)
+        entrypoint = (f"result/{output_format}/"
+                      + {"mp4": "media.mp4", "dash": "manifest.mpd"}.get(output_format, "master.m3u8"))
+        require(entrypoint in matrix_text(result) and not list(result.descendants("a")), token)
     return len(headings)
 
 
@@ -519,6 +624,8 @@ def validate_guide(text, language):
 
 
 def generated_guides(root, repository):
+    validate_key_examples(repository)
+    validate_output_examples(repository)
     hashes = {}
     for relative in BUILDER_INPUTS:
         path = repository / relative

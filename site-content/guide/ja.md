@@ -1,6 +1,6 @@
 ---
 title: ユーザーガイド
-updated: 2026-10-30
+updated: 2026-10-31
 version: 1.0.3
 ---
 
@@ -28,28 +28,36 @@ drmr は映像・音声の符号化データを維持しながら、ファイル
 | 原本と結果を改めて比べる | `verify` | 原本と結果を独立に読み、全サンプルの内容・設定・時刻・再生範囲を照合する。--decode で完全デコードも追加できる |
 | 完成したマニフェストだけを調べる | `verify --manifest-only` | Rust の内蔵 Linter で HLS/DASH の宣言を検査する。--external-validator で外部検査も追加できる。メディアの比較や復号は行わない |
 
-原本を確認してから変換計画を保存する場合は、通常の `analyze`、`plan --save`、`convert --plan`、`verify --plan` の順に使います。メタデータだけを確認するには `analyze` に `--metadata-only` を付けます。計画を保存せずに `convert INPUT` を実行することもできます。
+通常の変換は `convert INPUT --outputs outputs.json` で実行できます。事前確認、条件の保存、後日の独立した照合が必要な場合に、それぞれのコマンドを使い分けます。メタデータだけを確認する場合は `analyze --metadata-only` を使います。
 
 これら四つのメディア処理は、既定で Rust による検査を行います。対象トラックの全サンプルまたは全アクセスユニット、コーデック設定、時刻、対応する再生範囲を読み取ります。`--decode` を付けると、コンテンツ全体のデコードも追加の必須条件になります。変換後の照合と独立検証では原本と実際の出力を別々に読み、以前の成功レポートだけでは判定しません。未対応の構造や、検証に必要な情報が不十分な入力は、どちらの検査範囲でも拒否します。圧縮データの一致と、その全体をデコードできることは別の性質です。後者の証拠が必要な場合に `--decode` を使います。メタデータのみの解析、`--save` なしの計画、マニフェストのみの検査では指定できません。
 
 ## 最短の実行例
 
-最初の動作確認には対応条件を満たす非暗号化のローカル MP4 を使います。出力先の親ディレクトリをあらかじめ作成し、出力ファイルには既存のファイルと重複しない名前を指定してください。原本は変更されません。
+一つの出力でも、複数の出力でも、`outputs.json` に出力形式と暗号方式を記述し、`convert` に渡します。暗号化された入力や出力がある場合だけ、鍵を記した `keys.json` も用意します。項目の説明は[鍵設定](#key-configuration)と[出力設定](#inspect-plan)、組み合わせ別の例は[URL 入力の変換例](#url-input)にあります。
 
-```sh
-drmr --version
-drmr doctor --probe --route progressive-mp4
-drmr analyze --metadata-only original.mp4 --json
-drmr analyze original.mp4 --json
-drmr plan original.mp4 --to clear --format mp4 \
-  --output clear.mp4 --save clear.plan.json --json
-drmr convert --plan clear.plan.json --json
-drmr verify --plan clear.plan.json --json
+次の内容を `outputs.json` に保存します。これは非暗号化 MP4 を一つ出力する指定です。
+
+```json
+{
+  "schema_version": 3,
+  "outputs": [
+    {"id": "mp4", "format": "mp4", "target": "clear", "drms": []}
+  ]
+}
 ```
 
-入力が暗号化されている場合や出力を暗号化する場合は、第5章の手順でアクセス権を制限した鍵設定ファイルを渡します。この例でも、入力が対応範囲外なら処理は拒否されます。入力の確認や計画の保存に成功しても、その後の変換が成功するとは限りません。実行時に原本、鍵、ツール、指定した出力条件を改めて確認します。
+対応条件を満たす非暗号化の `original.mp4` を変換します。`result` はまだ存在しない出力先を指定してください。親ディレクトリは事前に用意します。
 
-主な操作手段は CLI です。依存ツールもまとめて実行したい場合は Docker を使えます。実験的な Web コンソールと Desktop では、同じ保存計画による解析・計画保存・変換・検証を操作できます。CLI の全コマンドを画面から実行する機能はありません。
+```sh
+drmr convert original.mp4 --outputs outputs.json --output result
+```
+
+MP4 は `result/mp4/media.mp4` に生成されます。`mp4` は出力 ID で、生成先のディレクトリ名になります。入力も出力も clear のため、鍵ファイルは不要です。`convert` は入力検査、変換、原本とのメディア比較を一回の操作で行います。HLS/DASH では内蔵マニフェスト検査、DRM を指定した出力ではその宣言の照合も行います。別コマンドの `analyze`・`plan`・`verify` は必須手順ではありません。
+
+変換前に内容を確認したい場合は `analyze`、条件を保存して後から実行したい場合は `plan --save`、完成した結果を改めて読み直す場合は `verify --plan` を使います。これらの使い分けは第6章と第9章で説明します。
+
+CLI を主なインターフェースとしています。Docker はメディアツールを含む実行環境です。ローカル Web コンソールと Desktop は実験段階で、共通の解析・計画保存・変換・検証を利用できますが、CLI の全機能を公開しているわけではありません。
 
 # 2. 形式・暗号・DRM の読み方
 
@@ -94,25 +102,34 @@ Widevine、PlayReady、FairPlay は、鍵の取得や利用条件、プレーヤ
 
 暗号方式の変換、シグナリングの整合性確認、ライセンス取得、実機再生はそれぞれ別の確認事項です。メディアの検証に成功しても、対象機器でそのコンテナ形式・コーデック・暗号方式・DRM の組み合わせを再生できるとは限りません。サービスで配信する前に、実際に使うライセンスサーバーと機器で確認してください。
 
-`cens` と `cbc1` は解析で識別できる場合がありますが、現在の変換先ではありません。対応表は現在の実装・検証範囲を示します。記載のない組み合わせが、形式として技術的に実現不可能とは限りません。
+`cens` と `cbc1` は解析で識別できる場合がありますが、現在の変換先ではありません。対応表は現在の実装・検証範囲を示します。記載のない組み合わせが形式として技術的に実現不可能とは限りません。
 
 # 3. 入力と出力の対応表
 
 メディア全体を確認するには、映像は AVC（H.264）、音声は AAC の対応条件を満たす必要があります。HEVC・AV1・VP9・AC-3・E-AC-3・Opus・FLAC の設定をメタデータとして識別できても、全体の検証を実装したことにはなりません。未実装のコーデック条件は `native-codec-profile-not-supported` で拒否し、`--decode` でも迂回できません。コンテナ・暗号方式の対応表はその形式に格納できる全コーデックの動作確認を意味しません。
 
-## コンテナ形式別の対応表
+## 入力形式と条件
 
-この表は、配信内容が確定したオンデマンドコンテンツをローカルに保存し、汎用 `convert` で変換する場合の対応範囲です。各セルに示す暗号方式のほか、後述のコーデック・トラック・時刻・暗号データの配置条件を満たす必要があります。URL からの取得には別の制限があります。
+入力形式と出力形式をそれぞれ選びます。対応するコーデック、トラック構成、時刻、再生範囲、暗号情報の配置には条件があります。URL からの取得にも別の上限を適用します。
 
-| 入力 | MP4 出力 | DASH 出力 | fMP4 HLS 出力 | TS HLS 出力 |
-| --- | --- | --- | --- | --- |
-| MP4 | clear / cenc / cbcs。複数トラックは条件付き | clear / cenc / cbcs | clear / cenc / cbcs / AES-128 | clear / AES-128 / SAMPLE-AES。フラグメント化入力のみ |
-| DASH・fMP4 | clear / cenc / cbcs。単一トラックのみ | clear / cenc / cbcs | clear / cenc / cbcs / AES-128 | clear / AES-128 / SAMPLE-AES |
-| HLS・fMP4 | clear / cenc / cbcs。単一トラックのみ | clear / cenc / cbcs | clear / cenc / cbcs / AES-128 | clear / AES-128 / SAMPLE-AES |
-| HLS・TS、映像あり | clear / cenc / cbcs。映像一つと音声一つまで | clear / cenc / cbcs | clear / cenc / cbcs / AES-128 | clear / AES-128 / SAMPLE-AES |
-| HLS・TS、音声のみ | clear / cenc / cbcs | clear / cenc / cbcs | clear / cenc / cbcs / AES-128 | clear / AES-128 / SAMPLE-AES |
+| 入力 | 入力の暗号方式 | トラック構成と出力の条件 |
+| --- | --- | --- |
+| MP4 | clear、cenc、cbcs | 複数トラックを一つの MP4 に出す場合は条件あり。TS 出力にはフラグメント化された入力が必要 |
+| DASH / fMP4 | clear、cenc、cbcs | 各 Representation は一つのトラック。一つの MP4 への出力は入力が1トラックの場合 |
+| HLS / fMP4 | clear、cenc、cbcs、AES-128 | 各メディアプレイリストは一つのトラック。一つの MP4 への出力は入力が1トラックの場合 |
+| HLS / TS（映像） | clear、AES-128、SAMPLE-AES | 対応する一つの番組に映像一つと任意の音声。MP4 出力には映像一つと関連する音声を選択 |
+| HLS / TS（音声のみ） | clear、AES-128、SAMPLE-AES | 対応する AAC-LC 音声一つ |
 
-MP4 に複数トラックを格納する入力は、対応するプログレッシブ MP4、または映像・音声を一つずつまで含む HLS TS です。DASH・fMP4 HLS の別トラックや異なる入力ファイルの結合には対応しません。
+## 出力形式と暗号方式
+
+| `outputs[].format` | `outputs[].target` の選択肢 | 出力 ID のディレクトリ内のファイル |
+| --- | --- | --- |
+| `mp4` | `clear`、`cenc`、`cbcs` | `media.mp4` |
+| `dash`（fMP4） | `clear`、`cenc`、`cbcs` | `manifest.mpd` |
+| `hls`（fMP4） | `clear`、`cenc`、`cbcs`、`hls-aes128` | `master.m3u8` |
+| `hls-ts`（MPEG-TS） | `clear`、`hls-aes128`、`hls-sample-aes` | `master.m3u8` |
+
+ホームの対応表では入力と希望する出力方式を選んで具体的な設定例とコマンドへ進めます。一つの MP4 への出力では、対応する progressive MP4 内のトラック、または HLS TS の映像一つと音声一つまでを扱います。DASH/fMP4 HLS の別々のトラックや無関係なファイルを、一つの MP4 にまとめる機能ではありません。
 
 ## HLS の入力暗号方式
 
@@ -142,11 +159,7 @@ fMP4 メディアプレイリストは一つの音声または映像トラック
 
 対応する入力は一つの完全なプログレッシブ MP4 に AAC-LC 音声トラックを一つ含むものです。H.264 映像トラックも一つまで含められます。音声の格納識別子は `mp4a`、映像は `avc1` です。音声の編集情報は通常速度での連続した一範囲を指定し、開始位置が負でなく、長さを音声クロックの整数値に正確に換算できる必要があります。
 
-| 入力の保護 | MP4 出力 | DASH 出力 | fMP4 HLS 出力 |
-| --- | --- | --- | --- |
-| clear | clear / cenc / cbcs | clear / cenc / cbcs | clear / cenc / cbcs / AES-128 |
-| cenc | clear / cenc / cbcs | clear / cenc / cbcs | clear / cenc / cbcs / AES-128 |
-| cbcs | clear / cenc / cbcs | clear / cenc / cbcs | clear / cenc / cbcs / AES-128 |
+この条件を満たす clear・cenc・cbcs 入力は、MP4/DASH で clear・cenc・cbcs、fMP4 HLS で加えて AES-128 の出力を選べます。
 
 clear MP4 出力はプログレッシブのサンプル表を保持します。暗号化 MP4 出力はフラグメント化され、この条件を満たす映像・音声を一つのファイルに保持できます。DASH/HLS 出力は役割ごとのトラックに分けます。入力暗号化には各トラックの鍵が必要です。
 
@@ -239,169 +252,104 @@ drmr doctor --probe --route dash-presentation --decode
 
 # 5. 鍵設定と秘密情報の扱い
 
-## 入力鍵と出力鍵の役割
+## 設定ファイルと鍵の役割
 
-`convert` と `verify` は `--keys-file` で指定した JSON ファイルから鍵を読み込みます。ファイルには所有者だけがアクセスできる権限が必要です。環境変数から自動的に鍵を補うことはありません。入力鍵は原本の復号に、出力鍵は結果の暗号化と検証に使います。同じ暗号方式への変換でも、入力鍵と出力鍵は独立しています。
+`--outputs` を使う場合は、出力が一つでも複数でも `schema_version: 2` の `keys.json` を使います。入力鍵は原本の復号、出力鍵は各結果の暗号化と検証に使います。`outputs.json` の出力 ID と、`keys.json.outputs` 内の名前を一致させます。二つのファイルの schema_version は別です。`plan --save` が生成する保存計画も別のファイルで、鍵は含みません。
 
-`analyze` と `plan --save` も、原本の確認に入力鍵が必要な場合は同じ `--keys-file` を使えます。計画を保存する段階では出力鍵は不要です。`convert --plan` と `verify --plan` に、実行時の鍵を別途渡します。
+| 変換 | `keys.json` に記載する内容 |
+| --- | --- |
+| clear → clear | 鍵ファイルも `--keys-file` も不要 |
+| clear → 暗号化 | 暗号化する出力 ID の `outputs` だけ。`input` は省略 |
+| 暗号化 → clear | `input` と、空の `outputs` オブジェクト |
+| 暗号化 → 暗号化 | `input` と、暗号化する出力 ID の `outputs` |
 
-鍵は 16 バイトを 32 桁の十六進数で表します。KID は key identifier、つまり鍵を選ぶための識別子で、暗号鍵そのものではありません。IV は initialization vector、暗号化の開始状態を指定する値です。KID やメディア内の IV は公開メタデータになる場合があります。
+`analyze` と `plan --save` は原本が暗号化されている場合だけ入力鍵を使います。`convert` と後日の `verify --plan` はそれぞれの処理に必要な入力鍵と出力鍵を使います。環境変数から鍵を補うことはありません。映像と音声で KID が異なる場合を含め、暗号化された全入力トラックの鍵を指定してください。
 
-macOS/Linux では、まず所有者だけがアクセスできるディレクトリを作成します。その中にエディターや秘密情報の管理ツールで設定ファイルを作ってください。次の例では後述の構造例を `keys.json` に保存した後、ファイルの権限も設定します。
+KID は key identifier、つまり鍵を選ぶための識別子で、秘密の鍵そのものではありません。鍵と KID は 16 バイトを 32 桁の十六進数で記述します。IV は initialization vector、暗号化の開始状態を指定する値です。KID やメディア内の IV は公開メタデータになる場合があります。
 
-```sh
-umask 077
-mkdir config
-chmod 700 config
-```
+作業場所は所有者だけがアクセスできるディレクトリにします。macOS/Linux では、秘密情報を入力する前にファイルを保護してください。作成済みの非公開 `keys.json` には `chmod 600 keys.json` を使えます。Windows の ACL 設定は第12章にあります。安全でない権限、シンボリックリンク、複数のハードリンク、重複・不明なフィールド、未対応の schema_version、上限を超える設定は拒否します。鍵ファイルは原本・出力のディレクトリとバージョン管理の対象から外してください。
 
-```sh
-chmod 600 config/keys.json
-```
+## 名前付き出力の鍵ファイルの例
 
-実行時には、設定が所有者だけがアクセスできる通常ファイルであり、ハードリンク数が一つであることなどを確認します。シンボリックリンク、他のユーザーが読める設定、重複キー、不明なフィールド、未対応の schema_version、サイズが上限を超える設定は拒否します。設定ファイルは出力ディレクトリとバージョン管理の対象から外してください。Windows では後述の所有者専用 ACL を使います。
-
-## cenc / cbcs の設定例
-
-以下は構造例で、そのまま使える鍵ではありません。山括弧を含む値を、ご自身の 32 桁の十六進値に置き換えてください。clear 入力から CBCS DASH を作る最小構成です。
-
-```json
-{
-  "schema_version": 1,
-  "output": {
-    "kid": "<32-hex-output-kid>",
-    "key": "<32-hex-output-key>"
-  }
-}
-```
-
-暗号化 MP4/DASH/fMP4 HLS 入力には、必要な各トラックの KID と鍵を追加します。映像と音声で KID が異なる場合は両方を指定してください。
-
-```json
-{
-  "schema_version": 1,
-  "input": {
-    "keys": [
-      {"kid": "<32-hex-video-kid>", "key": "<32-hex-video-key>"},
-      {"kid": "<32-hex-audio-kid>", "key": "<32-hex-audio-key>"}
-    ]
-  },
-  "output": {
-    "kid": "<32-hex-output-kid>",
-    "key": "<32-hex-output-key>"
-  }
-}
-```
-
-clear 出力では `output` 全体を省きます。CBCS HLS 出力では `output.hls_key_uri` も必要です。その URI はプレイリストに書く値であり、drmr が鍵ファイルを作成・公開する場所ではありません。
-
-## HLS AES-128 と SAMPLE-AES
-
-HLS の鍵 URI は入力プレイリストの値と正確に対応させます。drmr はこの URI から鍵を取得しません。鍵は運用者が設定します。SAMPLE-AES は、その鍵に関連付けられた IV がプレイリストにない場合に設定が必要です。両方にある場合は一致しなければなりません。
-
-```json
-{
-  "schema_version": 1,
-  "input": {
-    "hls_keys": [{
-      "uri": "skd://source-content",
-      "key": "<32-hex-source-key>",
-      "iv": "<32-hex-associated-iv>"
-    }]
-  }
-}
-```
-
-上の `iv` は SAMPLE-AES の例です。SAMPLE-AES ではセグメント番号を IV の代わりにしません。AES-128 入力ではプレイリストの明示 IV または仕様に従うシーケンス番号由来 IV を扱います。
-
-AES-128 出力は `output.key` と `output.hls_key_uri` を使い、`output.kid` と `output.iv` は指定しません。各出力リソースで新しい IV を作ります。
-
-```json
-{
-  "schema_version": 1,
-  "output": {
-    "key": "<32-hex-output-key>",
-    "hls_key_uri": "https://keys.example.invalid/content.key"
-  }
-}
-```
-
-FairPlay 向け TS SAMPLE-AES 出力には、関連付けられた明示 IV も必要です。現在のプロファイルでは映像・音声に同じ出力鍵と IV を使います。
-
-```json
-{
-  "schema_version": 1,
-  "output": {
-    "key": "<32-hex-output-key>",
-    "iv": "<32-hex-associated-iv>",
-    "hls_key_uri": "skd://output-content"
-  }
-}
-```
-
-入力と出力のプレイリストに同じ URI を記載する場合でも、それぞれの鍵と IV の役割は異なります。`output.iv` は SAMPLE-AES TS 専用であり、clear、MP4 サンプル暗号化、AES-128 出力では拒否します。
-
-## 複数出力の鍵と DRM 情報
-
-出力一覧で鍵や DRM 情報が必要な場合は、`schema_version: 2` の所有者専用鍵ファイルを使います。共有の入力鍵は `input`、出力ごとの鍵と付加情報は `outputs` に記録します。`outputs` の名前は出力一覧の ID と対応させ、暗号化する各出力に一つの設定を用意します。clear 出力には設定を置きません。余分な ID や不足した ID は拒否します。
-
-次は第6章の `dash` と `hls` に対応する構造例です。山括弧の値を正しい鍵・識別情報に置き換え、例えば `config/multi-keys.json` に保存してください。
+以下の値は公開のテスト用データです。実際の鍵と識別子に置き換えてください。clear 入力から cenc または cbcs の `dash` 出力を作る場合は、次の内容を `keys.json` に保存します。
 
 ```json
 {
   "schema_version": 2,
   "outputs": {
     "dash": {
-      "kid": "<32-hex-dash-kid>",
-      "key": "<32-hex-dash-key>",
-      "signaling": {
-        "system": "multi-drm",
-        "widevine_pssh": "<complete Widevine PSSH box in hex or base64>",
-        "playready_license_url": "https://license.example.invalid/playready"
-      }
-    },
-    "hls": {
-      "kid": "<32-hex-hls-kid>",
-      "key": "<32-hex-hls-key>",
-      "hls_key_uri": "skd://<content-identifier>",
-      "signaling": {
-        "system": "multi-drm",
-        "widevine_pssh": "<complete Widevine PSSH box in hex or base64>",
-        "playready_license_url": "https://license.example.invalid/playready",
-        "fairplay": true
-      }
+      "kid": "000102030405060708090a0b0c0d0e0f",
+      "key": "00112233445566778899aabbccddeeff"
     }
   }
 }
 ```
 
-Widevine の PSSH は各出力の `kid` に合った完全な PSSH box を十六進または Base64 で渡します。drmr が内容を検査し、暗号方式が含まれる場合は出力の `cenc` または `cbcs` と照合します。
-
-PlayReady の情報には出力の KID とライセンス URL を含めます。CENC ではバージョン 4.1.0.0 の AESCTR ヘッダーを使い、出力鍵によるチェックサムを計算します。CBCS はバージョン 4.3.0.0 の AESCBC ヘッダーで、このチェックサムを含めません。
-
-HLS の CBCS 出力は一組の暗号化メディアに三つの DRM の情報を宣言できます。この例は三つすべてを指定しています。一部だけを使う場合は、選ばない DRM の設定を省きます。CENC の HLS にする場合は、出力一覧を `target: "cenc"`、`drms: ["widevine", "playready"]` とし、鍵設定の `fairplay` を `false` にして `hls_key_uri` を省きます。FairPlay は CBCS と `skd://` の URI が必要で、CENC の HLS には指定できません。単一出力では同じ鍵設定を schema 1 の `output` に記録します。実行時に選ぶ DRM の集合が保存計画と一致しなければ拒否します。ライセンスや鍵の URI には接続しません。
-
-HLS の暗号化宣言は CBCS が `SAMPLE-AES`、CENC が `SAMPLE-AES-CTR` です。`KEYFORMAT` は DRM を識別する属性で、Widevine の UUID、PlayReady の `com.microsoft.playready`、FairPlay の `com.apple.streamingkeydelivery` を使います。暗号方式とは別の指定です。Widevine の PSSH と PlayReady の情報は data URI（データを URI に直接埋め込む形式）に格納し、FairPlay は `skd://` の URI で鍵を識別します。詳しくは [HLS の DRM 宣言（英語）](https://github.com/kazuhide/drmr/blob/main/docs/drm-signaling.md)を参照してください。
-
-FairPlay の TS 出力を `hls-ts` と名付ける場合は、`outputs` の HLS 用メンバーを次の形に置き換えます。
+cenc/cbcs 入力から clear 出力を作る場合は、入力鍵と空の出力設定を持つ次のファイルを使います。
 
 ```json
 {
-  "hls-ts": {
-    "key": "<32-hex-ts-key>",
-    "iv": "<32-hex-associated-iv>",
-    "hls_key_uri": "skd://<content-identifier>",
-    "signaling": {
-      "system": "multi-drm",
-      "fairplay": true
-    }
-  }
+  "schema_version": 2,
+  "input": {
+    "keys": [{"kid": "000102030405060708090a0b0c0d0e0f", "key": "00112233445566778899aabbccddeeff"}]
+  },
+  "outputs": {}
 }
 ```
 
-TS の SAMPLE-AES では鍵に対応する IV を実行時の鍵設定に明示します。MP4 用の KID は指定しません。プレイリストの `IV` 属性が省略されていても、設定で渡した IV を使ってメディアを検証します。プレイリストにも IV がある場合は、両方の値が一致する必要があります。fMP4 FairPlay では、初期化セグメントのトラック暗号化情報 `tenc` に必要な定数 IV が含まれていれば、プレイリストの IV 属性を省略できます。IV 属性の省略だけでは暗号化されているかどうかを判定しません。
+| 項目 | 必要になる条件 | 意味 |
+| --- | --- | --- |
+| `schema_version` | 常に必要 | 名前付き出力の鍵ファイルは `2` |
+| `input.keys` | cenc/cbcs 入力 | `kid` と `key` の対応を配列で記載 |
+| `input.hls_keys` | AES-128 または TS SAMPLE-AES 入力 | 正確な鍵 URI と鍵の対応。必要な場合は関連する IV も指定 |
+| `outputs` | schema 2 では常に必要 | 暗号化する出力 ID ごとの設定。全出力が clear なら空にする |
+| `outputs.ID.kid` | cenc/cbcs 出力 | MP4 の鍵識別子。AES-128 と TS SAMPLE-AES では省略 |
+| `outputs.ID.key` | 暗号化する全出力 | コンテンツの暗号鍵 |
+| `outputs.ID.hls_key_uri` | AES-128、TS SAMPLE-AES、DRM を明示しない暗号化 HLS、FairPlay | プレイリストに書く鍵の識別 URI。drmr が鍵を公開する場所ではない |
+| `outputs.ID.iv` | TS SAMPLE-AES 出力 | 鍵に関連付けた IV。他の出力方式では拒否 |
+| `outputs.ID.signaling` | `drms` で DRM を明示する場合 | 選択した DRM に対応する初期化情報。第7章に完全な例あり |
 
-出力一覧は version 1〜3、鍵ファイルは 1・2、新規の保存計画は単一出力が 9、名前付き出力が 10 です。出力別の処理方式は一覧の 2・3、DASH の参照形式は 3 で指定します。旧計画の処理設定と検査条件は変わりません。
+clear 出力の鍵設定は置きません。出力 ID の不足や余分な ID は拒否します。`drms: []` の cenc/cbcs HLS には鍵 URI が必要ですが、Widevine/PlayReady だけを明示した HLS では不要です。FairPlay には `skd://` を使います。
+
+## HLS の入力鍵と出力 IV
+
+AES-128 入力の鍵 URI はプレイリストから解決した識別子と一致させます。`https://example.com/media.m3u8` 内の `keys/content.key` は `https://example.com/keys/content.key` です。絶対 URI の `skd:` はそのまま使います。drmr は鍵やライセンスを取得しません。
+
+AES-128 入力を復号して clear 出力を作る鍵ファイルの全文です。
+
+```json
+{
+  "schema_version": 2,
+  "input": {
+    "hls_keys": [{"uri": "https://example.com/keys/content.key", "key": "00112233445566778899aabbccddeeff"}]
+  },
+  "outputs": {}
+}
+```
+
+TS SAMPLE-AES 入力では実際の URI と、その鍵に関連付けられた IV を指定します。次は clear 出力を作る完全な例です。
+
+```json
+{
+  "schema_version": 2,
+  "input": {
+    "hls_keys": [{"uri": "skd://source-content", "key": "00112233445566778899aabbccddeeff", "iv": "000102030405060708090a0b0c0d0e0f"}]
+  },
+  "outputs": {}
+}
+```
+
+SAMPLE-AES の IV がプレイリストにも宣言されている場合は、鍵設定の IV と一致させます。セグメント番号を IV の代わりにはしません。AES-128 は明示 IV または HLS のシーケンス番号に基づく IV を扱います。
+
+AES-128 出力では `key` と `hls_key_uri` を指定し、`kid` と `iv` は省略します。出力リソースごとに新しい IV を作ります。TS SAMPLE-AES 出力は `key`・`iv`・`hls_key_uri` を使い、`kid` は指定しません。映像と音声には同じ出力鍵と IV を使います。各方式の出力設定と入力別の完全な鍵ファイルは[変換例](#url-input)にあります。
+
+## DRM 情報と従来の設定形式
+
+Widevine の PSSH（Protection System Specific Header）は、出力 KID に合った完全な box を十六進または Base64 で渡します。暗号方式が含まれる場合は出力の cenc/cbcs と一致させます。PlayReady の情報は KID とライセンス URL から生成します。CENC は AESCTR のバージョン 4.1.0.0 と鍵によるチェックサム、CBCS は AESCBC のバージョン 4.3.0.0 を使い、このチェックサムを含めません。第7章には DASH Widevine/PlayReady と HLS 3 DRM の完全な設定例があります。
+
+fMP4 HLS の暗号化宣言は CBCS が `SAMPLE-AES`、CENC が `SAMPLE-AES-CTR` です。`KEYFORMAT` で DRM を区別します。FairPlay は CBCS と `skd://` が必要で、CENC には指定できません。鍵設定で選んだ DRM の集合は出力指定と一致させます。宣言の照合と、ライセンス取得や実機再生の検証は別です。
+
+従来の `--to`・`--format` による直接変換と、その結果の `verify OUTPUT --source INPUT` では schema 1 も使えます。この形式は schema 2 の `outputs` ではなく、単一の `output` を使います。名前付き出力の独立検証は schema 2 の鍵ファイルと `verify --plan` を使います。`verify --outputs` というオプションはありません。全項目と従来形式は[設定ファイルのリファレンス（英語）](https://github.com/kazuhide/drmr/blob/main/docs/configuration.md)を参照してください。
 
 ## ログ、メモリ、一時ファイル
 
@@ -423,7 +371,36 @@ TS の SAMPLE-AES では鍵に対応する IV を実行時の鍵設定に明示�
 
 参照（英語）: [鍵とローカルセキュリティ](https://github.com/kazuhide/drmr/blob/main/docs/security.md)。
 
-# 6. メタデータの確認と plan
+# 6. 出力設定・解析・保存計画
+
+## outputs.json と保存計画の違い
+
+`outputs.json` は利用者が作成する出力一覧です。`plan` と `convert` が `--outputs` で読み込みます。`plan` がこのファイルを生成するわけではありません。新しい例では schema 3 を使います。次は DRM を明示しない CBCS HLS を一つ出力する完全なファイルです。
+
+```json
+{
+  "schema_version": 3,
+  "outputs": [
+    {"id": "hls", "format": "hls", "target": "cbcs", "drms": []}
+  ]
+}
+```
+
+| 項目 | 必須条件・既定値 | 意味 |
+| --- | --- | --- |
+| `schema_version` | 必須、`3` | 出力一覧の形式。鍵ファイル・保存計画の schema_version とは別 |
+| `outputs` | 必須、1〜8件 | 作る出力。一つの場合も同じ形式で指定 |
+| `outputs[].id` | 必須、重複不可 | 出力ディレクトリと鍵設定を対応させる名前。1〜32文字、先頭は英小文字、以降は英小文字・数字・ハイフン。予約デバイス名は拒否 |
+| `outputs[].format` | 必須 | `mp4`、`dash`、`hls`（fMP4）、`hls-ts` |
+| `outputs[].target` | 必須 | 第3章の出力一覧に示した暗号方式 |
+| `outputs[].drms` | 必須 | DRM を明示しなければ `[]`。指定できる DRM は第3章を参照 |
+| `outputs[].processing` | 任意、CLI の既定値は `auto` | `auto`・`segments`・`stitch`。境界の扱いは第9章を参照 |
+| `outputs[].dash_addressing` | DASH のみ。任意、CLI の既定値は `template` | `template`・`template-timeline`・`list`・`base` |
+| `outputs[].conformance` | 任意、`none` | `required` で外部マニフェスト検査を追加。どちらでも内蔵検査を実行 |
+
+出力は `result/ID/` の下に `media.mp4`、`manifest.mpd`、`master.m3u8` を作ります。clear 出力には鍵設定を置きません。不明な項目、重複 ID、未対応の組み合わせは拒否します。`drms: []` でもメディアとマニフェストの検査は行います。外部検査を要求する場合は第9章のツールを準備してください。MP4 では `conformance: "required"` を指定できません。
+
+出力一覧の schema 1・2 も読み込めます。2 は出力別の `processing`、3 は加えて DASH の参照形式を指定できます。新規の保存計画は別の schema で、単一出力は 9、名前付き出力は 10 です。通常は `outputs.json` を編集し、生成された計画は手で編集しません。[設定ファイルのリファレンス（英語）](https://github.com/kazuhide/drmr/blob/main/docs/configuration.md)にも三つのファイルの役割を記載しています。
 
 ## 鍵を使わずに宣言情報を確認する
 
@@ -527,234 +504,130 @@ drmr verify --plan conversion.plan.json
 
 選んだ参照形式は計画に保存します。`convert --plan` では、既定値も含め `--dash-addressing` による上書きを拒否します。複数出力では version 3 の出力一覧に DASH 用の `dash_addressing` を指定でき、省略した出力は CLI の既定値を使います。version 1・2 も引き続き読み込めますが、このフィールドは指定できません。version 3 は出力ごとの `processing` も指定できます。出力一覧と鍵設定のバージョンは別です。
 
-## 複数出力を一つの計画に保存する
+## 解析・計画保存・変換・独立検証を分ける場合
 
-複数の出力をまとめて作る場合は `--outputs` を使います。次の出力一覧を `outputs.json` に保存します。このファイルには秘密情報を含める必要はありません。
+第7章の `outputs.json` と `keys.json` を使い、各段階で内容を確認する手順です。通常の変換にこの四段階が必須という意味ではありません。`&&` は前のコマンドが成功した場合だけ次へ進みます。
+
+```sh
+drmr analyze "https://example.com/vod/master.m3u8" \
+  --download-dir source &&
+drmr plan source/input.m3u8 --outputs outputs.json \
+  --output result --save conversion.plan.json &&
+drmr convert --plan conversion.plan.json --keys-file keys.json &&
+drmr verify --plan conversion.plan.json --keys-file keys.json
+```
+
+この例の入力は clear なので `analyze` と `plan` に鍵は不要です。暗号化入力では入力鍵を含むファイルを両方に渡します。DASH と MP4 を取得した場合は、計画する入力を `source/input.mpd` または `source/input.mp4` に替えます。
+
+`plan --outputs` は `--save` が必須で、`--to`・`--format` とは併用しません。保存計画は原本のファイル集合とハッシュ、出力先、形式・暗号方式・DRM 選択・処理方式・参照形式・外部検査方針を固定します。鍵やライセンス URL は保存しません。実行時に原本と条件を再確認し、後日の `verify --plan` は実際の原本と出力を読み直します。既存の出力へは上書きしません。
+
+`conformance: "required"` を保存した出力は変換時と後日の検証時に外部検査が必須です。計画保存の成功は、実行時に外部ツールを利用できることまでは保証しません。
+
+参照（英語）: [処理経路と解析で確認する内容](https://github.com/kazuhide/drmr/blob/main/docs/processing-routes.md)。
+
+# 7. 設定ファイルを使った変換
+
+## 一つの出力と複数の出力
+
+単一出力の完全な例は第1章、入力形式と暗号方式ごとの例は第8章にあります。どちらも `outputs.json`、必要な場合だけ `keys.json`、一回の `convert` を使います。ローカル入力はファイルを指定し、URL 入力は `--download-dir` も指定します。
+
+## DASH Widevine/PlayReady と HLS 3 DRM
+
+対応条件を満たす非暗号化 HLS TS から、CBCS DASH と CBCS HLS を作る例です。HLS は一組の暗号化メディアに Widevine・PlayReady・FairPlay の三つを宣言します。DASH は Widevine・PlayReady を宣言します。
+
+次の全文を `outputs.json` に保存します。
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 3,
   "outputs": [
     {
       "id": "dash",
       "format": "dash",
       "target": "cbcs",
-      "drms": ["widevine", "playready"],
-      "conformance": "required"
+      "drms": [
+        "widevine",
+        "playready"
+      ]
     },
     {
       "id": "hls",
       "format": "hls",
       "target": "cbcs",
-      "drms": ["widevine", "playready", "fairplay"],
-      "conformance": "required"
+      "drms": [
+        "widevine",
+        "playready",
+        "fairplay"
+      ]
     }
   ]
 }
 ```
 
-FairPlay HLS を TS にする場合は、HLS の要素を `id: "hls-ts"`、`format: "hls-ts"`、`target: "hls-sample-aes"`、`drms: ["fairplay"]` に変更し、第5章の TS 用鍵設定と名前を対応させます。
-
-出力は最大八つです。ID は一文字目を英小文字とし、続きは英小文字・数字・ハイフンを使った 1〜32 文字にします。予約されたデバイス名、重複 ID、不明なフィールド、任意の子パスは拒否します。出力一覧に鍵や DRM 初期化データは含めません。秘密の鍵ファイルとは異なり、通常の読み取り可能な JSON として保存できます。
-
-```sh
-drmr plan clear-ts/master.m3u8 --outputs outputs.json \
-  --output result --save multi.plan.json --json
-```
-
-出力一覧の version 2・3 は出力ごとの `processing` を指定でき、version 1 では拒否します。version 3 では DASH の `dash_addressing` も指定できます。この version 10 の計画は一つの原本ファイル集合と、各出力の形式・暗号方式・DRM 選択・外部マニフェスト検証方針を記録します。原本のハッシュと出力ルートも固定します。`plan` の `--outputs` には `--save` が必要で、`--to`・`--format` とは併用しません。
-
-`conformance: "required"` を指定すると、変換時に加え、後から `verify --plan` を実行する際にも外部マニフェスト検査が必須になります。`"none"` を指定するかフィールドを省略すると、外部検査は要求しません。どちらの場合も内蔵 Linter の検査とコンテンツ全体の検証を行います。第9章のツールを実行前に準備してください。計画の保存に成功しても、そのツールが使えることまでは確認できません。
-
-
-
-参照（英語）: [処理経路と解析で確認する内容](https://github.com/kazuhide/drmr/blob/main/docs/processing-routes.md)。
-
-# 7. ローカル変換の実例
-
-## 共通の実行規則
-
-`convert INPUT --to ... --format ... --output ...` は、ローカルの MP4、DASH、HLS を内容から判定します。一回の実行では出力形式を一つ選びます。`--format` を省略すると入力形式を引き継ぐため、TS と fMP4 HLS の違いが重要な場合は明示してください。
-
-入力形式としての HLS はTS と fMP4 を区別しません。TS HLS を入力した場合も、省略時の出力は hls、つまり fMP4 HLS です。TS で出力するには `--format hls-ts` を明示します。
-
-出力先には新しい MP4 ファイルのパスか、新しい DASH/HLS ディレクトリのパスを指定します。親ディレクトリはあらかじめ作成してください。既存の出力は上書きしません。入力を専用の作業領域に保存し、内容・時刻・原本の整合性と停止要求の有無を確認してから、完成した結果を出力先に配置します。このガイドでいう出力の「公開」は、このローカル配置を指します。インターネットへのアップロードは行いません。
-
-## 複数出力の変換計画の実行
-
-第5章の version 2 の鍵ファイルと、第6章で保存した複数出力計画を使います。
-
-```sh
-drmr convert --plan multi.plan.json \
-  --keys-file config/multi-keys.json --json
-drmr verify --plan multi.plan.json \
-  --keys-file config/multi-keys.json --json
-```
-
-この例では `result/dash/manifest.mpd` と `result/hls/master.m3u8` を作り、それぞれの初期化情報、セグメント、子プレイリストを同じ出力ディレクトリ内に置きます。`hls-ts` を要求した場合は、その出力用の TS リソースを作ります。DASH と fMP4 HLS を含め、各出力は別々にパッケージするため、実メディアファイルを共有する構成ではありません。
-
-すべての結果を所有者専用の作業領域で作成します。各出力のメディアと指定した DRM 情報を確認し、必須のマニフェスト検査にも成功してから、出力ルート全体を一回のファイルシステム操作で配置します。失敗やキャンセルがあった場合に、一部の出力だけを完成結果として残すことはありません。既存出力は上書きせず、保存した原本も保持します。
-
-計画ファイルを保存せず、一回のローカル変換として実行することもできます。
-
-```sh
-drmr convert clear-ts/master.m3u8 --outputs outputs.json \
-  --output result --keys-file config/multi-keys.json --json
-```
-
-後から `verify --plan` で原本のハッシュや出力一覧まで再確認する場合は、計画を保存する方法を使ってください。以下の単一出力の例も引き続き使えます。
-
-`--plan` を使わない `convert` では入力の検査結果を保持したまま変換内容を決め、出力の作成・検証へ進みます。出力間で検査結果を共有し、CPU・メモリの上限を守って並列処理します。clear HLS TS から `stitch` で二つ以上の fMP4 HLS/DASH を作る場合は、結合と暗号化前のトラックの準備も共有します。暗号化には出力ごとのコピーを使い、最後の原本照合と配置前の検査は省略しません。保存した計画を別途実行する場合や独立した `verify` では、その時点のファイルを改めて検査します。
-
-以下の例では対応条件を満たす入力と必要な鍵設定を準備済みとします。鍵設定のファイル名は一例であり、拡張子以外に命名の決まりはありません。
-
-## MP4 から MP4 または DASH への変換
-
-```sh
-drmr convert original.mp4 --to cenc --format mp4 \
-  --output encrypted.mp4 --keys-file config/output.json
-drmr verify encrypted.mp4 --source original.mp4 \
-  --keys-file config/output.json --json
-```
-
-```sh
-drmr convert original.mp4 --to cbcs --format dash \
-  --output result-dash --keys-file config/output.json
-drmr verify result-dash/manifest.mpd --source original.mp4 \
-  --keys-file config/output.json --json
-```
-
-音声の有限再生範囲を持つ MP4 も対応条件を満たせば同じ `convert` で処理できます。専用の「音声編集 MP4」入力コマンドはありません。処理の都合で再生範囲を短くしたり、最後の音声パケットを捨てたりすることはありません。
-
-## 暗号化 DASH の復号と暗号方式の変更
-
-clear 出力には入力側の鍵だけを持つ設定を使います。
-
-```sh
-drmr convert protected/manifest.mpd --to clear --format dash \
-  --output clear-dash --keys-file config/source.json
-drmr verify clear-dash/manifest.mpd \
-  --source protected/manifest.mpd --keys-file config/source.json --json
-```
-
-別の出力鍵を使って CBCS に変える場合は、入力鍵と出力鍵の両方を記載した設定を使います。
-
-```sh
-drmr convert cenc-source/manifest.mpd --to cbcs --format dash \
-  --output cbcs-result --keys-file config/both.json
-drmr verify cbcs-result/manifest.mpd \
-  --source cenc-source/manifest.mpd --keys-file config/both.json --json
-```
-
-## clear HLS から fMP4 HLS への変換
-
-```sh
-drmr convert source/master.m3u8 --to cbcs --format hls \
-  --output cbcs-hls --keys-file config/hls-output.json
-drmr verify cbcs-hls/master.m3u8 --source source/master.m3u8 \
-  --keys-file config/hls-output.json --json
-```
-
-CBCS HLS には `output.hls_key_uri` が必要です。AES-128 にする場合は `--to hls-aes128` と対応する出力設定を使います。鍵 URI のサーバー運用や FairPlay のライセンス提供は drmr の外で行います。
-
-## TS HLS から非暗号化または暗号化 DASH への変換
-
-```sh
-drmr convert ts-source/media.m3u8 --to clear --format dash \
-  --output clear-dash
-drmr verify clear-dash/manifest.mpd --source ts-source/media.m3u8 --json
-```
-
-```sh
-drmr convert ts-source/media.m3u8 --to cbcs --format dash \
-  --output protected-dash --keys-file config/output.json
-drmr verify protected-dash/manifest.mpd \
-  --source ts-source/media.m3u8 --keys-file config/output.json --json
-```
-
-上記は clear TS を入力にする例です。AES-128 / SAMPLE-AES 入力を使う場合は、それぞれの入力鍵と必要な IV を `input.hls_keys` に追加します。DASH 出力では `--to cenc` も指定できます。コンテンツの暗号化と、特定の DRM 用のライセンス情報の設定は別の操作です。
-
-## 音声のみの TS から fMP4 HLS への変換
-
-完了済みの音声のみの TS プレイリストから、clear、CBCS、AES-128 の fMP4 HLS を作れます。CBCS には `output.hls_key_uri` を持つ出力鍵設定を使います。暗号化入力にはそれとは別に入力鍵 URI の対応付けも必要です。
-
-```sh
-drmr convert audio-ts/master.m3u8 --to cbcs --format hls \
-  --output audio-fmp4-hls --keys-file config/hls-output.json
-drmr verify audio-fmp4-hls/master.m3u8 \
-  --source audio-ts/master.m3u8 --keys-file config/hls-output.json --json
-```
-
-音声トラック全体を分離してから、Shaka Packager で新しいセグメントを作ります。44.1 kHz の AAC は Rust で読み、原本の 90 kHz の時刻と実際の音声レートを保持した作業用 fMP4 を用意します。48 kHz の経路では Shaka Packager でトラックを分離します。Rust が全サンプル・設定・時刻を検査し、`--decode` を指定すると FFmpeg/FFprobe による全体のデコードと照合を追加します。原本の PES の順序、全 AAC フレーム、絶対時刻での PTS・DTS を維持し、照合の基準にします。二秒のセグメント目標に合わせて AAC フレームを切り落とすことはしません。従来の 48 kHz の回帰試験に使う TS 入力は 470 フレームで、一チャンネルあたり 481,280 サンプルを保持します。再生範囲を 480,000 サンプルに指定したプログレッシブ MP4 原本とは、再生する範囲が異なります。
-
-## FairPlay 向け SAMPLE-AES TS の生成と復号
-
-```sh
-drmr convert clear-ts/media.m3u8 --to hls-sample-aes --format hls-ts \
-  --output fairplay-ts --keys-file config/sample-aes-output.json
-drmr verify fairplay-ts/master.m3u8 --source clear-ts/media.m3u8 \
-  --keys-file config/sample-aes-output.json --json
-```
-
-対応する SAMPLE-AES TS を復号して clear にする場合は、次のように指定します。
-
-```sh
-drmr convert encrypted-ts/media.m3u8 --to clear --format hls-ts \
-  --output clear-ts --keys-file config/sample-aes-source.json
-drmr verify clear-ts/master.m3u8 --source encrypted-ts/media.m3u8 \
-  --keys-file config/sample-aes-source.json --json
-```
-
-SAMPLE-AES TS は入力・出力の両方に対応しています。これらは既知の鍵でのメディア変換で、FairPlay のライセンス取得を行いません。
-
-## PlayReady の明示シグナリング
-
-次は `system: "playready"` の専用設定です。PlayReady 単独でも `system: "multi-drm"` を使う場合は、[第5章](#key-configuration)の設定と第3章の入力条件に従います。
-
-`auto`・`stitch` では、対応する Clear MP4 から CENC または CBCS の DASH を作る場合に使えます。`segments` の入力条件は第3章を参照してください。次の signaling を持つ出力設定を使い、鍵はご自身の値へ置き換えてください。
+次の全文を `keys.json` に保存し、第5章に従って所有者だけがアクセスできるようにします。値はすべて公開のテスト用です。PSSH は記載した KID と一致する完全な box です。実運用では鍵・KID・PSSH・ライセンス URL・鍵 URI を対応する値に置き換えてください。入力は clear なので `input` はありません。同じダミー鍵を使っていますが、二つの出力鍵は別々に指定できます。
 
 ```json
 {
-  "schema_version": 1,
-  "output": {
-    "kid": "<32-hex-output-kid>",
-    "key": "<32-hex-output-key>",
-    "signaling": {
-      "system": "playready",
-      "license_url": "https://license.example.invalid/acquire"
+  "schema_version": 2,
+  "outputs": {
+    "dash": {
+      "kid": "00000000000000000000000000000001",
+      "key": "00112233445566778899aabbccddeeff",
+      "signaling": {
+        "system": "multi-drm",
+        "widevine_pssh": "000000327073736800000000edef8ba979d64acea3c827dcd51d21ed00000012121000000000000000000000000000000001",
+        "playready_license_url": "https://license.example.invalid/playready"
+      }
+    },
+    "hls": {
+      "kid": "00000000000000000000000000000001",
+      "key": "00112233445566778899aabbccddeeff",
+      "hls_key_uri": "skd://example",
+      "signaling": {
+        "system": "multi-drm",
+        "widevine_pssh": "000000327073736800000000edef8ba979d64acea3c827dcd51d21ed00000012121000000000000000000000000000000001",
+        "playready_license_url": "https://license.example.invalid/playready",
+        "fairplay": true
+      }
     }
   }
 }
 ```
 
+取得済みの原本を使う場合は、次の一回で入力検査・変換・原本との比較・内蔵マニフェスト検査・DRM 宣言の照合まで実行します。
+
 ```sh
-drmr convert qualified-clear.mp4 --to cbcs --format dash \
-  --output playready-dash --keys-file config/playready.json
+drmr convert source/input.m3u8 --outputs outputs.json \
+  --keys-file keys.json --output result
 ```
 
-この機能は一つの完全なファイルに含まれる H.264 映像と、AAC 音声があればその音声を対象にする限定プロファイルです。有限 AAC の変換対応表にあるすべての組み合わせに、シグナリングを追加できるわけではありません。既存の PSSH・保護情報や、保持できることを検証していない解釈不能なメタデータは拒否します。詳細な入力条件は公開の対応表を確認してください。
+生成されるマニフェストは `result/dash/manifest.mpd` と `result/hls/master.m3u8` です。メディアのディレクトリ構造は原本に従います。HLS と DASH は別々に生成し、物理的なセグメントファイルの共有は約束しません。全出力の検査を終えてから結果を配置し、一部だけの結果は公開しません。
 
-ライセンス URL は HTTP(S) の絶対 URL で、認証情報・フラグメント・空白・制御文字を含まず、UTF-8 で 4096 バイト以内です。指定した文字列をそのまま PSSH/PRO と MPD へ含め、URL へのリクエストは行いません。すべてのトラックの実初期化情報と MPD のシグナリングを照合します。検証結果の `license_playback_verified` は false のままです。
+暗号化入力では入力方式に合う `input.keys` または `input.hls_keys` を持つ鍵ファイルを使います。入力条件は第3章、完全な鍵ファイルの例は第8章にあります。別プロセスで結果を改めて確認する場合は、第6章の保存計画と `verify --plan` を使います。
+
+## ほかの出力への変更
+
+CENC の DASH/HLS では `target: "cenc"` と `drms: ["widevine", "playready"]` を選びます。HLS の FairPlay 設定と `hls_key_uri` は省き、PSSH に暗号方式が含まれる場合は cenc に合わせます。FairPlay は CENC では使えません。
+
+FairPlay TS は `format: "hls-ts"`、`target: "hls-sample-aes"`、`drms: ["fairplay"]` を指定し、鍵設定は `key`・明示 `iv`・`hls_key_uri`・FairPlay の `signaling` にします。MP4 の `kid` は指定しません。第8章の TS 出力例と[複数出力の説明（英語）](https://github.com/kazuhide/drmr/blob/main/docs/multiple-outputs.md)を参照してください。
+
+従来の単一出力 `system: "playready"` は別の入力条件を持ちます。新しい例の `system: "multi-drm"` と混同しないでください。[DRM 情報の指定と条件（英語）](https://github.com/kazuhide/drmr/blob/main/docs/drm-signaling.md)に記載しています。
 
 # 8. URL 入力の取得と変換
 
-## 原本の取得から計画・変換・検証までの手順
+## URL から一回のコマンドで変換する
 
-次の例はClear HLS を取得して CBCS の DASH に変換する手順です。第5章の `config/keys.json` には出力鍵だけを設定します。`&&` でつなぐと、成功した場合だけ次のコマンドに進み、失敗した時点で止まります。取得後の `--metadata-only` は宣言内容の概要を確認する操作で、不要なら省略できます。
+第7章の `outputs.json` と `keys.json` を使う場合は、URL を直接 `convert` に渡せます。取得・入力検査・変換・原本との比較・内蔵マニフェスト検査・DRM 宣言の照合まで実行します。
 
 ```sh
-drmr analyze "https://example.com/vod/master.m3u8" \
-  --download-dir ./saved-source &&
-drmr analyze --metadata-only ./saved-source/input.m3u8 &&
-drmr plan ./saved-source/input.m3u8 --to cbcs --format dash \
-  --output ./converted-dash --save ./conversion.plan.json &&
-drmr convert --plan ./conversion.plan.json --keys-file config/keys.json &&
-drmr verify --plan ./conversion.plan.json --keys-file config/keys.json
+drmr convert "https://example.com/vod/master.m3u8" \
+  --download-dir source --outputs outputs.json \
+  --keys-file keys.json --output result
 ```
 
-原本全体を取得する URL 解析では、`--download-dir`、計画ファイル、出力先に互いに別の新しいパスを指定します。親ディレクトリは既存のものを使います。既存ファイルの上書きや取得先の自動再利用はしません。ローカル入力では `--download-dir` や `--fetch-policy` は不要です。
+入力保存先の `source` と出力先の `result` は互いに別の新しいパスにします。親ディレクトリは既存のものを使います。既存の取得先の自動再利用や結果の上書きはしません。ローカル入力では `--download-dir` と `--fetch-policy` は不要です。解析や計画保存を分ける場合は第6章を使います。
 
-MP4、static DASH、配信が完結した HLS を URL から取得できます。形式は取得した内容で判別するため、URL に拡張子がなくても利用できます。クエリの有無や、許可されたリダイレクトの有無で形式が決まることはありません。
+MP4、静的な DASH、配信が完結した HLS を URL から取得できます。形式は取得した内容で判別するため、拡張子は必須ではありません。クエリや許可されたリダイレクトの有無で形式が決まることはありません。
 
 | URL の入力形式 | 保存後に使うローカルファイル | 取得できる構成 |
 | --- | --- | --- |
@@ -762,7 +635,7 @@ MP4、static DASH、配信が完結した HLS を URL から取得できます�
 | DASH | `saved-source/input.mpd` | 静的な一つの `Period` と、有限のテンプレート、リスト、対応する単一ファイルの索引 |
 | HLS | `saved-source/input.m3u8` | 対応条件を満たす、配信が完結した TS/fMP4 プレイリスト |
 
-DASH または MP4 では、上のローカル入力パスを表に合わせます。DASH は参照する初期化ファイルとセグメントをすべて保存し、`input.mpd` の参照をローカルに書き換えます。元の MPD は別に残し、暗号化情報、DRM 初期化データの PSSH、時系列情報を保持します。
+DASH または MP4 を保存後に再利用する場合は、入力パスを表に合わせます。DASH は参照する初期化ファイルとセグメントをすべて保存し、`input.mpd` の参照をローカルに書き換えます。元の MPD は別に残し、暗号化情報、DRM 初期化データの PSSH、時系列情報を保持します。
 
 取得後の解析にはローカル入力と同じコーデック・トラック・暗号・時刻の条件を適用します。ライブ、HLS のバイト範囲による参照、複数の DASH Period、階層を持つ索引や外部の索引、繰り返し回数が負の時系列指定は対象外です。DASH で対応するバイト範囲を使う場合も、参照元のファイル全体を保存します。これらは実装上の制限で、形式として変換が不可能という意味ではありません。
 
@@ -774,49 +647,20 @@ HLS は元のプレイリストとリソースを保存し、メディア参照�
 
 取得するファイルの参照関係、保持するパス、作成したファイルの管理記録、検証中に併存するファイル一覧には、合計 128 MiB のメタデータ上限があります。長いパスや深いディレクトリ構造では、ファイル数の上限より先にこの上限に達することがあります。ファイルを作る前に必要量を確認し、取得済み原本を使っている間もメモリ予算に含めます。リソース本体は逐次ファイルに書き出し、ワーカーのバッファや取得中だけ使う作業領域は別に見積もります。
 
-この手順で配信元へ接続するのは、最初の通常の `analyze` だけです。取得が完了した原本は後の処理が失敗しても残り、未完了の取得は受け付けません。`convert URL --download-dir NEW_DIR` なら計画保存なしで取得・変換できます。
+URL の直接変換は取得した原本をその後の変換と照合に使います。ローカルに保存した後の処理で、配信元へ再接続する必要はありません。
 
-## URL 入力からの複数 DRM 出力
-
-入力が対応する clear TS HLS の URL であれば、第6章の `outputs.json` と、第5章の version 2 の鍵ファイルを使って次のように進めます。
+## 保存した原本を再利用する
 
 ```sh
-drmr analyze "https://example.com/vod/master.m3u8" \
-  --download-dir ./multi-source --json
-drmr plan ./multi-source/input.m3u8 --outputs outputs.json \
-  --output multi-result --save multi.plan.json --json
-drmr convert --plan multi.plan.json \
-  --keys-file config/multi-keys.json --json
-drmr verify --plan multi.plan.json \
-  --keys-file config/multi-keys.json --json
+drmr convert source/input.m3u8 --outputs outputs.json \
+  --keys-file keys.json --output retry-result
 ```
 
-保存した一つの原本をすべての出力に使います。URL からの取得後も、第3章で説明した処理方式ごとの DRM 入力条件が適用されます。
+取得が完了すれば、配信元へ接続せずに保存した原本を使えます。DASH は `source/input.mpd`、MP4 は `source/input.mp4` を指定します。取得済みの原本は後の変換に失敗しても残ります。未完了の取得は受け付けません。
 
-取得と変換を一回のコマンドで行い、計画ファイルを保存しない使い方は次のとおりです。
+出力の配置直前まで、原本の内容とローカル参照を確認します。途中で原本が改変・削除された場合は出力を配置しません。URL の再実行に既存の取得先を渡す代わりに、保存したローカルファイルを入力にしてください。
 
-```sh
-drmr convert "https://example.com/vod/master.m3u8" \
-  --download-dir ./multi-source --outputs outputs.json \
-  --output multi-result --keys-file config/multi-keys.json --json
-```
-
-どちらの例でも、実行時には新しい原本保存先と出力先を選びます。URL を直接変換する場合も、取得時に記録したファイルの所有関係と内容を照合し、すべての出力を配置する直前まで確認します。
-
-## 保存した原本のオフライン利用
-
-```sh
-drmr convert saved-source/input.m3u8 --to cbcs --format hls \
-  --output retry-hls --keys-file config/hls-output.json
-drmr verify retry-hls/master.m3u8 --source saved-source/input.m3u8 \
-  --keys-file config/hls-output.json --json
-```
-
-取得が完了すれば、配信元へ再接続せずに保存した原本で処理と検証ができます。変換に失敗しても、取得済みの原本は残ります。ダウンロードが未完了のデータを原本として使うことはありません。停止時は取得やメディア処理を止めてから、一時ファイルを削除します。
-
-出力の配置直前にも保存した原本とローカル参照を確認します。取得後に原本が改変・削除されていた場合は出力を配置しません。URL からの取得を再開するために、取得済みのディレクトリを指定することもできません。再実行には保存したローカルのエントリーポイントを使ってください。
-
-`convert --plan` は保存済みの出力先を使い、入力・暗号方式・形式・出力先の上書きや、既存の結果への上書きを拒否します。別の出力先を選ぶ場合は新しい計画を作ります。完成済みの結果を改めて確認する場合は `verify --plan` を使います。
+`convert --plan` では入力・形式・暗号方式・出力先を上書きできません。別の条件や出力先を使う場合は、新しい計画を作ります。完成した結果の独立検証には `verify --plan` を使います。
 
 ## 取得ポリシー
 
@@ -868,17 +712,15 @@ drmr convert "https://example.com/vod/master.m3u8" \
 
 ## 変換例の準備と鍵ファイル {#recipe-setup}
 
-対応表の出力方式から例を開き、入力の暗号化方式に合う**4コマンドの組を一つ選んで**実行します。Clear 入力と暗号化入力の例は分けています。記載した暗号化方式でコマンドが同じ場合は一つの例にまとめているので、入力方式に合う鍵設定を使ってください。macOS/Linux などの POSIX シェル用で、行末の `\` は同じコマンドの続きです。`&&` で失敗時に止め、ファイルを介して処理をつなぎます。`|` は標準出力を渡す仕組みです。`https://example.com` の URL は差し替えてください。
+各例から完全な `outputs.json` と、必要な場合の `keys.json` を開けます。出力指定を `outputs.json`、入力方式に合う鍵設定を `keys.json` として保存してください。暗号化入力用の鍵ファイルには入力・出力の両方の設定があり、断片を合成する必要はありません。JSON の項目と代表例は第5〜7章で説明しています。コマンドが二つある例では、入力に合う方だけ一回実行します。
 
-所有者だけがアクセスできる既存の作業ディレクトリで実行します。入力を保存する `src`、`plan.json`、`result`（MP4 は `result.mp4`）は新規作成のため、同名のものがない場所を選びます。`mkdir` や `cd` は不要です。再実行時は各パスを揃えて変更するか、別の作業場所を使います。取得条件は `analyze` に `--fetch-policy config/fetch.json` を追加します。[設定例](#url-input)を参照してください。
+値はすべて公開のテスト用です。URL、入力の KID と鍵、鍵 URI、必要な IV、出力鍵を実際の値に置き換えてください。`outputs.json` は schema 3、名前付き鍵ファイルは schema 2 です。clear 入力には `input` を置かず、clear 出力には出力鍵を置きません。両方 clear なら鍵ファイル自体が不要です。出力 ID と鍵設定の名前を一致させます。
 
-鍵が必要なら[第5章の構造例と権限設定](#key-configuration)に従い、`config/keys.json` をこの作業場所の `keys.json` に置き換えます。原本・出力の中には置きません。`schema_version: 1` を使い、Clear 側の `input` または `output` は省略します。`analyze` と `plan` は暗号化入力の鍵だけ、`convert` と `verify` は入力・出力それぞれの暗号化に使う鍵が必要です。両方 Clear なら鍵ファイルは不要です。
+所有者だけがアクセスできる作業場所で、[第5章の権限設定](#key-configuration)に従って鍵ファイルを保護します。取得先 `src` と結果の `result` は、同名のものがない新しいパスにしてください。`mkdir`・`cd`・計画ファイルは不要です。再実行には別の保存先を選ぶか、取得済みのローカル入力を使います。追加の認証や origin 許可が必要な場合は、`convert` に `--fetch-policy config/fetch.json` を追加します。設定例はこの章にあります。
 
-CENC/CBCS 入力は `input.keys`、AES-128 と TS SAMPLE-AES は `input.hls_keys` に絶対鍵 URI と必要な IV を設定します。cenc/cbcs 出力は `output.kid` と `output.key`、HLS は identity の鍵宣言に使う `output.hls_key_uri` も必要です。他の出力項目や DRM を明示する設定は第5章に例があります。入力鍵と出力鍵は別の値にできます。鍵 URI やライセンス URL には接続しません。
+入力は[第3章の対応条件](#supported-profiles)を満たすものとします。MP4・DASH・fMP4 HLS の例は映像1トラックを想定しています。MP4 から TS へは対応するフラグメント化 MP4 を使います。TS から MP4 へは映像一つと音声一つまでで、複数画質のマスターは使う映像と関連する音声に絞ります。音声のみの TS は 44.1 kHz または 48 kHz の AAC-LC が対象です。映像・音声を含む TS 出力は別プレイリストになります。
 
-入力は[第3章の対応条件](#supported-profiles)を満たすものとします。MP4・DASH・fMP4 HLS の例は映像1トラックを想定しています。MP4 から TS への変換には、前述の TS 出力条件を満たすフラグメント化 MP4 を使います。TS から MP4 への変換は映像一つと音声一つまでで、複数画質のマスターは使う映像と関連する音声に絞ります。TS 映像は音声を含められ、音声のみの TS は 44.1 kHz または 48 kHz の AAC-LC が対象です。映像・音声を含む TS 出力は別プレイリストになります。
-
-HLS や DASH の DRM 情報を明示する場合は、[第6章の複数出力の手順と対応条件](#inspect-plan)を使います。
+以下は DRM を明示しない暗号変換の例です。明示的な Widevine・PlayReady・FairPlay は[第7章の設定例](#local-conversion)を使います。鍵・ライセンス URI に接続する機能ではありません。macOS/Linux などの POSIX シェル用で、行末の `\` は同じコマンドの続きです。
 
 {{conversion-examples}}
 

@@ -1,0 +1,17 @@
+{
+  "schema_version": 2,
+  "input": {
+    "keys": [
+      {
+        "kid": "000102030405060708090a0b0c0d0e0f",
+        "key": "00112233445566778899aabbccddeeff"
+      }
+    ]
+  },
+  "outputs": {
+    "hls-ts": {
+      "key": "ffeeddccbbaa99887766554433221100",
+      "hls_key_uri": "https://keys.example.invalid/content.key"
+    }
+  }
+}

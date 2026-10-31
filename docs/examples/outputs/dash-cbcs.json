@@ -1,0 +1,11 @@
+{
+  "schema_version": 3,
+  "outputs": [
+    {
+      "id": "dash",
+      "format": "dash",
+      "target": "cbcs",
+      "drms": []
+    }
+  ]
+}

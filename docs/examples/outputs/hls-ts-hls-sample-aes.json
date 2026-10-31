@@ -1,0 +1,11 @@
+{
+  "schema_version": 3,
+  "outputs": [
+    {
+      "id": "hls-ts",
+      "format": "hls-ts",
+      "target": "hls-sample-aes",
+      "drms": []
+    }
+  ]
+}

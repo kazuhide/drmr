@@ -2,12 +2,29 @@
 
 Install `drmr` before following these examples. Rust checks complete supported media by default. Native analysis and verification need no external media tools. Complete-track packaging uses Shaka Packager; progressive MP4 copying and decryption run in Rust. Optional `--decode` adds complete FFmpeg decoding. Run `drmr doctor` to check installed external tools. The [Docker guide](docker.md) provides an alternative with those tools included. Commands process existing media; they do not encode new video qualities. For PowerShell examples and Windows file permissions, see the [Windows guide](windows.md).
 
-Use the [multiple-output workflow](multiple-outputs.md) to produce HLS for FairPlay
-and CBCS DASH for Widevine/PlayReady from one qualified source. It uses the same
-`plan`, `convert`, and `verify` commands, with explicit per-output formats, DRM
-information, native manifest linting, and optional [external manifest checks](manifest-validation.md).
+Start with the [configuration reference](configuration.md): prepare `outputs.json`
+and, if needed, `keys.json`, then run `convert` once. The same settings format
+handles one to eight outputs. The [multiple-output example](multiple-outputs.md)
+produces HLS and DASH with explicit DRM selections, native manifest linting and
+optional [external manifest checks](manifest-validation.md).
 
 ## Choose a workflow
+
+For the usual acquire-and-convert operation, use a supported URL with the complete
+settings files from the [configuration examples](configuration.md#clear-source-to-encrypted-hls):
+
+```sh
+drmr convert "https://example.com/vod/master.m3u8" \
+  --download-dir source \
+  --outputs outputs.json --keys-file keys.json \
+  --output result
+```
+
+Clear input needs no input keys; clear output needs no output key entry. When
+both are clear, omit `--keys-file` entirely. Direct `convert` checks the source,
+plans in memory, converts and compares the actual outputs, and checks final
+manifests before publication. These checks do not need separate command steps.
+Use the operations below when you need their separate reports or saved conditions.
 
 For qualified local MP4, DASH, or HLS media, start with the common commands:
 `analyze --metadata-only` reads metadata, `analyze` checks complete source media, `plan` describes
@@ -320,6 +337,11 @@ and `retained: true`. Source URLs and request headers are excluded. Local
 conversions retain their existing result shape.
 
 ### Separate input and output keys
+
+The examples in this section use the single-output `--to`/`--format` interface
+and key-file schema 1. For `--outputs`, use the [named-output key-file reference](configuration.md#keysjson)
+with schema 2 and an `outputs` object, even for one output. The formats are not
+interchangeable.
 
 Supply keys in an owner-only JSON configuration; there is no environment fallback. Store this outside the output tree and version control. Here is its structure using placeholders; replace each placeholder with your own hexadecimal value before use:
 

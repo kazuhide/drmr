@@ -1,4 +1,4 @@
-# Plan, convert, and verify several outputs
+# Convert to several named outputs
 
 Use an output list when one source needs several delivery formats or different
 digital rights management (DRM) systems. For example, a supported clear HLS
@@ -8,8 +8,13 @@ transport-stream presentation can produce:
 - fragmented MP4 HLS encrypted with `cbcs`, with FairPlay information;
 - transport-stream HLS encrypted with `SAMPLE-AES`, with FairPlay information.
 
-Choose the outputs you need. The common `plan`, `convert`, and `verify` commands
-name every output explicitly. Native checks cover every selected sample, configuration, clock and supported playback window. Add `--decode` at saved planning to require complete decoding for every later execution and verification, or at runtime to strengthen the saved minimum. New named-output plans use schema 10 and bind source filenames, resource placement and DASH addressing for each output. Earlier plans retain their saved behavior: schema 2 keeps its decoded minimum, schema 4 its saved depth, and schema 6 its processing choices. See [verification depth](verification.md).
+Prepare `outputs.json` and a private `keys.json`, then run `convert` once. The
+same format works for one to eight outputs. See the [configuration reference](configuration.md)
+for required fields, defaults, input-key variants and single-output examples.
+The optional `plan --save` and `verify --plan` workflow is described below.
+Native checks cover every selected sample, configuration, clock and supported
+playback window. Add `--decode` for complete decoding as an additional condition.
+See [verification depth](verification.md).
 
 ## Describe the outputs
 
@@ -17,21 +22,19 @@ Save this as `outputs.json`:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 3,
   "outputs": [
     {
       "id": "dash",
       "format": "dash",
       "target": "cbcs",
-      "drms": ["widevine", "playready"],
-      "conformance": "required"
+      "drms": ["widevine", "playready"]
     },
     {
       "id": "hls",
       "format": "hls",
       "target": "cbcs",
-      "drms": ["fairplay"],
-      "conformance": "required"
+      "drms": ["widevine", "playready", "fairplay"]
     }
   ]
 }
@@ -45,12 +48,12 @@ replace that output with:
   "id": "hls-ts",
   "format": "hls-ts",
   "target": "hls-sample-aes",
-  "drms": ["fairplay"],
-  "conformance": "required"
+  "drms": ["fairplay"]
 }
 ```
 
-`conformance: "required"` requests an external check of the final output
+These examples use native media and manifest checks by default. Add
+`conformance: "required"` to request an external check of the final output
 manifests. Install the [manifest validation tools](manifest-validation.md) first.
 Use `"none"`, or omit this field, when you do not request those external checks.
 Native manifest linting and complete internal media verification run in either case. A requested tool
@@ -65,11 +68,11 @@ unsupported combinations, and arbitrary child paths are refused.
 ### Select processing for each output
 
 `--processing` supplies one default for the output list. To choose different
-modes, use output-recipe schema 2 and set `processing` on individual outputs:
+modes, set `processing` on individual outputs in the schema-3 file:
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "outputs": [
     {"id":"hls-ts","format":"hls-ts","target":"hls-sample-aes","drms":["fairplay"],"processing":"segments"},
     {"id":"dash","format":"dash","target":"cbcs","drms":["widevine","playready"],"processing":"stitch"}
@@ -81,8 +84,9 @@ For a qualified clear TS source, this requests HLS TS at its original segment
 boundaries and DASH fMP4 with new segmentation. `segments` preserves sample
 membership and clocks; `stitch` joins when needed and packages the selected
 format. `auto` selects a qualified route. Omitted per-output values use the CLI
-default. Recipe schema 1 remains supported and refuses the new `processing`
-field. These recipe versions are separate from the private key-file versions.
+default. Earlier recipe versions remain accepted: schema 1 has no per-output
+processing field, while schemas 2 and 3 accept it. These recipe versions are
+separate from the private key-file versions.
 
 ### Select DASH references for each output
 
@@ -110,28 +114,32 @@ the [source layout](source-layout.md); no layout selector is needed.
 The output list and saved plan contain no keys, license addresses, or DRM
 initialization data. Use a protected, schema-version-2 key file for the shared
 input keys and separate output settings. Its `outputs` names must match the
-encrypted output IDs. Clear outputs have no entry. This template uses
-placeholders and must be completed with the values issued for your content:
+encrypted output IDs. Clear outputs have no entry. The complete example below
+uses public dummy values, including a complete Widevine PSSH with the matching
+KID. Replace all of them with the values issued for your content. The two output
+key domains are independent, even though these test values are identical:
 
 ```json
 {
   "schema_version": 2,
   "outputs": {
     "dash": {
-      "kid": "<32 hexadecimal characters>",
-      "key": "<32 hexadecimal characters>",
+      "kid": "00000000000000000000000000000001",
+      "key": "00112233445566778899aabbccddeeff",
       "signaling": {
         "system": "multi-drm",
-        "widevine_pssh": "<complete Widevine PSSH box, hexadecimal or base64>",
+        "widevine_pssh": "000000327073736800000000edef8ba979d64acea3c827dcd51d21ed00000012121000000000000000000000000000000001",
         "playready_license_url": "https://license.example.invalid/playready"
       }
     },
     "hls": {
-      "kid": "<32 hexadecimal characters>",
-      "key": "<32 hexadecimal characters>",
-      "hls_key_uri": "skd://<content-identifier>",
+      "kid": "00000000000000000000000000000001",
+      "key": "00112233445566778899aabbccddeeff",
+      "hls_key_uri": "skd://example",
       "signaling": {
         "system": "multi-drm",
+        "widevine_pssh": "000000327073736800000000edef8ba979d64acea3c827dcd51d21ed00000012121000000000000000000000000000000001",
+        "playready_license_url": "https://license.example.invalid/playready",
         "fairplay": true
       }
     }
@@ -142,8 +150,9 @@ placeholders and must be completed with the values issued for your content:
 PSSH means Protection System Specific Header: initialization information used by
 a DRM client. Supply a complete Widevine PSSH box, rather than only its payload.
 It must declare at least one 16-byte key identifier, and every identifier must
-match that output's `kid`. An explicitly declared protection scheme must be
-`cbcs`. drmr checks it and generates the PlayReady information
+match that output's `kid`. If the PSSH explicitly declares an encryption scheme,
+it must match the selected target: `cbcs` here, or `cenc` for CTR output. drmr
+checks it and generates the PlayReady information
 from the configured key identifier and license address. For HLS, it writes the
 FairPlay key declaration using `hls_key_uri`. No license service or advertised key
 address is contacted.
@@ -152,9 +161,9 @@ For the transport-stream output, use an `hls-ts` key entry instead:
 
 ```json
 {
-  "key": "<32 hexadecimal characters>",
-  "iv": "<32 hexadecimal characters>",
-  "hls_key_uri": "skd://<content-identifier>",
+  "key": "00112233445566778899aabbccddeeff",
+  "iv": "00000000000000000000000000000002",
+  "hls_key_uri": "skd://example",
   "signaling": {
     "system": "multi-drm",
     "fairplay": true
@@ -168,16 +177,67 @@ identifier. Output key domains are independent; choose each one explicitly.
 For encrypted source media, the shared `input` object uses the same `keys` and
 `hls_keys` fields as the [single-output key file](usage.md#separate-input-and-output-keys).
 
-The `auto` and `stitch` multi-DRM profile admits supported clear HLS transport streams
-and the qualified clear MP4 profile. Other source layouts or existing DRM
-metadata are refused by this profile. Existing conversions without explicit DRM
-information retain their [documented source profiles](conversion-support.md).
-For `segments` outputs, supported clear or known-key encrypted TS can produce
-TS FairPlay, while supported fMP4 can produce fMP4 HLS FairPlay or CBCS DASH
-with Widevine/PlayReady. Source and output containers must match. See the
-[DRM source conditions](drm-signaling.md).
+The `auto` and `stitch` multi-DRM profiles accept qualified clear or known-key
+encrypted MP4, DASH and HLS sources, subject to their native codec, track,
+playback-window and metadata conditions. For `segments`, fMP4 remains fMP4 for
+DASH/HLS output, and TS remains TS for HLS output. Container changes use
+`stitch`. See the [DRM source conditions](drm-signaling.md) and
+[conversion limits](conversion-support.md); selecting a DRM name does not
+qualify an otherwise unsupported source.
+
+## Convert once
+
+For clear input, the complete key file above has no `input` object. Protect the
+file as described in the [configuration reference](configuration.md#before-running-an-example),
+then run:
+
+```sh
+drmr convert "https://example.com/vod/master.m3u8" \
+  --download-dir source \
+  --outputs outputs.json --keys-file keys.json \
+  --output result
+```
+
+The source is downloaded once and retained. Direct `convert` checks and plans the
+source in memory, creates the outputs with bounded parallel workers, and
+compares them with the original before publishing the result. No separate
+`analyze`, `plan` or `verify` is required to obtain those checks. For clear HLS TS
+with two or more `stitch` fMP4 HLS/DASH outputs, it also shares joining, track
+separation and clear-media preparation. Each output receives its own working
+copy for encryption. Input checking is not a persistent cache: a later command
+reads and checks the current files again.
+
+The generated entrypoints are:
+
+```text
+result/
+  dash/manifest.mpd
+  hls/master.m3u8
+```
+
+Each directory also contains its initialization files, media segments and child
+playlists. An `hls-ts` output has its own TS resources; an `mp4` output named
+`file` is `result/file/media.mp4`. DASH and HLS are packaged independently;
+physical sharing of their media files is not guaranteed.
+
+For an already downloaded or local source, replace the URL with its entrypoint
+and omit `--download-dir`:
+
+```sh
+drmr convert source/input.m3u8 --outputs outputs.json \
+  --keys-file keys.json --output result
+```
+
+Use a new result path. For encrypted input, add its shared source mappings to
+`input` in the version-2 key file. Clear outputs have no named key entry. The
+[complete key-file examples](configuration.md#keysjson) cover both cases.
 
 ## Analyze, save, execute, and verify
+
+Use this alternative when the original fingerprints and conversion conditions
+need to be saved before execution. New named-output plans use schema 10 and bind
+source filenames, resource placement and DASH addressing. Older plans retain
+their recorded minimum verification depth and processing behavior.
 
 ```sh
 drmr analyze "https://example.com/vod/master.m3u8" --download-dir ./source --json
@@ -210,36 +270,12 @@ the Unix permission command. Both commands also accept `--hls-validator-bin` for
 the Apple executable and `--dash-validator-bin` for the PHP executable used by
 the local DASH-IF adapter. Runtime executable locations are not saved in a plan.
 
-For the first example, the result contains:
-
-```text
-result/
-  dash/manifest.mpd
-  hls/master.m3u8
-```
-
-Each directory also contains its initialization files, media segments, and any
-child playlists. An `hls-ts` output has its own transport-stream resources.
-This implementation packages the requested outputs separately, including DASH
-and fragmented MP4 HLS; it does not promise shared physical media files.
-
-For one operation without saving a plan, use:
-
-```sh
-drmr convert ./source/input.m3u8 --outputs ./outputs.json --output ./result --keys-file ./keys.json --json
-```
-
-URL input uses the same output list and still requires `--download-dir`. Use a
-saved plan when you want a later `verify --plan` to check the exact original
-fingerprints and output selections.
-
-Direct `convert` qualifies and plans the source within the same operation, then
-creates and verifies the outputs with bounded parallel workers. For clear HLS TS
-with two or more `stitch` fMP4 HLS/DASH outputs, it also shares joining,
-track separation and clear-media preparation. Each output receives its own
-working copy for encryption. Final source-to-result comparisons and publication
-guards still run; input checking is not a persistent cache. A separately executed
-saved plan or `verify` reads and checks the current files again.
+This optional workflow reads the source again at each command boundary. Use it
+when saved conditions or a fresh independent comparison are useful, rather than
+repeating it after every direct conversion. `verify` has no `--outputs` option;
+named-output verification uses the generated plan and the matching version-2 key
+file. `verify OUTPUT --source INPUT` is the separate direct interface and uses a
+version-1 key file.
 
 ## Publication and verification
 

@@ -1,5 +1,6 @@
-"""Check the public examples' route coverage and CLI intent."""
+"""Check complete example files and their clear/encrypted command boundaries."""
 import importlib.util
+import json
 from pathlib import Path
 import re
 import shlex
@@ -8,99 +9,121 @@ import unittest
 
 TOOLS = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("conversion_examples", TOOLS / "conversion_examples.py")
-EXAMPLES = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(EXAMPLES)
+examples = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(examples)
+OUTPUTS = {
+    "mp4": ("clear", "cenc", "cbcs"),
+    "dash": ("clear", "cenc", "cbcs"),
+    "hls": ("clear", "cenc", "cbcs", "hls-aes128"),
+    "hls-ts": ("clear", "hls-aes128", "hls-sample-aes"),
+}
 
 
-class ConversionExamples(unittest.TestCase):
-    def test_exact_supported_route_inventory(self):
-        expected = set()
-        for source in ("mp4", "dash", "hls-fmp4", "hls-ts-video", "hls-ts-audio"):
-            outputs = ("mp4", "dash", "hls", "hls-ts")
-            for output in outputs:
-                targets = {"mp4": ("clear", "cenc", "cbcs"), "dash": ("clear", "cenc", "cbcs"),
-                           "hls": ("clear", "cenc", "cbcs", "hls-aes128"),
-                           "hls-ts": ("clear", "hls-aes128", "hls-sample-aes")}[output]
-                expected.update((source, output, target) for target in targets)
-        self.assertEqual(set(EXAMPLES.routes()), expected)
-        self.assertEqual(len(EXAMPLES.routes()), 65)
-        self.assertEqual(len({EXAMPLES.identifier(*route) for route in expected}), 65)
+class ConversionExampleTests(unittest.TestCase):
+    def test_complete_key_files_have_exact_input_and_output_roles(self):
+        directory = TOOLS.parent / "docs/examples/keys"
+        expected = {f"{format}-{target}-from-{mode}.json"
+                    for format, targets in OUTPUTS.items() for target in targets
+                    for mode in (("cenc-cbcs", "hls-aes128", "hls-sample-aes", "clear")
+                                 if target != "clear" else ("cenc-cbcs", "hls-aes128", "hls-sample-aes"))}
+        self.assertEqual({path.name for path in directory.glob("*.json")}, expected)
+        for name in expected:
+            with self.subTest(name=name):
+                format, rest = next((format, name[len(format) + 1:])
+                                    for format in sorted(OUTPUTS, key=len, reverse=True)
+                                    if name.startswith(format + "-"))
+                target, mode = rest[:-5].split("-from-")
+                config = json.loads((directory / name).read_text(encoding="utf-8"))
+                self.assertEqual(set(config), {"schema_version", "outputs"} | ({"input"} if mode != "clear" else set()))
+                self.assertEqual(config["schema_version"], 2)
+                if mode == "cenc-cbcs":
+                    self.assertEqual(config["input"], {"keys": [{
+                        "kid": "000102030405060708090a0b0c0d0e0f",
+                        "key": "00112233445566778899aabbccddeeff"}]})
+                elif mode != "clear":
+                    key = {"uri": "https://example.com/keys/content.key",
+                           "key": "00112233445566778899aabbccddeeff"}
+                    if mode == "hls-sample-aes":
+                        key.update(uri="skd://source-content", iv="000102030405060708090a0b0c0d0e0f")
+                    self.assertEqual(config["input"], {"hls_keys": [key]})
+                if target == "clear":
+                    self.assertEqual(config["outputs"], {})
+                    continue
+                key = {"key": "ffeeddccbbaa99887766554433221100"}
+                if target in ("cenc", "cbcs"):
+                    key["kid"] = "101112131415161718191a1b1c1d1e1f"
+                if format in ("hls", "hls-ts"):
+                    key["hls_key_uri"] = "https://keys.example.invalid/content.key"
+                if target == "hls-sample-aes":
+                    key["iv"] = "000102030405060708090a0b0c0d0e0f"
+                self.assertEqual(config["outputs"], {format: key})
+        self.assertEqual(examples.key_artifacts(),
+                         {name: (directory / name).read_text(encoding="utf-8") for name in expected})
 
-    def test_every_example_has_four_matching_cli_operations(self):
-        input_profiles = {
-            "mp4": ("clear", "cenc", "cbcs"), "dash": ("clear", "cenc", "cbcs"),
-            "hls-fmp4": ("clear", "cenc", "cbcs", "hls-aes128"),
-            "hls-ts-video": ("clear", "hls-aes128", "hls-sample-aes"),
-            "hls-ts-audio": ("clear", "hls-aes128", "hls-sample-aes"),
+    def test_direct_commands_omit_keys_only_for_clear_to_clear(self):
+        for source, format, target in examples.routes():
+            extension = "mp4" if source == "mp4" else "mpd" if source == "dash" else "m3u8"
+            for protection in examples.INPUTS[source]["protections"]:
+                with self.subTest(source=source, format=format, target=target, protection=protection):
+                    command = examples.commands(source, format, target, protection)
+                    expected = ["drmr", "convert", f"https://example.com/input.{extension}",
+                                "--download-dir", "src", "--outputs", "outputs.json", "--output", "result"]
+                    if protection != "clear" or target != "clear":
+                        expected += ["--keys-file", "keys.json"]
+                    self.assertEqual(shlex.split(command.replace("\\\n", "")), expected)
+
+    def test_complete_output_files_define_all_thirteen_choices(self):
+        expected = {f"{format}-{target}.json": {"schema_version": 3, "outputs": [
+            {"id": format, "format": format, "target": target, "drms": []}]}
+            for format, targets in OUTPUTS.items() for target in targets}
+        directory = TOOLS.parent / "docs/examples/outputs"
+        actual = {path.name: json.loads(path.read_text(encoding="utf-8")) for path in directory.iterdir()}
+        self.assertEqual(actual, expected)
+        self.assertEqual(examples.output_artifacts(),
+                         {name: (directory / name).read_text(encoding="utf-8") for name in expected})
+
+    def test_both_languages_link_complete_files_with_matching_commands(self):
+        values = []
+        fence = chr(96) * 3
+        for locale in ("en", "ja"):
+            markdown = examples.markdown(locale)
+            self.assertNotIn(fence + "json", markdown)
+            blocks = re.findall("^" + fence + r"sh\n(.*?)^" + fence + "$", markdown, re.M | re.S)
+            self.assertEqual(len(blocks), 65)
+            self.assertEqual(markdown.count(" --outputs outputs.json "), 85)
+            for operation in ("plan", "analyze", "verify"):
+                self.assertNotIn("drmr " + operation, markdown)
+            for (source, format, target), code in zip(examples.routes(), blocks):
+                extension = "mp4" if source == "mp4" else "mpd" if source == "dash" else "m3u8"
+                direct = (f'drmr convert "https://example.com/input.{extension}" \\\n'
+                          '  --download-dir src --outputs outputs.json --output result')
+                expected = (direct + " --keys-file keys.json\n" if target != "clear" else
+                            "# Clear input\n" + direct + "\n\n# Encrypted input\n" + direct + " --keys-file keys.json\n")
+                self.assertEqual(code, expected)
+            values.append(blocks)
+        self.assertEqual(values[0], values[1])
+
+    def test_all_encrypted_example_links_exist_and_match_source_key_type(self):
+        expected_modes = {
+            "mp4": ("cenc-cbcs",), "dash": ("cenc-cbcs",),
+            "hls-fmp4": ("cenc-cbcs", "hls-aes128"),
+            "hls-ts-video": ("hls-aes128", "hls-sample-aes"),
+            "hls-ts-audio": ("hls-aes128", "hls-sample-aes"),
         }
-        checked = 0
-        for source, output, target in EXAMPLES.routes():
-            for protection in input_profiles[source]:
-                with self.subTest(source=source, output=output, target=target, protection=protection):
-                    code = EXAMPLES.commands(source, output, target, protection)
-                    self.assertTrue(all(len(line) <= 72 for line in code.splitlines()))
-                    lines = re.sub(r"\\\n[ \t]*", " ", code).splitlines()
-                    self.assertEqual(len(lines), 4)
-                    commands = [shlex.split(line) for line in lines]
-                    self.assertEqual([command[1] for command in commands], ["analyze", "plan", "convert", "verify"])
-                    self.assertTrue(all(command[-1] == "&&" for command in commands[:3]))
-                    self.assertNotIn("&&", commands[3])
-                    for index, command in enumerate(commands):
-                        if index < 3:
-                            command.pop()
-                        needs_keys = protection != "clear" or (index >= 2 and target != "clear")
-                        self.assertEqual("--keys-file" in command, needs_keys)
-                        if needs_keys:
-                            self.assertEqual(command[command.index("--keys-file") + 1], "keys.json")
-                        self.assertNotIn("--json", command)
-                    plan = commands[1]
-                    for flag, value in (("--to", target), ("--format", output), ("--save", "plan.json"),
-                                        ("--output", "result.mp4" if output == "mp4" else "result")):
-                        self.assertEqual(plan[plan.index(flag) + 1], value)
-                    for command in commands[2:]:
-                        self.assertEqual(command[command.index("--plan") + 1], "plan.json")
-                        self.assertNotIn("--to", command)
-                    extension = "mp4" if source == "mp4" else "mpd" if source == "dash" else "m3u8"
-                    name = "clear" if protection == "clear" else "encrypted"
-                    self.assertEqual(commands[0][2], f"https://example.com/{name}.{extension}")
-                    self.assertIn(f'analyze "https://example.com/{name}.{extension}"', code.splitlines()[0])
-                    self.assertEqual(commands[0][commands[0].index("--download-dir") + 1], "src")
-                    self.assertEqual(plan[2], "src/input." + extension)
-                    checked += 1
-        self.assertEqual(sum(map(len, input_profiles.values())), 16)
-        self.assertEqual(checked, 208)
+        for source, modes in expected_modes.items():
+            self.assertEqual(examples.input_key_modes(source), modes)
+        for path in re.findall(r"https://github.com/kazuhide/drmr/blob/main/(docs/examples/(?:keys|outputs)/[^)]+)",
+                               examples.markdown("en")):
+            self.assertTrue((TOOLS.parent / path).is_file(), path)
 
-    def test_locales_retain_identical_commands_and_recipe_identifiers(self):
-        en, ja = (EXAMPLES.markdown(locale) for locale in ("en", "ja"))
-        self.assertEqual(re.findall(r"\{#(recipe-[a-z0-9-]+)\}", en), re.findall(r"\{#(recipe-[a-z0-9-]+)\}", ja))
-        self.assertEqual(re.findall(r"```sh\n(.*?)```", en, re.S), re.findall(r"```sh\n(.*?)```", ja, re.S))
-        self.assertEqual(en.count("```sh"), 65)
-        self.assertEqual(len(re.findall(r"^# .+ input$", en, re.M)), 130)
-        self.assertNotEqual(en, ja)
-
-    def test_equivalent_encrypted_inputs_share_one_labeled_command_group(self):
-        for source in EXAMPLES.INPUTS:
-            clear = EXAMPLES.commands(source, "dash", "clear", "clear")
-            self.assertNotIn("--keys-file", clear)
-            profiles = EXAMPLES.INPUTS[source]["protections"][1:]
-            commands = [EXAMPLES.commands(source, "dash", "clear", p) for p in profiles]
-            self.assertEqual(len(set(commands)), 1)
-            self.assertEqual(commands[0].count("--keys-file keys.json"), 4)
-            label = " / ".join(EXAMPLES.PROTECTIONS[p] for p in profiles) + " input"
-            self.assertIn("# " + label, EXAMPLES.markdown("en"))
-
-    def test_unsupported_routes_and_locales_are_refused(self):
-        for route in (("mp4", "hls-ts", "cenc"), ("mp4", "hls", "hls-sample-aes"),
-                      ("mp4; exit", "mp4", "clear")):
-            with self.subTest(route=route), self.assertRaises(ValueError):
-                EXAMPLES.commands(*route, "clear")
-        for source, protection in (("mp4", "hls-aes128"), ("dash", "hls-sample-aes"),
-                                   ("hls-fmp4", "hls-sample-aes"), ("hls-ts-video", "cenc"),
-                                   ("hls-ts-audio", "cbcs"), ("mp4", "clear; exit")):
-            with self.subTest(source=source, protection=protection), self.assertRaises(ValueError):
-                EXAMPLES.commands(source, "dash", "clear", protection)
-        with self.assertRaises(ValueError):
-            EXAMPLES.markdown("unknown")
+    def test_unknown_profiles_are_refused(self):
+        for action in (lambda: examples.markdown("fr"),
+                       lambda: examples.commands("mp4", "hls-ts", "cenc", "clear"),
+                       lambda: examples.commands("mp4", "mp4", "clear", "hls-aes128"),
+                       lambda: examples.key_config("mp4", "clear", "../escape"),
+                       lambda: examples.key_filename("mp4", "clear", "clear")):
+            with self.assertRaises(ValueError):
+                action()
 
 
 if __name__ == "__main__":

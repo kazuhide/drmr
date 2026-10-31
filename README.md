@@ -10,7 +10,7 @@ The CLI is the primary interface. The local web console and optional [Desktop ho
 
 [Project website (English)](https://kazuhide.github.io/drmr/) · [Japanese website](https://kazuhide.github.io/drmr/ja/)
 
-[Web user guide (English)](https://kazuhide.github.io/drmr/guide/) · [Japanese web guide](https://kazuhide.github.io/drmr/ja/guide/) · [CLI usage](docs/usage.md) · [Conversion support](docs/conversion-support.md)
+[Web user guide (English)](https://kazuhide.github.io/drmr/guide/) · [Japanese web guide](https://kazuhide.github.io/drmr/ja/guide/) · [Configuration reference](docs/configuration.md) · [CLI usage](docs/usage.md) · [Conversion support](docs/conversion-support.md)
 
 [Releases and compatibility](docs/releases.md) · [Changelog](CHANGELOG.md)
 
@@ -63,59 +63,92 @@ For the full source test suite, install [Bento4](https://www.bento4.com/download
 
 ## Start here
 
-```sh
-drmr doctor
-drmr analyze /path/to/media.mp4 --metadata-only
-drmr analyze /path/to/media.mp4 --json
-drmr plan /path/to/manifest.mpd --to cbcs --format dash,hls
-drmr convert --help
-drmr verify --help
+Choose an output in `outputs.json` and, when encryption is involved, supply a
+private `keys.json`. One `convert` command handles source acquisition, analysis,
+conversion, media comparison and native manifest checks. It publishes the result
+only after those checks pass; separate `analyze`, `plan` and `verify` commands
+are optional.
+
+For example, this `outputs.json` requests CBCS fMP4 HLS for FairPlay:
+
+```json
+{
+  "schema_version": 3,
+  "outputs": [
+    {"id": "hls", "format": "hls", "target": "cbcs", "drms": ["fairplay"]}
+  ]
+}
 ```
 
-`analyze --metadata-only` reads MP4 metadata or DASH/HLS declarations from a local input or HTTP(S) URL without keys or external tools. It does not retain a URL source or verify complete media. Without that flag, `analyze` checks complete source media and identifies candidate output formats. Without `--save`, `plan INPUT --to ...` describes conditional intent from metadata. The former `inspect` command has been removed; see the [pre-release migration](docs/releases.md#pre-release-cli-consolidation).
+For an unencrypted source, `keys.json` needs only the output settings:
 
-Use global `--progress text` for a live terminal status and a history of finished stages, or `--progress json` for detailed observations on standard error. Standard output remains the final result. The default `auto` mode uses text for readable results. With `--json`, it also shows text when standard error is a terminal and stays silent when standard error is redirected. Redirected text records stage changes and occasional updates. Explicit `text`, `json` or `off` overrides that choice. See [progress output](docs/usage.md#progress-output) for examples and scope.
-
-To retain a supported HLS, static DASH or MP4 URL, save fixed conversion conditions, execute them offline,
-and verify against the retained original:
-
-```sh
-drmr analyze "https://example.com/vod/master.m3u8" --download-dir ./source --json
-drmr plan ./source/input.m3u8 --to cbcs --format dash --output ./result --save ./conversion.plan.json --json
-drmr convert --plan ./conversion.plan.json --keys-file ./keys.json --json
-drmr verify --plan ./conversion.plan.json --keys-file ./keys.json --json
+```json
+{
+  "schema_version": 2,
+  "outputs": {
+    "hls": {
+      "kid": "00000000000000000000000000000001",
+      "key": "00112233445566778899aabbccddeeff",
+      "hls_key_uri": "skd://example",
+      "signaling": {"system": "multi-drm", "fairplay": true}
+    }
+  }
+}
 ```
 
-Use a private [key configuration](docs/usage.md#separate-input-and-output-keys)
-with an output key for CBCS. A saved plan contains source fingerprints and the
-requested output intent, with runtime keys supplied separately. See the
-[four-step guide](docs/executable-plans.md) for supported input, result checks,
-source retention, and the difference from metadata-only planning. Replace the
-example URL with a DASH MPD or MP4 URL and use `source/input.mpd` or
-`source/input.mp4` for the plan. URL format detection uses the response content.
+These are public dummy values. Replace them with your source and issued key
+material; drmr does not fetch a key or license from the advertised URI. Keep the
+key file outside version control and the media directories, with owner-only
+access (`chmod 600 keys.json` on macOS/Linux; use [ACLs on Windows](docs/windows.md)).
+Select new source and result paths under existing parent directories. Then run:
 
-For HLS FairPlay and DASH Widevine/PlayReady from the same supported clear
-transport-stream source, save an [output list](docs/multiple-outputs.md) and use
-`plan --outputs outputs.json --output result --save conversion.plan.json`.
-Each output has its own format, protection, DRM systems, and external
-manifest-check policy. `convert --plan` publishes the complete result directory
-after all outputs pass; `verify --plan` checks them again against the original.
+```sh
+drmr convert "https://example.com/vod/master.m3u8" \
+  --download-dir source \
+  --outputs outputs.json --keys-file keys.json \
+  --output result
+```
+
+The entrypoint is `result/hls/master.m3u8`; the retained source is
+`source/input.m3u8`. Replace the illustrative URL before running. For local
+input, pass its path and omit `--download-dir`. Encrypted input adds its own
+source-key mappings; clear-to-clear conversion omits `keys.json` and
+`--keys-file` entirely.
+
+The [configuration reference](docs/configuration.md) explains every field,
+default and key role, with complete examples. The same output-list format works
+for one to eight outputs. See [several named outputs](docs/multiple-outputs.md)
+for DASH Widevine/PlayReady together with HLS carrying three DRM declarations.
+[Conversion examples](https://kazuhide.github.io/drmr/#support) link each input
+and output to the matching recipe. Container, codec, track and playback-window
+conditions remain mandatory; a valid settings file does not qualify arbitrary
+media or license services.
+
+Use `analyze --metadata-only INPUT` for a quick key-free read of local or HTTP(S)
+MP4, DASH or HLS declarations. It does not retain a URL source or verify complete
+media. Use the [saved-plan workflow](docs/executable-plans.md) when you want to
+inspect the source first, fix its fingerprints and destination, then run
+`convert --plan` and a fresh independent `verify --plan`. `plan` reads your
+output list; `plan --save` produces a different generated execution-plan file.
+
+Use global `--progress text` for a live terminal status and a history of finished
+stages, or `--progress json` for detailed observations on standard error. Standard
+output remains the final result. The default `auto` mode shows text with `--json`
+when standard error is a terminal and stays silent when it is redirected.
+Explicit `text`, `json` or `off` overrides that choice. See
+[progress output](docs/usage.md#progress-output).
+
 The built-in Rust linter checks final HLS/DASH manifests during conversion and
-full verification. Use `verify OUTPUT --manifest-only` to check manifests
-separately, and add `--external-validator` for Apple or DASH-IF checks.
-See [manifest validation](docs/manifest-validation.md) for rule coverage,
-report scopes, and optional tool setup.
+full verification. Use `verify OUTPUT --manifest-only` for a separate manifest
+check, and add `--external-validator` for optional Apple or DASH-IF checks.
+See [manifest validation](docs/manifest-validation.md) for coverage and setup.
+Matching encryption and DRM declarations does not prove license acquisition or
+playback on a particular device.
 
-`doctor` discovers executable files without running them. Use `drmr doctor --probe --route dash-presentation` to check the native conversion tools for a selected route; add `--decode` to check the additional decoder tools. The report shows the actual resolved paths and distinguishes required tools from optional tools. These checks do not prove that a particular asset can be processed.
-
-Use `convert INPUT --to ... --format ... --output ...` with a protected key configuration, then `verify OUTPUT --source INPUT` for independent comparison. See [conversion support](docs/conversion-support.md) for the tested protection routes, TS output options, and precise input profiles.
-
-For a supported HLS, static DASH or MP4 URL, use `convert URL --download-dir ./source` with the target and output options below. The saved source can be reused offline. DASH acquisition accepts one static Period with finite duration or timeline templates, explicit lists, or supported flat single-file indexes. Supported DASH byte ranges retain the complete referenced object; HLS byte ranges, live input and hierarchical or external DASH indexes are refused. New downloads and segmented outputs retain source-relative media directories. See [DASH references](docs/dash-addressing.md) and the [usage guide](docs/usage.md) for conditions, configuration examples, and output.
-
-The common converter can also write explicit Widevine/PlayReady DASH and
-FairPlay HLS information for qualified clear transport-stream HLS and clear MP4.
-See [DRM signaling](docs/drm-signaling.md) for the input profiles, separate
-runtime settings, generated declarations, and independent library checks.
+`doctor` discovers executable files without running them. Use
+`drmr doctor --probe --route dash-presentation` to check native conversion tools
+for a selected route; add `--decode` to check decoder tools. These checks do not
+prove that a particular asset can be processed.
 
 ## Supported input
 

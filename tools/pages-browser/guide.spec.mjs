@@ -7,7 +7,7 @@ import { completeMatrixKey } from './matrix.mjs';
 import { guideChapters, guideLocales, guideObservation, requireGuideLayout,
   guideScrollObservation, requireGuideMovement, guideFiguresObservation, requireGuideFigures,
   requireGuideCheckpoint, requireGuideCodeEdge, requireGuidePrintCode, guideSourceExampleCount } from './guide.mjs';
-import { matrixRecipes } from './recipes.mjs';
+import { matrixRecipes, matrixRecipeExampleCount } from './recipes.mjs';
 
 const live = liveMode(process.env.PAGES_LIVE);
 const origin = live ? publicOrigin : localOrigin;
@@ -18,7 +18,7 @@ async function expectedCodeCount(locale) {
   const path = `site-content/guide/${locale.language}.md`;
   const source = await readFile(new URL('../../' + path, import.meta.url));
   expect(digest(source)).toBe(test.info().config.metadata.builderInputHashes[path]);
-  return guideSourceExampleCount(source.toString('utf8'), matrixRecipes.length);
+  return guideSourceExampleCount(source.toString('utf8'), matrixRecipeExampleCount);
 }
 function identity(info) {
   return { schema_version: 1, suite: 'guide', source_head: info.config.metadata.sourceHead,

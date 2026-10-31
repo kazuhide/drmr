@@ -1,7 +1,7 @@
 # Guide maintenance
 
 The English and Japanese Markdown files are the user-facing source for the
-twenty-chapter web guide. Keep commands, key roles, format restrictions and links
+eighteen-chapter web guide. Keep commands, key roles, format restrictions and links
 aligned across languages. Record the content update date in both frontmatter
 blocks.
 
