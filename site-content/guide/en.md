@@ -591,9 +591,9 @@ MP4, static DASH and completed HLS are accepted within their profiles. The respo
 
 | URL input | Retained local entrypoint | Acquisition profile |
 | --- | --- | --- |
-| MP4 | `saved-source/input.mp4` | One complete MP4 within the supported local media profiles |
-| DASH | `saved-source/input.mpd` | One static `Period`, finite templates or lists, or a supported single-file index |
-| HLS | `saved-source/input.m3u8` | Completed TS/fMP4 playlists within the supported input profiles |
+| MP4 | `source/input.mp4` | One complete MP4 within the supported local media profiles |
+| DASH | `source/input.mpd` | One static `Period`, finite templates or lists, or a supported single-file index |
+| HLS | `source/input.m3u8` | Completed TS/fMP4 playlists within the supported input profiles |
 
 For offline reuse of DASH or MP4, choose the local entrypoint from the table. DASH saves every referenced initialization and media file. Its localized `input.mpd` retains protection declarations, PSSH DRM initialization data and the timeline. HLS localizes media references and relative key identifiers. Original manifests are kept separately and may contain signed URLs. Acquisition leaves encrypted media and initialization bytes unchanged.
 
