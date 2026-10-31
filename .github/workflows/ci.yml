@@ -21,7 +21,11 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  scope:
+    uses: ./.github/workflows/ci-scope.yml
   verify:
+    needs: scope
+    if: ${{ needs.scope.outputs.profile == 'full' }}
     name: Rust / ${{ matrix.os }} / ${{ matrix.rust }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -108,6 +112,8 @@ jobs:
           retention-days: 14
 
   core-tests:
+    needs: scope
+    if: ${{ needs.scope.outputs.profile == 'full' }}
     name: Rust core / ${{ matrix.os }} / ${{ matrix.rust }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
@@ -165,6 +171,8 @@ jobs:
           retention-days: 14
 
   console-browser:
+    needs: scope
+    if: ${{ needs.scope.outputs.profile == 'full' }}
     name: Console / Chromium / common CLI workflow
     runs-on: ubuntu-24.04
     # Include pinned media and browser setup without changing test deadlines.
@@ -256,6 +264,8 @@ jobs:
           if-no-files-found: error
 
   release:
+    needs: scope
+    if: ${{ needs.scope.outputs.profile == 'full' }}
     name: CLI release / ${{ matrix.os }} / ${{ matrix.rust }}
     # Build and qualify concurrently; merge and publication still require every
     # verification job in this workflow to succeed for the same source.
@@ -335,4 +345,37 @@ jobs:
             ${{ runner.temp }}/cli-archive-verification.json
             ${{ runner.temp }}/cli-media-qualification.json
           if-no-files-found: error
+          retention-days: 14
+
+  qualification:
+    name: CI / required checks
+    if: ${{ always() }}
+    needs: [scope, verify, core-tests, console-browser, release]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Check out the complete source graph
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install the qualification Python runtime
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13.12'
+      - name: Require the classified route and actual native job results
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: python3 tools/ci_contract.py gate --workflow ci.yml --report "$RUNNER_TEMP/ci-qualification.json"
+      - name: Preserve the qualification decision
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: required-qualification-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-qualification.json
+          if-no-files-found: warn
           retention-days: 14

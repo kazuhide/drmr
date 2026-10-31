@@ -42,6 +42,7 @@ jobs:
           python -W error::ResourceWarning -m unittest discover -s tools/tests -p test_build_guide_site.py -v
           python tools/build_guide_site.py --check
           python -W error::ResourceWarning -m unittest discover -s tools/tests -p test_check_site.py -v
+          python -W error::ResourceWarning -m unittest discover -s tools/tests -p test_conversion_examples.py -v
           python tools/check_site.py --root site --report "$RUNNER_TEMP/site-report.json"
 
       - name: Upload only the validated website
