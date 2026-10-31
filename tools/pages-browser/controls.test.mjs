@@ -632,7 +632,7 @@ function recipeSample(recipe = matrixRecipes.find(value => value.id === 'recipe-
   const keyLink = mode => ({ text: mode === 'clear' ? 'keys.json'
     : { 'cenc-cbcs': 'cenc / cbcs', 'hls-aes128': 'AES-128', 'hls-sample-aes': 'SAMPLE-AES' }[mode],
     href: root + `keys/${recipe.format}-${recipe.target}-from-${mode}.json` });
-  const command = keys => `drmr convert "https://example.com/input.${extension}" \\\n  --download-dir src --outputs outputs.json --output result${keys ? ' --keys-file keys.json' : ''}\n`;
+  const command = keys => `drmr convert "https://example.com/input.${extension}" \\\n  --download-dir src --outputs outputs.json \\\n  --output result${keys ? ' --keys-file keys.json' : ''}\n`;
   const code = encrypted ? command(true)
     : '# Clear input\n' + command(false) + '\n# Encrypted input\n' + command(true);
   const entrypoint = `result/${recipe.format}/` + (recipe.format === 'mp4' ? 'media.mp4'
@@ -751,6 +751,33 @@ test('all linked output and key examples are complete matching schema-3 and sche
   assert.equal(inspected.outputs.size, 13); assert.equal(inspected.keys.size, 48);
   for (const role of ['outputs', 'keys']) assert.deepEqual(
     readdirSync(new URL(role + '/', directory)).filter(name => name.endsWith('.json')).sort(), [...inspected[role]].sort());
+});
+
+test('every recipe command fits 64 columns and keeps both literal continuations adjacent', () => {
+  for (const expected of matrixRecipes) {
+    const good = recipeSample(expected);
+    requireRecipe(good, expected);
+    const code = good.blocks[3].code;
+    assert.ok(code.split('\n').every(line => line.length <= 64));
+    assert.throws(() => requireRecipe(mutateRecipeCode(good, value => value.replaceAll(
+      ' outputs.json \\\n  --output', ' outputs.json --output')), expected), /64 columns/);
+    const groups = code.trimEnd().split('\n\n');
+    for (let groupIndex = 0; groupIndex < groups.length; groupIndex++) {
+      const lines = groups[groupIndex].split('\n');
+      const first = expected.target === 'clear' ? 1 : 0;
+      assert.equal(lines.length, first + 3);
+      for (const continuation of [first, first + 1]) {
+        assert.ok(lines[continuation].endsWith(' \\'));
+        for (const change of [value => value.slice(0, -1), value => value + ' ',
+          value => value + '\n', value => value + '\n \t ']) {
+          const changed = [...lines]; changed[continuation] = change(changed[continuation]);
+          const mutated = groups.map((group, index) => index === groupIndex ? changed.join('\n') : group).join('\n\n') + '\n';
+          assert.throws(() => requireRecipe(mutateRecipeCode(good, () => mutated), expected),
+            `${expected.id}: group ${groupIndex}, continuation ${continuation}`);
+        }
+      }
+    }
+  }
 });
 
 test('identical keyed conversions share one exact command while clear output retains both key roles', () => {

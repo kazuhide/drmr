@@ -67,7 +67,8 @@ def commands(source, output, target, input_protection):
     extension = INPUTS[source]["source"].rsplit(".", 1)[1]
     runtime_keys = " --keys-file keys.json" if input_protection != "clear" or target != "clear" else ""
     return (f'drmr convert "https://example.com/input.{extension}" \\\n'
-            f'  --download-dir src --outputs outputs.json --output result{runtime_keys}\n')
+            '  --download-dir src --outputs outputs.json \\\n'
+            f'  --output result{runtime_keys}\n')
 
 
 def output_spec(output, target):

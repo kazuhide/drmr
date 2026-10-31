@@ -82,6 +82,17 @@ class ConversionExampleTests(unittest.TestCase):
         self.assertEqual(examples.output_artifacts(),
                          {name: (directory / name).read_text(encoding="utf-8") for name in expected})
 
+    def test_generated_commands_keep_readable_physical_line_width(self):
+        commands = [examples.commands(source, format, target, protection)
+                    for source, format, target in examples.routes()
+                    for protection in examples.INPUTS[source]["protections"]]
+        self.assertLessEqual(max(len(line) for command in commands for line in command.splitlines()), 64)
+        for command in commands:
+            lines = command.splitlines()
+            self.assertEqual(len(lines), 3)
+            self.assertTrue(all(line.endswith(" \\") for line in lines[:2]))
+            self.assertFalse(lines[2].endswith("\\"))
+
     def test_both_languages_link_complete_files_with_matching_commands(self):
         values = []
         fence = chr(96) * 3
@@ -96,7 +107,7 @@ class ConversionExampleTests(unittest.TestCase):
             for (source, format, target), code in zip(examples.routes(), blocks):
                 extension = "mp4" if source == "mp4" else "mpd" if source == "dash" else "m3u8"
                 direct = (f'drmr convert "https://example.com/input.{extension}" \\\n'
-                          '  --download-dir src --outputs outputs.json --output result')
+                          '  --download-dir src --outputs outputs.json \\\n  --output result')
                 expected = (direct + " --keys-file keys.json\n" if target != "clear" else
                             "# Clear input\n" + direct + "\n\n# Encrypted input\n" + direct + " --keys-file keys.json\n")
                 self.assertEqual(code, expected)

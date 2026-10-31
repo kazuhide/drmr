@@ -517,7 +517,9 @@ def validate_recipe_commands(code, row, output_format, target, encrypted_input=F
     extension = "mp4" if row == "mp4" else "mpd" if row == "dash" else "m3u8"
     keys = " --keys-file keys.json" if encrypted_input or target != "clear" else ""
     expected = (f'drmr convert "https://example.com/input.{extension}" \\\n'
-                f'  --download-dir src --outputs outputs.json --output result{keys}\n')
+                '  --download-dir src --outputs outputs.json \\\n'
+                f'  --output result{keys}\n')
+    require(all(len(line) <= 64 for line in code.splitlines()), token)
     require(code.replace("\r\n", "\n") == expected, token)
 
 
