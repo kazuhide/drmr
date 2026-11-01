@@ -4,6 +4,7 @@ import contextlib
 import io
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -154,6 +155,30 @@ class CodecMatrix(unittest.TestCase):
             self.assertEqual(status, 1)
             self.assertNotIn("private-marker", output.getvalue() + report.read_text())
             self.assertIn('"success": false', report.read_text())
+
+    def test_metadata_timeouts_and_malformed_child_reports_have_only_fixed_diagnostics(self):
+        for error in (subprocess.TimeoutExpired(["private-marker"], 1), AttributeError("private-marker")):
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                source = root / "source"
+                source.mkdir()
+                report = root / "report.json"
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output), patch.object(RUN, "qualify_archive", side_effect=error):
+                    status = RUN.main(["--archive", "private-marker", "--target", "aarch64-apple-darwin", "--expected-version", "1.0.3",
+                                       "--source", str(source), "--report", str(report)])
+                self.assertEqual(status, 1)
+                self.assertNotIn("private-marker", output.getvalue() + report.read_text())
+
+    def test_failure_stage_is_fixed_and_unknown_child_fields_remain_private(self):
+        case = CONTRACT.cases("smoke")[0]
+        for stage, expected in (("codec-convert", "codec-convert"), ("private-marker", None)):
+            error = RUN.SUPPORT.Refusal("command-failed", stage=stage, evidence={"exit_code": 1,
+                "fixed_cli_code": "dash-nominal-timescale-not-representable", "raw": "private-marker"})
+            result = RUN.failure(case, error)
+            self.assertEqual(result.get("failed_stage"), expected)
+            self.assertEqual(result["failure_detail"]["fixed_cli_code"], "dash-nominal-timescale-not-representable")
+            self.assertNotIn("private-marker", str(result))
 
     def test_archive_requalification_refuses_dirty_source_before_execution(self):
         with patch.object(RUN.SUPPORT, "require_native"), patch.object(RUN.SUPPORT.VERIFY, "command", return_value=b" M source\n"), \

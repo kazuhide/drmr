@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import secrets
 import struct
+import subprocess
 import sys
 import xml.etree.ElementTree as ET
 
@@ -172,14 +173,19 @@ class Executor(BASE.Executor):
                 "source_unchanged": True, "destination_absent": True}
 
 
-ERRORS = (CONTRACT.Failure, BASE.CONTRACT.Failure, SUPPORT.Refusal, OSError, ValueError, TypeError, KeyError, ET.ParseError)
+ERRORS = (CONTRACT.Failure, BASE.CONTRACT.Failure, SUPPORT.Refusal, OSError, ValueError, TypeError, KeyError,
+          AttributeError, ET.ParseError, subprocess.SubprocessError)
+FAILURE_STAGES = frozenset(("codec-analyze", "codec-plan", "codec-convert", "codec-independent-verify", "codec-final-against-original"))
 
 
 def failure(case, error):
     # Every emitted description is fixed here or is an allowlisted classification
     # from the shared runner. Operator paths and child output never enter reports.
     code = str(error) if isinstance(error, CONTRACT.Failure) else "codec-operation-failed"
-    return {**case, "status": "failed", **BASE.failure_fields(error, code, "codec-qualification")}
+    result = {**case, "status": "failed", **BASE.failure_fields(error, code, "codec-qualification")}
+    if isinstance(error, SUPPORT.Refusal) and error.stage in FAILURE_STAGES:
+        result["failed_stage"] = error.stage
+    return result
 
 
 def execute_case(case, executor, profiles, seeds, fixtures, parent):
@@ -290,7 +296,7 @@ def qualify_archive(archive_path, target, version, source_root, scope="full", jo
         try:
             expected = SUPPORT.VERIFY.build_expectation(source, "cli", target, SUPPORT.VERIFY.metadata(source, "cli", target))
             archive = SUPPORT.VERIFY.qualify(snapshot, source, expected)
-        except SUPPORT.ARCHIVE_ERRORS:
+        except SUPPORT.ARCHIVE_ERRORS + (subprocess.SubprocessError,):
             raise CONTRACT.Failure("codec-archive-verification-failed") from None
         require(archive.get("success") is True, "codec-archive-verification-failed")
         binary_hash = archive["binaries"]["drmr"]["sha256"]
@@ -327,7 +333,7 @@ def main(argv=None):
                 and not args.report.resolve().is_relative_to(args.source.resolve()), "codec-report-destination-invalid")
         report_path = args.report
         result = qualify_archive(args.archive.resolve(), args.target, args.expected_version, args.source.resolve(), args.scope, args.jobs)
-    except (CONTRACT.Failure, BASE.CONTRACT.Failure, SUPPORT.Refusal, SUPPORT.VERIFY.Failure, OSError, ValueError, TypeError, KeyError):
+    except ERRORS + (SUPPORT.VERIFY.Failure,):
         result = {"schema_version": 1, "kind": "native-cli-codec-qualification", "success": False,
                   "failure_code": "codec-qualification-failed"}
     except KeyboardInterrupt:

@@ -60,7 +60,7 @@ impl Localization {
     }
 }
 struct Playlist {
-    maximum_segment_ms: Option<u32>,
+    cadence: super::processing::segment_target::cadence::FragmentCadence,
     combined: Option<File>,
     localization: Localization,
     initialization: Option<PathBuf>,
@@ -489,15 +489,14 @@ impl Playlist {
                 .as_mut()
                 .ok_or(ConversionError("hls-map-required"))?;
             clock.check(&plaintext, self.declared_duration)?;
-            if let Some((ticks, scale)) = clock.last_segment_interval()
-                && let Some(value) =
-                    super::processing::segment_target::cadence::milliseconds(ticks, scale)?
-            {
-                self.maximum_segment_ms = Some(
-                    self.maximum_segment_ms
-                        .map_or(value, |prior| prior.max(value)),
-                );
-            }
+            let value = clock
+                .last_segment_interval()
+                .map(|(ticks, scale)| {
+                    super::processing::segment_target::cadence::milliseconds(ticks, scale)
+                })
+                .transpose()?
+                .flatten();
+            self.cadence.push(value);
         } else {
             self.admit_transport(&plaintext, scanned)?;
             self.transport_segments
@@ -851,7 +850,7 @@ impl Localizer<'_> {
                 sample_transport,
                 empty_cue_pair: self.empty_cue.seen(),
                 target_seconds,
-                maximum_segment_ms: playlist.maximum_segment_ms,
+                maximum_segment_ms: playlist.cadence.request_ms(),
             },
         })
     }
@@ -961,7 +960,7 @@ fn localize_with(
     let target_seconds = super::processing::segment_target::declared_hls_seconds(text)?;
     let combined = localization.joined().then(|| stage.join("combined.mp4"));
     let playlist = Playlist {
-        maximum_segment_ms: None,
+        cadence: super::processing::segment_target::cadence::FragmentCadence::default(),
         combined: combined.as_deref().map(private_new).transpose()?,
         localization,
         initialization: None,

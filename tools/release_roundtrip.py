@@ -378,7 +378,7 @@ def qualify(inputs, target, source_root, jobs):
             codec_proof = codecs.qualify(cli, source, {"source_head": source.head, "source_tree": source.tree,
                             "target": target, "version": version, "archive_sha256": archive_report["archive_sha256"],
                             "binary_sha256": binary_hash}, workspace.path / "codecs", "full", jobs)
-        except (codecs.CONTRACT.Failure, codecs.BASE.CONTRACT.Failure, codecs.SUPPORT.Refusal):
+        except codecs.ERRORS + (codecs.SUPPORT.VERIFY.Failure,):
             raise CONTRACT.Failure("roundtrip-codec-qualification-failed") from None
         require(SUPPORT.VERIFY.file_digest(snapshot) == archive_report["archive_sha256"]
                 and SUPPORT.VERIFY.file_digest(cli) == binary_hash, "roundtrip-artifact-changed")

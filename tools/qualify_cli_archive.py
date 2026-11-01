@@ -63,7 +63,8 @@ CLI_FAILURE_CODES = frozenset((
     "media-tool-failed", "media-tool-unavailable-or-timeout", "temporary-workspace-unavailable",
     "temporary-file-unavailable", "key-file-invalid", "native-manifest-lint-failed", "resource-budget",
     "execution-plan-invalid", "execution-plan-source-changed", "invalid-input-media",
-    "round-trip-verification-failed", "source-normalization-verification-failed"))
+    "round-trip-verification-failed", "source-normalization-verification-failed",
+    "dash-nominal-timescale-not-representable", "hls-output-target-duration-mismatch"))
 
 
 class Refusal(RuntimeError):
@@ -812,7 +813,7 @@ def codec_media(cli, source, binding, root):
     specification.loader.exec_module(codecs)
     try:
         return codecs.qualify(cli, source, binding, root)
-    except (codecs.CONTRACT.Failure, codecs.BASE.CONTRACT.Failure, codecs.SUPPORT.Refusal):
+    except codecs.ERRORS + (codecs.SUPPORT.VERIFY.Failure,):
         raise Refusal("codec-qualification-failed") from None
 
 

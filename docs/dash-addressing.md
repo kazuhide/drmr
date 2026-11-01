@@ -21,6 +21,14 @@ Segment processing retains the existing media boundaries and does not select a n
 
 Each nominal template declares its finite final segment number (`endNumber`) and exact presentation extent (`presentationDuration`). Generated nominal templates do not use `eptDelta`: output compatibility does not depend on a player implementing that phase attribute. Audio may need a different MPD timescale to express its extent exactly; a timescale is the number of time units per second. These attributes use the MPEG-DASH full profile. They do not claim qualification under the more restrictive DASH-IF timing model. [MPEG-DASH schema](https://github.com/MPEGGroup/DASHSchema/blob/6th-Ed/DASH-MPD.xsd).
 
+A packaging request expressed in milliseconds can also require a finer MPD clock.
+drmr uses the smallest common integer scale needed for the media edges and the
+request's reduced fraction. For example, 2.083 seconds and media ticks at 12,288
+units per second are both exact at 1,536,000 units per second. Whole-second
+requests retain the existing scale. This changes manifest units only; media
+timestamps and the checks against every actual edge remain unchanged. A scale
+that exceeds the supported 32-bit range is refused.
+
 Some unequal boundaries, including a short first segment followed by a long regular cadence, cannot satisfy all of these conditions with one nominal duration. The command then fails with `dash-nominal-duration-not-representable`. Create a new plan using `--dash-addressing template-timeline` to declare exact boundaries. drmr does not change formats silently.
 
 ## Indexed files and verification

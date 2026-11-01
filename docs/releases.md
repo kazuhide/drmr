@@ -237,7 +237,8 @@ systems using archives from successful `CI` and `Windows` runs. Choose the two
 run IDs for the same exact source commit, then dispatch it without publishing:
 
 ```sh
-gh workflow run codec-archives.yml \
+gh workflow run codec-archives.yml --ref main \
+  -f source_sha=EXACT_SOURCE_COMMIT \
   -f ci_run_id=CI_RUN_ID -f windows_run_id=WINDOWS_RUN_ID
 ```
 

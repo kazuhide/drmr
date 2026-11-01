@@ -56,8 +56,14 @@ separate from the usual video segment length. For example, video segments can
 last 2.000 seconds while fractional AAC durations make the conservative common
 declaration 3. Asking a packager for three-second segments can then move a
 video cut to the next four-second access point and exceed that source bound.
-For HLS and DASH output, drmr measures the longest original resource interval
-for each selected video stream using admitted sample clocks. It selects a
+For HLS and DASH output, drmr measures resource intervals for each selected video
+stream using admitted sample clocks. For fragmented MP4, it uses the longest
+interior fragment interval. Reordered pictures and playback edges can make the
+first and final fragments shorter or longer than the regular cadence: a sequence
+of 1.916666667, 2, 2, 2 and 2.083333334 seconds still uses a two-second request.
+With only one or two fragments, no interior cadence is established, so the
+smaller observed interval supplies a conservative request. Transport streams
+retain their measured maximum video interval. drmr selects a
 packaging request no larger than those intervals or the inherited bound. Two-second video under
 a bound of 3 therefore uses a two-second request; six-second video under a bound
 of 6 keeps a six-second request. Audio-only input uses the selected bound.

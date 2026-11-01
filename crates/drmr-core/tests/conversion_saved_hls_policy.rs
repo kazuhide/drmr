@@ -5,7 +5,8 @@ mod source_policy;
 
 use drmr_core::{
     conversion::{
-        Converter, HlsInputKeys, InputKeys, ProcessingMode, VerificationSource,
+        ConversionRequest, Converter, HlsInputKeys, InputKeys, ProcessingMode, VerificationRequest,
+        VerificationSource,
         conformance::ManifestValidationTools,
         key_file::{BundleOperatorKeys, OperatorKeys},
         plan::{
@@ -30,6 +31,107 @@ fn converter() -> Converter {
         "packager",
         "ffmpeg",
     )
+}
+
+#[test]
+fn main10_boundary_fragments_do_not_change_the_saved_packaging_cadence() {
+    let root = common::private_tempdir().unwrap();
+    let seed =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/hevc-main10.mp4");
+    let keys = InputKeys::default();
+    let hls_keys = HlsInputKeys::default();
+    let native = || {
+        Converter::new(
+            Arc::new(ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink))),
+            "packager",
+            "must-not-run-ffmpeg",
+        )
+        .with_ffprobe("must-not-run-ffprobe")
+    };
+    let command = native();
+    let source_root = root.path().join("source");
+    let source = source_root.join("master.m3u8");
+    let first = command
+        .convert(ConversionRequest {
+            input: &seed,
+            output: &source_root,
+            format: OutputFormat::Hls,
+            target: TargetProtection::Clear,
+            input_keys: &keys,
+            hls_input_keys: &hls_keys,
+            output_key: None,
+            hls_key_uri: None,
+            hls_output_key: None,
+        })
+        .unwrap();
+    assert!(first.verification.passed);
+    let original = common::snapshot_tree(&source_root);
+    for mode in [ProcessingMode::Auto, ProcessingMode::Stitch] {
+        for format in [OutputFormat::Dash, OutputFormat::Hls] {
+            let output = root
+                .path()
+                .join(format!("{}-{}", mode.as_str(), format.as_str()));
+            let command = native().with_processing(mode);
+            let saved = command
+                .create_execution_plan(ExecutionPlanRequest {
+                    input: VerificationSource {
+                        input: &source,
+                        input_keys: &keys,
+                        hls_keys: &hls_keys,
+                    },
+                    output: &output,
+                    format: Some(format),
+                    target: TargetProtection::Clear,
+                })
+                .unwrap();
+            assert_eq!(
+                saved.processing.as_ref().unwrap().segment_duration_ms,
+                Some(2000)
+            );
+            let path = root
+                .path()
+                .join(format!("{}-{}.json", mode.as_str(), format.as_str()));
+            plan::write_new(&path, &saved).unwrap();
+            let reopened = plan::read(&path).unwrap();
+            assert!(
+                command
+                    .execute_plan(&reopened, &OperatorKeys::default())
+                    .unwrap()
+                    .verification
+                    .passed
+            );
+            assert!(
+                command
+                    .verify_plan(&reopened, &OperatorKeys::default())
+                    .unwrap()
+                    .verification
+                    .passed
+            );
+            let final_path = output.join(if format == OutputFormat::Dash {
+                "manifest.mpd"
+            } else {
+                "master.m3u8"
+            });
+            assert!(
+                command
+                    .verify(VerificationRequest {
+                        source: VerificationSource {
+                            input: &seed,
+                            input_keys: &keys,
+                            hls_keys: &hls_keys
+                        },
+                        output: VerificationSource {
+                            input: &final_path,
+                            input_keys: &keys,
+                            hls_keys: &hls_keys
+                        },
+                    })
+                    .unwrap()
+                    .passed
+            );
+            assert_eq!(common::snapshot_tree(&source_root), original);
+        }
+    }
 }
 
 fn source(root: &Path) -> PathBuf {
