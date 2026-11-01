@@ -136,6 +136,11 @@ jobs:
         with:
           python-version: '3.13.12'
 
+      - name: Check complete native test selection before compilation
+        run: |
+          python3 -W error::ResourceWarning -m unittest discover -s tools/tests -p test_ci_test_plan.py -v
+          python3 -W error::ResourceWarning -m unittest discover -s tools/tests -p test_core_test_order.py -v
+
       - name: Install the supported Rust toolchain
         run: |
           rust_channel="${{ matrix.rust }}"
@@ -154,7 +159,11 @@ jobs:
         id: rust-tests
         run: |
           set -euo pipefail
-          cargo test -p drmr-core --locked -- --nocapture 2>&1 | tee "$RUNNER_TEMP/rust-core-tests.log"
+          cargo test -p drmr-core --tests --locked --no-run --message-format=json > "$RUNNER_TEMP/core-test-build.jsonl"
+          python3 .github/scripts/core-test-order.py --build "$RUNNER_TEMP/core-test-build.jsonl" --plan "$RUNNER_TEMP/core-test-plan.json"
+          python3 .github/scripts/core-test-order.py --plan "$RUNNER_TEMP/core-test-plan.json" --execute early 2>&1 | tee "$RUNNER_TEMP/rust-core-tests.log"
+          python3 .github/scripts/core-test-order.py --plan "$RUNNER_TEMP/core-test-plan.json" --execute remaining 2>&1 | tee -a "$RUNNER_TEMP/rust-core-tests.log"
+          cargo test -p drmr-core --doc --locked -- --nocapture 2>&1 | tee -a "$RUNNER_TEMP/rust-core-tests.log"
 
       - name: Reject unexpected test skips
         if: ${{ !cancelled() && steps.rust-tests.outcome != 'skipped' }}
@@ -166,7 +175,9 @@ jobs:
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: rust-core-tests-${{ runner.os }}-${{ runner.arch }}-${{ matrix.rust }}
-          path: ${{ runner.temp }}/rust-core-tests.log
+          path: |
+            ${{ runner.temp }}/rust-core-tests.log
+            ${{ runner.temp }}/core-test-plan.json
           if-no-files-found: warn
           retention-days: 14
 

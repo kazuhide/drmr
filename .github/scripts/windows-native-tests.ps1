@@ -84,61 +84,28 @@ if ($LASTEXITCODE -ne 0) { throw 'The selected Rust compiler could not run as a 
 New-Item -ItemType Directory -Path $env:TEMP | Out-Null
 New-Item -ItemType Directory -Path $env:CARGO_HOME | Out-Null
 $executables = Get-Content (Join-Path $PSScriptRoot 'executables.json') | ConvertFrom-Json
-# Require critical protection cases to be present, then run each complete binary once.
-$coreExecutables = @($executables | Where-Object {
-    [IO.Path]::GetFileName($_) -match '^drmr_core-[0-9a-f]+\.exe$'
-})
-if ($coreExecutables.Count -ne 1) { throw 'The native core unit-test binary is ambiguous' }
-$coreExecutable = $coreExecutables[0]
-$layoutChecks = @(
-    'native::workspace::windows::tests::exclusive_media_child_creation_preserves_guards_and_existing_entries',
-    'conversion::files::relocation::tests::late_replacements_are_not_moved_or_deleted_by_source_mutations',
-    'conversion::layout::stage::tests::re_layout_moves_media_without_copying_and_rewrites_actual_hls_paths',
-    'conversion::download::layout_tests::source_download_keeps_nested_paths_and_child_relative_uris',
-    'conversion::download::owned::tests::entrypoint_publication_is_prepaid_before_moving_the_pending_original'
-)
-foreach ($check in $layoutChecks) {
-    $listing = & $coreExecutable --list --exact $check
-    if ($LASTEXITCODE -ne 0 -or $listing -notcontains "${check}: test") {
-        throw 'A required early layout test is missing'
-    }
-}
-$policyExecutables = @($executables | Where-Object {
-    [IO.Path]::GetFileName($_) -match '^conversion_saved_hls_policy-[0-9a-f]+\.exe$'
-})
-if ($policyExecutables.Count -ne 1) { throw 'The saved HLS policy test binary is ambiguous' }
-$policyExecutable = $policyExecutables[0]
-$policyChecks = @(
-    'new_single_plan_saves_the_actual_request_and_replays_the_source_bound_and_layout',
-    'single_schema_one_keeps_two_seconds',
-    'source_policy::legacy_segment_plans_keep_generated_seven_while_new_plans_inherit_six'
-)
-foreach ($check in $policyChecks) {
-    $listing = & $policyExecutable --list --exact $check
-    if ($LASTEXITCODE -ne 0 -or $listing -notcontains "${check}: test") {
-        throw 'A required saved HLS policy test is missing'
-    }
-}
+# Inventory the actual compiled tests, execute critical regressions first and
+# exclude them from the remaining groups. The planner validates every filter.
+$plan = Join-Path $PSScriptRoot 'test-plan.json'
+& python .github/scripts/native-test-plan.py --windows --executables (Join-Path $PSScriptRoot 'executables.json') --output $plan
+if ($LASTEXITCODE -ne 0) { throw 'The complete native test plan could not be established' }
+$planned = @(Get-Content -LiteralPath $plan -Raw | ConvertFrom-Json)
 . (Join-Path (Get-Location).Path '.github/scripts/windows-native-parallel.ps1')
 $budget = Get-DrmrNativeTestBudget
-# Start the two longest presentations first so shorter groups can fill free slots.
-$ordered = @($executables | Sort-Object @{ Expression = {
-    if ([IO.Path]::GetFileName($_) -match '^conversion_ts_output-') { 0 }
-    elseif ([IO.Path]::GetFileName($_) -match '^conversion_abr_hls-') { 1 }
-    else { 2 }
-} }, @{ Expression = { $_ } })
-$groups = @($ordered | ForEach-Object {
-    @{ executable = $_; arguments = @('--test-threads', [string]$budget.threads, '--nocapture') }
+$groups = @($planned | ForEach-Object {
+    @{ executable = $_.executable; arguments = @($_.arguments) + @('--test-threads', [string]$budget.threads, '--nocapture'); expected_tests = @($_.tests).Count }
 })
-$results = @(Invoke-DrmrNativeTestGroups -Groups $groups -Directory (Join-Path $PSScriptRoot 'groups') -Workers $budget.workers)
-if ($results.Count -ne $executables.Count) { throw 'A native test group result is missing' }
+$priorityCount = @($planned | Where-Object { $_.priority }).Count
+$results = @(Invoke-DrmrNativeTestGroups -Groups $groups -Directory (Join-Path $PSScriptRoot 'groups') -Workers $budget.workers -PriorityCount $priorityCount)
 $failed = $false
 foreach ($result in @($results | Sort-Object index)) {
-    Write-Output ('Native group {0}/{1} output' -f ($result.index + 1), $executables.Count)
+    Write-Output ('Native group {0}/{1} output' -f ($result.index + 1), $groups.Count)
     Get-Content -LiteralPath (Join-Path $result.directory 'stdout.log')
     Get-Content -LiteralPath (Join-Path $result.directory 'stderr.log')
     if ($result.exit_code -ne 0) { $failed = $true }
 }
+if ($failed -and $results.Count -eq $priorityCount) { throw 'An early native regression failed; expensive groups were not started' }
+if ($results.Count -ne $groups.Count) { throw 'A native test group result is missing' }
 foreach ($name in @('bbb-media-report.json', 'conversion-report.json')) {
     $reports = @($results | ForEach-Object { Join-Path $_.directory $name } | Where-Object { Test-Path -LiteralPath $_ })
     if ($reports.Count -ne 1) { throw 'A native media report is missing or ambiguous' }

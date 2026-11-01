@@ -26,8 +26,10 @@ function Invoke-DrmrNativeTestGroups {
         [Parameter(Mandatory)][object[]]$Groups,
         [Parameter(Mandatory)][string]$Directory,
         [ValidateRange(1, 2)][int]$Workers = 1,
+        [ValidateRange(0, 2147483647)][int]$PriorityCount = 0,
         [Threading.CancellationToken]$CancellationToken = [Threading.CancellationToken]::None
     )
+    if ($PriorityCount -gt $Groups.Count) { throw 'The priority test boundary exceeds the group inventory' }
     if (Test-Path -LiteralPath $Directory) { throw 'The native group directory already exists' }
     New-Item -ItemType Directory -Path $Directory | Out-Null
     $active = [Collections.Generic.List[object]]::new()
@@ -39,8 +41,11 @@ function Invoke-DrmrNativeTestGroups {
     try {
         while ($next -lt $Groups.Count -or $active.Count -gt 0) {
             $CancellationToken.ThrowIfCancellationRequested()
+            if ($PriorityCount -gt 0 -and $results.Count -eq $PriorityCount -and $active.Count -eq 0 -and
+                @($results | Where-Object { $_.exit_code -ne 0 }).Count -gt 0) { break }
             while ($next -lt $Groups.Count -and $active.Count -lt $Workers) {
                 $CancellationToken.ThrowIfCancellationRequested()
+                if ($next -eq $PriorityCount -and $results.Count -lt $PriorityCount) { break }
                 $group = $Groups[$next]
                 $index = $next++
                 $path = Join-Path $Directory ('group-{0:D4}' -f $index)
@@ -85,6 +90,12 @@ function Invoke-DrmrNativeTestGroups {
                 $item.output.Dispose()
                 $item.error_output.Dispose()
                 $result = @{ index = $item.index; directory = $item.directory; exit_code = $item.process.ExitCode }
+                $expected = $Groups[$item.index].expected_tests
+                if ($null -ne $expected) {
+                    $text = [IO.File]::ReadAllText((Join-Path $item.directory 'stdout.log'))
+                    $summary = [regex]::Matches($text, '(?m)^test result: ok\. ([0-9]+) passed; 0 failed; 0 ignored; 0 measured; [0-9]+ filtered out(?:;[^\r\n]*)?\r?$')
+                    if ($summary.Count -ne 1 -or [int]$summary[0].Groups[1].Value -ne $expected) { $result.exit_code = 1 }
+                }
                 $results.Add($result)
                 $item.process.Dispose()
                 $active.Remove($item) | Out-Null
