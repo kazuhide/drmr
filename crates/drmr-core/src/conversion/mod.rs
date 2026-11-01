@@ -57,6 +57,9 @@ pub use presentation::{
     ConversionRequest, SourceCompatibilityNote, SourceProtection, SourceQualification,
     SourceValidationPurpose, TrackConversionRequest, VerificationRequest, VerificationSource,
 };
+#[cfg(any(test, feature = "fuzzing"))]
+#[doc(hidden)]
+pub mod fuzzing;
 mod verify;
 pub(in crate::conversion) mod vp9;
 use crate::{

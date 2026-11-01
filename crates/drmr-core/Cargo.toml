@@ -8,6 +8,10 @@ publish.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+# Development-only parser entrypoints; no fuzzer dependency enters normal builds.
+fuzzing = []
+
 [dependencies]
 drmr-manifest = { path = "../drmr-manifest" }
 aes.workspace = true
