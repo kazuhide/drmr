@@ -1031,6 +1031,7 @@ fn default_audio_keeps_an_omitted_autoselect_attribute() {
 fn finite_joint_mp4_qualification_distinguishes_conversion_from_existing_output_verification() {
     let directory = tempfile::tempdir().unwrap();
     let clip = Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/clip.mp4");
+    let original = std::fs::read(&clip).unwrap();
     let keys = InputKeys::default();
     let hls = HlsInputKeys::default();
     let input = VerificationSource {
@@ -1052,6 +1053,7 @@ fn finite_joint_mp4_qualification_distinguishes_conversion_from_existing_output_
             .verification,
     );
     let output_keys = InputKeys::new(vec![ContentKey::from_hex(KID, KEY).unwrap()]).unwrap();
+    let encrypted = std::fs::read(&output).unwrap();
     let source = VerificationSource {
         input: &output,
         input_keys: &output_keys,
@@ -1064,17 +1066,18 @@ fn finite_joint_mp4_qualification_distinguishes_conversion_from_existing_output_
         let result = converter().validate_source(source, purpose).unwrap();
         assert_eq!(result.actual_format, OutputFormat::Mp4);
         assert_eq!(result.track_protection, vec![SourceProtection::Cenc; 2]);
-        assert!(!result.eligible_formats.contains(&OutputFormat::Mp4));
+        assert!(result.eligible_formats.contains(&OutputFormat::Mp4));
         proof(&result.verification);
     }
+    let refused = directory.path().join("missing-key.mp4");
     assert_eq!(
         converter()
             .convert(ConversionRequest {
                 input: &output,
-                output: &directory.path().join("refused.mp4"),
+                output: &refused,
                 format: OutputFormat::Mp4,
                 target: TargetProtection::Clear,
-                input_keys: &output_keys,
+                input_keys: &keys,
                 hls_input_keys: &hls,
                 output_key: None,
                 hls_key_uri: None,
@@ -1082,8 +1085,42 @@ fn finite_joint_mp4_qualification_distinguishes_conversion_from_existing_output_
             })
             .unwrap_err()
             .0,
-        "single-track-mp4-required"
+        "input-key-required"
     );
+    assert!(!refused.exists());
+
+    let roundtrip = directory.path().join("roundtrip.mp4");
+    proof(
+        &converter()
+            .convert(ConversionRequest {
+                input: &output,
+                output: &roundtrip,
+                format: OutputFormat::Mp4,
+                target: TargetProtection::Clear,
+                input_keys: &output_keys,
+                hls_input_keys: &hls,
+                output_key: None,
+                hls_key_uri: None,
+                hls_output_key: None,
+            })
+            .unwrap()
+            .verification,
+    );
+    proof(
+        &converter()
+            .verify(VerificationRequest {
+                source,
+                output: VerificationSource {
+                    input: &roundtrip,
+                    input_keys: &keys,
+                    hls_keys: &hls,
+                },
+            })
+            .unwrap(),
+    );
+    proof(&verify_clear(&clip, &roundtrip).unwrap());
+    assert_eq!(std::fs::read(&clip).unwrap(), original);
+    assert_eq!(std::fs::read(&output).unwrap(), encrypted);
 }
 fn tfdt_range(bytes: &[u8]) -> std::ops::Range<usize> {
     let boxes = drmr_core::mp4::parse_boxes(bytes).unwrap();
