@@ -195,6 +195,43 @@ fn execute_bundle(plan: &BundlePlan, file: &Path, expected: u64) {
             .unwrap()
             .passed
     );
+    assert_invalid_output_bound_is_not_repaired(&loaded, &keys, &tools, expected);
+}
+
+fn assert_invalid_output_bound_is_not_repaired(
+    plan: &BundlePlan,
+    keys: &BundleOperatorKeys,
+    tools: &ManifestValidationTools,
+    expected: u64,
+) {
+    let output = plan.output_root.join("hls");
+    let master = fs::read_to_string(output.join("master.m3u8")).unwrap();
+    let child = master
+        .lines()
+        .find(|line| !line.is_empty() && !line.starts_with('#'))
+        .unwrap();
+    let path = output.join(child);
+    let original = fs::read_to_string(&path).unwrap();
+    let before = common::snapshot_tree(&plan.output_root);
+    let marker = format!("#EXT-X-TARGETDURATION:{expected}\n");
+    assert!(original.contains(&marker));
+    let invalid = original.replace(&marker, "#EXT-X-TARGETDURATION:1\n");
+    assert_ne!(invalid, original);
+    fs::write(&path, &invalid).unwrap();
+    let rejected = converter().verify_bundle_plan(plan, keys, tools).unwrap();
+    assert!(!rejected.passed);
+    let verification = &rejected.outputs[0].verification;
+    assert!(!verification.passed);
+    assert!(verification.checks.is_pass());
+    let manifest = verification.native_manifest.as_ref().unwrap();
+    assert!(manifest.errors > 0);
+    assert!(manifest.diagnostics.iter().any(|diagnostic| {
+        diagnostic.rule_id == "HLS-TARGET-DURATION"
+            && diagnostic.message_code == "hls-target-duration-invalid"
+    }));
+    assert_eq!(fs::read_to_string(&path).unwrap(), invalid);
+    fs::write(&path, original).unwrap();
+    assert_eq!(common::snapshot_tree(&plan.output_root), before);
 }
 
 #[test]
