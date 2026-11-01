@@ -43,7 +43,58 @@ def memory_bytes():
         return 0
 
 
+def terminate_session(process):
+    # ToolRunner creates separate process groups inside this session. Keep the
+    # unreaped session leader's PID owned until all its live members have exited.
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    deadline = time.monotonic() + 10
+    while True:
+        census = subprocess.run(["ps", "-A", "-o", "pid=,stat="], check=True,
+                                capture_output=True, text=True, timeout=5).stdout
+        if len(census) > 2 * 1024 * 1024:
+            raise RuntimeError("Native test process census exceeded its bound")
+        live = []
+        for line in census.splitlines():
+            pid, state = line.split()
+            if state.startswith("Z"):
+                continue
+            try:
+                pid = int(pid)
+                if os.getsid(pid) == process.pid:
+                    live.append(pid)
+                    os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                continue
+        if not live:
+            process.wait(timeout=10)
+            return
+        if time.monotonic() > deadline:
+            raise RuntimeError("Native test session termination is unconfirmed")
+        time.sleep(.01)
+
+
 def execute(groups, directory, *, workers, threads):
+    cancelled = False
+    def cancel(_signum, _frame):
+        nonlocal cancelled
+        cancelled = True
+    # Install once, before owning children. Signals request cancellation; only
+    # safe points raise it, after a new handle is registered. exec resets these
+    # caught handlers in children, without masking their normal signal delivery.
+    handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+    try:
+        for sig in handlers:
+            signal.signal(sig, cancel)
+        return execute_owned(groups, directory, workers=workers, threads=threads, cancelled=lambda: cancelled)
+    finally:
+        for sig, handler in handlers.items():
+            signal.signal(sig, handler)
+
+
+def execute_owned(groups, directory, *, workers, threads, cancelled):
     if workers not in (1, 2) or not 1 <= threads <= 2:
         raise ValueError("Invalid native concurrency budget")
     priorities = sum(bool(group["priority"]) for group in groups)
@@ -54,6 +105,8 @@ def execute(groups, directory, *, workers, threads):
     started = time.monotonic()
     try:
         while next_index < len(groups) or active:
+            if cancelled():
+                raise KeyboardInterrupt
             if priorities and len(results) == priorities and not active and any(item["exit_code"] for item in results):
                 break
             while next_index < len(groups) and len(active) < workers:
@@ -71,6 +124,8 @@ def execute(groups, directory, *, workers, threads):
                 args = [item["executable"], *item["arguments"], "--test-threads", str(threads), "--nocapture"]
                 record["process"] = subprocess.Popen(args, env=env, stdout=output, stderr=error, start_new_session=True)
                 next_index += 1
+                if cancelled():
+                    raise KeyboardInterrupt
                 print(f"Native group {index + 1}/{len(groups)} started", flush=True)
             for record in active[:]:
                 process = record["process"]
@@ -89,29 +144,20 @@ def execute(groups, directory, *, workers, threads):
             if active:
                 time.sleep(.05)
     finally:
-        # Repeated cancellation must not skip the remaining owned children.
-        handlers = {sig: signal.signal(sig, signal.SIG_IGN) for sig in (signal.SIGINT, signal.SIGTERM)}
         cleanup_errors = []
-        try:
-            for record in active:
-                process = record["process"]
-                try:
-                    if process is not None:
-                        try:
-                            os.killpg(process.pid, signal.SIGKILL)
-                        except ProcessLookupError:
-                            pass
-                        process.wait(timeout=10)
-                except BaseException as error:
-                    cleanup_errors.append(error)
-                finally:
-                    record["output"].close()
-                    record["error"].close()
-        finally:
-            for sig, handler in handlers.items():
-                signal.signal(sig, handler)
+        for record in active:
+            try:
+                if record["process"] is not None:
+                    terminate_session(record["process"])
+            except BaseException as error:
+                cleanup_errors.append(error)
+            finally:
+                record["output"].close()
+                record["error"].close()
         if cleanup_errors:
             raise RuntimeError("Native test process cleanup is unconfirmed") from cleanup_errors[0]
+    if cancelled():
+        raise KeyboardInterrupt
     return sorted(results, key=lambda result: result["index"])
 
 
