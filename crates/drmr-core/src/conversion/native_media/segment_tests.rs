@@ -604,20 +604,24 @@ fn shaka_source(fixture: &Path, output: &Path, scheme: &str, stream: &str) {
 
 #[test]
 fn independent_shaka_encrypted_resources_transform_to_every_supported_scheme() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/clip.mp4");
+    assert_shaka_encrypted_resources(&fixture, &["video", "audio"]);
+}
+
+pub(super) fn assert_shaka_encrypted_resources(fixture: &Path, streams: &[&str]) {
     let root = media_workspace();
     let stop = Stop::new();
-    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/clip.mp4");
     let output_key = super::super::OutputKey::from_hex(OUTPUT_ID, OUTPUT_KEY).unwrap();
     let source_keys = InputKeys::new(vec![
         super::super::ContentKey::from_hex(SOURCE_ID, SOURCE_KEY).unwrap(),
     ])
     .unwrap();
     for scheme in ["cenc", "cbcs"] {
-        for stream in ["video", "audio"] {
+        for stream in streams {
             let directory = root.path().join(format!("{scheme}-{stream}"));
             crate::native::create_media_dir_all(&directory).unwrap();
             let input_full = directory.join("shaka.mp4");
-            shaka_source(&fixture, &input_full, scheme, stream);
+            shaka_source(fixture, &input_full, scheme, stream);
             let expected = oracle(&input_full, Some((SOURCE_ID, SOURCE_KEY)));
             let (init_bytes, resources) = split_resources(&input_full);
             let init = directory.join("init.mp4");
