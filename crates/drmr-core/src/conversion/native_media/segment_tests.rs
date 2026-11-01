@@ -609,6 +609,26 @@ fn independent_shaka_encrypted_resources_transform_to_every_supported_scheme() {
 }
 
 pub(super) fn assert_shaka_encrypted_resources(fixture: &Path, streams: &[&str]) {
+    assert_shaka_resource_routes(
+        fixture,
+        streams,
+        &["cenc", "cbcs"],
+        &[
+            TargetProtection::Clear,
+            TargetProtection::Cenc,
+            TargetProtection::Cbcs,
+        ],
+        true,
+    );
+}
+
+pub(super) fn assert_shaka_resource_routes(
+    fixture: &Path,
+    streams: &[&str],
+    schemes: &[&str],
+    targets: &[TargetProtection],
+    exact_subsample_layout: bool,
+) {
     let root = media_workspace();
     let stop = Stop::new();
     let output_key = super::super::OutputKey::from_hex(OUTPUT_ID, OUTPUT_KEY).unwrap();
@@ -616,7 +636,7 @@ pub(super) fn assert_shaka_encrypted_resources(fixture: &Path, streams: &[&str])
         super::super::ContentKey::from_hex(SOURCE_ID, SOURCE_KEY).unwrap(),
     ])
     .unwrap();
-    for scheme in ["cenc", "cbcs"] {
+    for &scheme in schemes {
         for stream in streams {
             let directory = root.path().join(format!("{scheme}-{stream}"));
             crate::native::create_media_dir_all(&directory).unwrap();
@@ -636,11 +656,7 @@ pub(super) fn assert_shaka_encrypted_resources(fixture: &Path, streams: &[&str])
                 })
                 .collect::<Vec<_>>();
             let source = SegmentInput::new(&init, &stop).unwrap();
-            for target in [
-                TargetProtection::Clear,
-                TargetProtection::Cenc,
-                TargetProtection::Cbcs,
-            ] {
+            for &target in targets {
                 let target_dir = directory.join(format!("target-{target:?}"));
                 crate::native::create_media_dir_all(&target_dir).unwrap();
                 let target_init = target_dir.join("init.mp4");
@@ -670,8 +686,9 @@ pub(super) fn assert_shaka_encrypted_resources(fixture: &Path, streams: &[&str])
                         before,
                         output_context.evidence(&path, &output_keys, &stop).unwrap()
                     );
-                    if (scheme == "cenc" && target == TargetProtection::Cenc)
-                        || (scheme == "cbcs" && target == TargetProtection::Cbcs)
+                    if exact_subsample_layout
+                        && ((scheme == "cenc" && target == TargetProtection::Cenc)
+                            || (scheme == "cbcs" && target == TargetProtection::Cbcs))
                     {
                         assert_eq!(
                             source

@@ -106,9 +106,13 @@ Widevine、PlayReady、FairPlay は、鍵の取得や利用条件、プレーヤ
 
 # 3. 入力と出力の対応表
 
-MP4 と fMP4 を使う HLS/DASH では、対応条件を満たす AVC（H.264）・HEVC（H.265）・AAC の入力を解析・変換・検証できます。MPEG-TS の映像は H.264 が対象です。HEVC は Main/Main10 のプログレッシブ映像に対応します。色差形式は 4:2:0、輝度と色差のビット深度は Main がともに 8 bit、Main10 がともに 10 bit です。復号に必要な設定情報（VPS・SPS・PPS）が各1組あり、途中で設定が変わらない入力を扱います。受け入れる構文と拒否する条件は [HEVC の検証と制限（英語）](https://github.com/kazuhide/drmr/blob/main/docs/verification.md#hevc-in-mp4-and-fmp4)に記載しています。
+MP4 と fMP4 を使う HLS/DASH では、対応条件を満たす AVC（H.264）・HEVC（H.265）・VP9・AAC の入力を解析・変換・検証できます。MPEG-TS の映像は H.264 が対象です。HEVC は Main/Main10 のプログレッシブ映像に対応します。色差形式は 4:2:0、輝度と色差のビット深度は Main がともに 8 bit、Main10 がともに 10 bit です。復号に必要な設定情報（VPS・SPS・PPS）が各1組あり、途中で設定が変わらない入力を扱います。受け入れる構文と拒否する条件は [HEVC の検証と制限（英語）](https://github.com/kazuhide/drmr/blob/main/docs/verification.md#hevc-in-mp4-and-fmp4)に記載しています。
 
-HEVC 対応は現在のソースに含まれ、v1.0.3 の配布アーカイブには含まれません。AV1・VP9・AC-3・E-AC-3・Opus・FLAC の設定をメタデータとして識別できても、全体の検証に対応したことにはなりません。未実装のコーデック条件は `native-codec-profile-not-supported` で拒否し、`--decode` を指定しても迂回できません。コンテナ・暗号方式の対応表はその形式に格納できる全コーデックの動作確認を意味しません。
+HEVC と VP9 の対応は現在のソースに含まれ、v1.0.3 の配布アーカイブには含まれません。AV1・AC-3・E-AC-3・Opus・FLAC の設定をメタデータとして識別できても、全体の検証に対応したことにはなりません。未実装のコーデック条件は `native-codec-profile-not-supported` で拒否し、`--decode` を指定しても迂回できません。コンテナ・暗号方式の対応表はその形式に格納できる全コーデックの動作確認を意味しません。
+
+VP9（`vp09`）は MP4・fMP4 HLS/DASH の clear・cenc に対応します。HLS の AES-128 は外側の暗号化として扱います。VP9 の cbcs は `vp9-protection-scheme-not-supported` で拒否します。対応条件は [VP9 の検証と制限（英語）](https://github.com/kazuhide/drmr/blob/main/docs/verification.md#vp9-in-mp4-and-fmp4)に記載しています。一般 HLS の検査と Apple 向けの検査は別で、Apple VOD 基準では VP9 は対象外です。
+
+解析で `vp9-cenc-prefix-normalization-required` が出た入力は暗号区間を規格に合わせて変換します。
 
 ## 入力形式と条件
 
@@ -159,7 +163,9 @@ fMP4 メディアプレイリストは一つの音声または映像トラック
 
 このガイドでいう「有限音声範囲」は、MP4 の編集情報で音声の再生開始位置と長さが指定されている状態を指します。別の入力形式の名前ではありません。エンコーダーの初期遅延や末尾のパディング（長さを調整するための余分なデータ）を再生から除外するために、一般的な MP4 でも使われます。
 
-対応する入力は一つの完全なプログレッシブ MP4 に AAC-LC 音声トラックを一つ含むものです。映像は H.264 または対応条件を満たす HEVC Main/Main10 を一つまで含められます。格納識別子は音声が `mp4a`、H.264 が `avc1`、HEVC が `hvc1` または `hev1` です。音声の編集情報は通常速度での連続した一範囲を指定し、開始位置が負でなく、長さを音声クロックの整数値に正確に換算できる必要があります。
+対応する入力は一つの完全なプログレッシブ MP4 に AAC-LC 音声トラックを一つ含むものです。映像は H.264、HEVC Main/Main10、VP9 のいずれかで、対応条件を満たすトラックを一つまで含められます。格納識別子は音声が `mp4a`、H.264 が `avc1`、HEVC が `hvc1` または `hev1`、VP9 が `vp09` です。音声の編集情報は通常速度での連続した一範囲を指定し、開始位置が負でなく、長さを音声クロックの整数値に正確に換算できる必要があります。
+
+VP9 のサンプルは clear・cenc が対象です。以下の cbcs の選択肢はほかの対応コーデックに適用します。
 
 この条件を満たす clear・cenc・cbcs 入力は、MP4/DASH で clear・cenc・cbcs、fMP4 HLS で加えて AES-128 の出力を選べます。
 
@@ -1353,6 +1359,7 @@ drmr analyze original.mp4 --metadata-only --progress off
 | `presentation-window-not-supported` | 編集情報、開始位置・終端、通常速度、正確なクロック換算などが対応条件を満たすか確認する。処理を通すために原本を切り詰めない |
 | `progressive-cenc-profile-not-supported` / `progressive-cbcs-profile-not-supported` | 暗号配置、IV、補助情報、入力 PSSH などが限定プロファイル内か確認する |
 | `unsupported-packet-timing` | 全 PTS・DTS・継続時間を確認する。--decode ではツールのバージョンと出力も確認し、欠落値を推測しない |
+| `vp9-protection-scheme-not-supported` | VP9 は clear・cenc を選ぶ。VP9 の MP4 格納仕様には cbcs がなく、HLS の AES-128 は別の外側の暗号化として扱う。 |
 | `round-trip-verification-failed` | 原本と結果のメタデータ、全符号化サンプル、時刻、要求したデコードの証拠を確認する |
 | `resource-budget` | 取得できた CPU・メモリの情報、入力のサイズと寸法を確認する。ワーカー上限を増やしても解決するとは限らない |
 | `media-output-limit` / `media-probe-output-limit` | 捕捉上限やレコード上限を超えていないか確認する。部分結果を成功扱いしない |

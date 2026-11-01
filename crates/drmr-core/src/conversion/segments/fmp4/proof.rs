@@ -110,6 +110,12 @@ pub(super) fn qualify(
         return Err(ConversionError("source-media-verification-failed"));
     }
     Ok(SourceQualification {
+        has_vp9: media.iter().any(|part| {
+            part.media
+                .tracks
+                .iter()
+                .any(|track| track.descriptor.codec == *b"vp09")
+        }),
         hls_timing: None,
         layout_tracks: media
             .iter()

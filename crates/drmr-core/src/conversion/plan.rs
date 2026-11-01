@@ -5,6 +5,8 @@ pub(super) mod destination;
 mod options_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod vp9_tests;
 use super::{
     ConversionError, ConversionReport, ConversionRequest, Converter, FrozenSource,
     SourceCompatibilityNote, SourceInventory, SourceProtection, SourceQualification,
@@ -248,6 +250,7 @@ impl Converter {
         if !qualified.eligible_formats.contains(&format) || !supported(format, request.target) {
             return Err(UNSUPPORTED);
         }
+        qualified.require_target_binding(request.target)?;
         let output_options = command.resolved_output_options(
             frozen.entrypoint(),
             &qualified,
@@ -312,6 +315,7 @@ impl Converter {
             hls_keys: &keys.hls_input,
         };
         let qualified = command.validate_source(source, SourceValidationPurpose::Conversion)?;
+        qualified.require_target_binding(plan.intent.target)?;
         check_qualification(plan, &qualified)?;
         revalidate_options(
             &command,

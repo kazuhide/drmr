@@ -573,6 +573,7 @@ impl Converter {
         super::files::seal(root)?;
         audio.restore(output_owner, root, request.format, &self.backend.stop)?;
         restore_packaged_windows(clear, root, request.format, &self.backend.stop)?;
+        self.finish_vp9_presentation(clear, root, request)?;
         if let Some(signaling) = &signaling {
             signaling.finish(
                 root,
@@ -582,6 +583,7 @@ impl Converter {
                     .ok_or(ConversionError("output-key-required"))?,
             )?;
         }
+        super::files::seal(root)?;
         Ok(())
     }
 
@@ -758,6 +760,13 @@ fn prepare_for(
     if report.format != InputFormat::Mp4 || report.tracks.len() > 64 {
         return Err(ConversionError("input-format-not-supported"));
     }
+    if report
+        .tracks
+        .iter()
+        .any(|track| track.codec.as_deref() == Some("vp09") && track.protection == Protection::Cbcs)
+    {
+        return Err(super::vp9::PROTECTION_NOT_SUPPORTED);
+    }
     let audio_claim = super::audio_presentation::read_claim(source)?;
     let source_dictionary = audio_claim.is_none()
         && matches!(report.protection, Protection::Cenc | Protection::Cbcs)
@@ -922,18 +931,22 @@ impl From<TargetProtection> for SourceProtection {
 pub enum SourceCompatibilityNote {
     TsEmptyPayloadPadding,
     HlsEmptyCuePair,
+    Vp9CencPrefixNormalizationRequired,
 }
 impl SourceCompatibilityNote {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::TsEmptyPayloadPadding => "ts-empty-payload-padding",
             Self::HlsEmptyCuePair => "hls-empty-cue-pair",
+            Self::Vp9CencPrefixNormalizationRequired => "vp9-cenc-prefix-normalization-required",
         }
     }
 }
 /// Complete source admission facts. This receipt never authorizes future execution.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct SourceQualification {
+    #[serde(skip)]
+    pub(in crate::conversion) has_vp9: bool,
     #[serde(skip)]
     pub(crate) layout_tracks: Vec<super::layout::QualifiedTrack>,
     #[serde(skip)]
@@ -944,6 +957,14 @@ pub struct SourceQualification {
     pub compatibility_notes: Vec<SourceCompatibilityNote>,
     pub eligible_formats: Vec<OutputFormat>,
     pub verification: VerificationReport,
+}
+impl SourceQualification {
+    pub(super) fn require_target_binding(
+        &self,
+        target: TargetProtection,
+    ) -> Result<(), ConversionError> {
+        require_video_target(self.has_vp9, target)
+    }
 }
 impl Converter {
     fn qualified_hls_timing(
@@ -975,7 +996,14 @@ impl Converter {
         {
             self.validate_drm_metadata_before_decode(input.input)?;
         }
-        let qualified = self.validate_source_inner(input, purpose)?;
+        let mut command = self.with_processing_clone(self.processing_mode);
+        command.backend = self.backend.vp9_admission_scope(purpose);
+        let mut qualified = command.validate_source_inner(input, purpose)?;
+        if command.backend.vp9_source_needs_repair() {
+            qualified
+                .compatibility_notes
+                .push(SourceCompatibilityNote::Vp9CencPrefixNormalizationRequired);
+        }
         if let Some(sink) = &self.backend.activity {
             sink.emit(
                 serde_json::json!({
@@ -1086,6 +1114,7 @@ impl Converter {
         }
         self.backend.checkpoint(&[&work]);
         Ok(SourceQualification {
+            has_vp9: prepared_has_vp9(&prepared),
             layout_tracks: qualified_layout_tracks(&prepared, original.format),
             hls_timing: self.qualified_hls_timing(&prepared, original.format, purpose)?,
             input: original,
@@ -2337,6 +2366,7 @@ fn validate_prepared_output(
     prepared: &[Prepared],
     transport: bool,
 ) -> Result<(), ConversionError> {
+    require_target_binding(prepared, request.target)?;
     if transport
         && !matches!(
             (request.format, request.target),
@@ -2375,6 +2405,30 @@ fn validate_prepared_output(
             .any(|p| p.metadata.audio.is_some() || p.metadata.audio_group.is_some())
     {
         return Err(ConversionError("presentation-selection-not-representable"));
+    }
+    Ok(())
+}
+
+fn require_target_binding(
+    prepared: &[Prepared],
+    target: TargetProtection,
+) -> Result<(), ConversionError> {
+    require_video_target(prepared_has_vp9(prepared), target)
+}
+
+fn prepared_has_vp9(prepared: &[Prepared]) -> bool {
+    prepared.iter().any(|source| {
+        source
+            .report
+            .tracks
+            .iter()
+            .any(|track| track.codec.as_deref() == Some("vp09"))
+    })
+}
+
+fn require_video_target(has_vp9: bool, target: TargetProtection) -> Result<(), ConversionError> {
+    if has_vp9 && target == TargetProtection::Cbcs {
+        return Err(super::vp9::PROTECTION_NOT_SUPPORTED);
     }
     Ok(())
 }
@@ -2715,6 +2769,7 @@ impl Converter {
         };
         let input_report = self.inspect_input(request.input)?;
         let prepared = self.prepare_conversion_source(&input, work.path())?;
+        require_target_binding(&prepared, request.target)?;
         let command = self.using_prepared_output(&request, &prepared, input_report.format)?;
         let transport = prepared.iter().any(|p| p.transport_index.is_some());
         let sample_transport = prepared.iter().any(|p| p.transport_sample);

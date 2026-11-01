@@ -1,5 +1,6 @@
 //! Fragmented MP4 resources keep their original sample membership and presentation clocks.
 mod manifest;
+pub(in crate::conversion) use manifest::codec;
 mod proof;
 mod signaling;
 mod source;

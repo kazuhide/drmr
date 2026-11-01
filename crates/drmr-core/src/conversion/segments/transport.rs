@@ -167,6 +167,7 @@ pub(super) fn qualify(
     }
     source.check_original()?;
     Ok(SourceQualification {
+        has_vp9: false,
         hls_timing: if matches!(purpose, SourceValidationPurpose::Conversion)
             && converter.inherits_hls_target()
         {

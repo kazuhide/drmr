@@ -303,6 +303,7 @@ impl Converter {
             if !qualified.eligible_formats.contains(&output.format) {
                 return Err(UNSUPPORTED);
             }
+            qualified.require_target_binding(output.target)?;
             if !output.drms.is_empty() {
                 let child = command.with_processing_clone(processing.selection.resolved);
                 if child.processing_mode == command.processing_mode {
@@ -535,6 +536,9 @@ impl Converter {
                 .any(|output| !qualified.eligible_formats.contains(&output.format))
         {
             return Err(UNSUPPORTED);
+        }
+        for output in &plan.outputs {
+            qualified.require_target_binding(output.target)?;
         }
         revalidate_output_settings(&command, plan, source.input, &qualified)?;
         for output in &plan.outputs {
@@ -1144,3 +1148,5 @@ mod options_tests;
 mod source_progress_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod vp9_tests;

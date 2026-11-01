@@ -79,20 +79,29 @@ fn protection(
     children.extend(boxed(*b"schi", &tenc)?);
     boxed(*b"sinf", &children)
 }
+struct ProtectionEdit<'a> {
+    scheme: Scheme,
+    kid: Option<&'a [u8; 16]>,
+    constant_ivs: &'a [Zeroizing<[u8; 16]>],
+    preserve_pssh: bool,
+}
+
 fn rewrite_node(
     node: &Mp4Box,
     bytes: &[u8],
     entries: &[(usize, &TrackDescriptor)],
-    scheme: Scheme,
-    kid: Option<&[u8; 16]>,
-    constant_ivs: &[Zeroizing<[u8; 16]>],
+    edit: &ProtectionEdit<'_>,
     stop: &Stop,
 ) -> Result<Vec<u8>, ConversionError> {
     read::check_stop(stop)?;
-    if matches!(
-        &node.kind(),
-        b"pssh" | b"senc" | b"saiz" | b"saio" | b"sinf"
-    ) {
+    if node.kind() == *b"pssh" {
+        return Ok(if edit.preserve_pssh {
+            node.header.bytes(bytes).to_vec()
+        } else {
+            Vec::new()
+        });
+    }
+    if matches!(&node.kind(), b"senc" | b"saiz" | b"saio" | b"sinf") {
         return Ok(Vec::new());
     }
     let descriptor = entries
@@ -113,28 +122,20 @@ fn rewrite_node(
         .ok_or(BAD)?
         .to_vec();
     for child in &node.children {
-        payload.extend(rewrite_node(
-            child,
-            bytes,
-            entries,
-            scheme,
-            kid,
-            constant_ivs,
-            stop,
-        )?);
+        payload.extend(rewrite_node(child, bytes, entries, edit, stop)?);
         if payload.len() > MAX_METADATA_BYTES {
             return Err(ConversionError("resource-budget"));
         }
     }
     let entry_kind = if let Some(track) = descriptor {
-        if scheme == Scheme::Clear {
+        if edit.scheme == Scheme::Clear {
             track.codec
         } else {
             payload.extend(protection(
                 track,
-                scheme,
-                kid.ok_or(BAD)?,
-                constant_ivs.get(track.index).map(|iv| &**iv),
+                edit.scheme,
+                edit.kid.ok_or(BAD)?,
+                edit.constant_ivs.get(track.index).map(|iv| &**iv),
             )?);
             if track.kind == crate::inspection::TrackKind::Video {
                 *b"encv"
@@ -154,6 +155,48 @@ pub(super) fn initialization(
     scheme: Scheme,
     kid: Option<&[u8; 16]>,
     constant_ivs: &[Zeroizing<[u8; 16]>],
+    stop: &Stop,
+) -> Result<Vec<u8>, ConversionError> {
+    initialization_inner(
+        original,
+        source,
+        parsed,
+        &ProtectionEdit {
+            scheme,
+            kid,
+            constant_ivs,
+            preserve_pssh: false,
+        },
+        stop,
+    )
+}
+
+pub(super) fn reprotect_initialization(
+    original: &[u8],
+    source: &read::Layout,
+    parsed: &init::Initialization,
+    kid: &[u8; 16],
+    stop: &Stop,
+) -> Result<Vec<u8>, ConversionError> {
+    initialization_inner(
+        original,
+        source,
+        parsed,
+        &ProtectionEdit {
+            scheme: Scheme::Cenc,
+            kid: Some(kid),
+            constant_ivs: &[],
+            preserve_pssh: true,
+        },
+        stop,
+    )
+}
+
+fn initialization_inner(
+    original: &[u8],
+    source: &read::Layout,
+    parsed: &init::Initialization,
+    edit: &ProtectionEdit<'_>,
     stop: &Stop,
 ) -> Result<Vec<u8>, ConversionError> {
     let entries = parsed
@@ -187,13 +230,11 @@ pub(super) fn initialization(
                     read::one(&movie, *b"moov")?,
                     &source.movie,
                     &entries,
-                    scheme,
-                    kid,
-                    constant_ivs,
+                    edit,
                     stop,
                 )?;
-                if scheme != Scheme::Clear {
-                    let kid = kid.ok_or(BAD)?;
+                if edit.scheme != Scheme::Clear && !edit.preserve_pssh {
+                    let kid = edit.kid.ok_or(BAD)?;
                     let mut pssh =
                         hex::decode("1077efecc0b24d02ace33c1e52e2fb4b").map_err(|_| BAD)?;
                     pssh.extend(1_u32.to_be_bytes());
@@ -206,6 +247,7 @@ pub(super) fn initialization(
                 }
                 output.extend(rewritten);
             }
+            b"pssh" if edit.preserve_pssh => output.extend(node.header.bytes(original)),
             b"pssh" | b"sidx" | b"ssix" | b"mfra" | b"mdat" => {}
             b"free" | b"skip" | b"wide" => output.extend(node.header.bytes(original)),
             _ => return Err(super::UNSUPPORTED),

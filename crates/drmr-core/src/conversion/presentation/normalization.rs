@@ -55,6 +55,7 @@ impl Converter {
         if let Some(snapshots) = &snapshots {
             snapshots.finish();
         }
+        super::require_target_binding(&sources, request.target)?;
         let normalization = media_progress::Batch::units(
             self.backend.activity.clone(),
             media_progress::Operation::Normalization,

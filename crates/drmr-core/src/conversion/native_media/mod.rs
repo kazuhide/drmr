@@ -27,7 +27,15 @@ mod progressive_copy;
 pub(in crate::conversion) use progressive_copy::copy_progressive;
 mod read;
 mod track_ids;
+mod vp9_protection;
+mod vp9_reprotect;
 pub(in crate::conversion) use track_ids::canonicalize_tool_ids;
+pub(in crate::conversion) use vp9_protection::{
+    LAYOUT as VP9_LAYOUT, Vp9Protection, classify as classify_vp9_protection,
+};
+pub(in crate::conversion) use vp9_reprotect::{
+    reprotect_generated_file, reprotect_generated_rendition, restore_vp9_level,
+};
 mod sample_window;
 mod segment;
 mod write;
@@ -44,6 +52,10 @@ mod segment_tests;
 mod test_files;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod vp9_binding_tests;
+#[cfg(test)]
+mod vp9_tests;
 
 pub(in crate::conversion) const CHUNK_BYTES: usize = 64 * 1024;
 const MAX_METADATA_BYTES: usize = 16 * 1024 * 1024;
@@ -179,6 +191,8 @@ pub(in crate::conversion) enum SampleProtection {
         crypt_byte_block: u8,
         skip_byte_block: u8,
         encrypted_bytes: u32,
+        /// Derived protected byte ranges only; no key or IV material.
+        vp9_ranges: Option<[u8; 32]>,
     },
 }
 
@@ -379,6 +393,9 @@ fn payload(
                 crypt_byte_block: track.crypt,
                 skip_byte_block: track.skip,
                 encrypted_bytes: protected_bytes(encryption, track)?,
+                vp9_ranges: (sample.track.descriptor.codec == *b"vp09")
+                    .then(|| crypto::subsample_digest(&encryption.subsamples, sample.info.size))
+                    .transpose()?,
             };
             Some(crypto::Cipher::new(
                 &key.bytes,
@@ -576,6 +593,7 @@ fn visit_progressive(
 
 /// Visit every original sample, decrypting only its declared protected regions.
 /// No callback result may be published as complete evidence before this returns Ok.
+#[cfg(test)]
 pub(in crate::conversion) fn scan(
     input: &Path,
     keys: &InputKeys,

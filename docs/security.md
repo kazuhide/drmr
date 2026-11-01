@@ -138,6 +138,11 @@ process-memory inspection.
 
 Keys also exist in ordinary process memory. Sensitive Rust key buffers and several temporary representations are wiped when their owners are dropped. This is a best-effort lifetime control, not a guarantee that every copy has been erased. Child processes, allocator copies, swap, crash dumps, and forced termination are outside that guarantee. drmr does not provide Secure Enclave storage or control the host's dump and swap policies.
 
+VP9 CENC keeps uncompressed frame headers, superframe indexes and per-frame
+alignment bytes clear. Sample encryption does not conceal all codec metadata.
+The [VP9 profile](verification.md#vp9-in-mp4-and-fmp4) refuses CBCS; content
+correspondence and optional decoding do not authenticate a key or plaintext.
+
 ## Temporary files and cleanup
 
 Some verification paths write decrypted media and plaintext key files into private temporary directories. Processing is therefore not memory-only. Raw key-file writes refuse unsafe existing destinations instead of following a symbolic link or repairing public permissions after opening a file.

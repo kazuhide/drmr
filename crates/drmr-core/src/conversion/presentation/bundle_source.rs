@@ -504,6 +504,7 @@ mod tests {
             graph_digest: String::new(),
         };
         let qualified = SourceQualification {
+            has_vp9: false,
             layout_tracks: vec![],
             hls_timing: None,
             input: Inspection::new(

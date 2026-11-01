@@ -1,5 +1,6 @@
 //! Original segment processing keeps resource membership separate from cipher metadata.
 mod fmp4;
+pub(in crate::conversion) use fmp4::codec as fmp4_codec;
 mod manifest_hls;
 pub(in crate::conversion) use manifest_hls::rates as hls_rates;
 mod source;

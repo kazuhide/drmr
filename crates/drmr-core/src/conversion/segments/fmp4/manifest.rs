@@ -119,37 +119,43 @@ fn codecs(media: &native::SegmentedMedia) -> Result<Vec<String>, ConversionError
         .media
         .tracks
         .iter()
-        .map(|track| {
-            let descriptor = &track.descriptor;
-            match &descriptor.codec {
-                b"avc1" | b"avc3" => {
-                    let config = &descriptor.decoder_config;
-                    if config.len() < 4 || config[0] != 1 {
-                        return Err(ConversionError("native-codec-profile-not-supported"));
-                    }
-                    Ok(format!(
-                        "{}.{:02x}{:02x}{:02x}",
-                        std::str::from_utf8(&descriptor.codec)
-                            .map_err(|_| ConversionError("native-codec-profile-not-supported"))?,
-                        config[1],
-                        config[2],
-                        config[3]
-                    ))
-                }
-                b"hvc1" | b"hev1" => {
-                    conversion::hevc::Configuration::from_hvcc(&descriptor.decoder_config)?
-                        .0
-                        .codec_string(descriptor.codec)
-                }
-                b"mp4a" => Ok(format!(
-                    "mp4a.40.{}",
-                    conversion::native_media::AacConfiguration::parse(&descriptor.decoder_config)?
-                        .object_type
-                )),
-                _ => Err(ConversionError("native-codec-profile-not-supported")),
-            }
-        })
+        .map(|track| codec(&track.descriptor))
         .collect()
+}
+
+pub(in crate::conversion) fn codec(
+    descriptor: &conversion::native_media::TrackDescriptor,
+) -> Result<String, ConversionError> {
+    match &descriptor.codec {
+        b"avc1" | b"avc3" => {
+            let config = &descriptor.decoder_config;
+            if config.len() < 4 || config[0] != 1 {
+                return Err(ConversionError("native-codec-profile-not-supported"));
+            }
+            Ok(format!(
+                "{}.{:02x}{:02x}{:02x}",
+                std::str::from_utf8(&descriptor.codec)
+                    .map_err(|_| ConversionError("native-codec-profile-not-supported"))?,
+                config[1],
+                config[2],
+                config[3]
+            ))
+        }
+        b"hvc1" | b"hev1" => {
+            conversion::hevc::Configuration::from_hvcc(&descriptor.decoder_config)?
+                .0
+                .codec_string(descriptor.codec)
+        }
+        b"vp09" => Ok(
+            conversion::vp9::Configuration::from_vpcc(&descriptor.decoder_config)?.codec_string(),
+        ),
+        b"mp4a" => Ok(format!(
+            "mp4a.40.{}",
+            conversion::native_media::AacConfiguration::parse(&descriptor.decoder_config)?
+                .object_type
+        )),
+        _ => Err(ConversionError("native-codec-profile-not-supported")),
+    }
 }
 
 fn key_tag(
@@ -277,26 +283,57 @@ fn transform_part(
             &converter.backend.stop,
         )?
     };
-    let resources = converter.run_units(
-        part.resources.len(),
-        admitted.media.tracks.len(),
-        resource_metadata(part, directory)?,
-        |index| {
-            let _permit = proof::permit(converter)?;
-            let resource = &part.resources[index];
-            let path = directory.join(format!("seg_{}.m4s", resource.dash.number));
-            let evidence = transformer.rewrite_segment(
+    let session = if transformer.requires_ordered_resources() {
+        Some(std::sync::Mutex::new(transformer.session()?))
+    } else {
+        None
+    };
+    let rewrite = |index: usize| {
+        let _permit = proof::permit(converter)?;
+        let resource = &part.resources[index];
+        let path = directory.join(format!("seg_{}.m4s", resource.dash.number));
+        let evidence = if let Some(session) = &session {
+            session
+                .lock()
+                .map_err(|_| ConversionError("native-cipher-session-failed"))?
+                .rewrite_segment(
+                    &resource.path,
+                    &path,
+                    request.input_keys,
+                    &converter.backend.stop,
+                )?
+        } else {
+            transformer.rewrite_segment(
                 &resource.path,
                 &path,
                 request.input_keys,
                 &converter.backend.stop,
-            )?;
-            if admitted.boundaries.get(index) != Some(&evidence) {
-                return Err(ConversionError("native-source-changed"));
-            }
-            Ok(path)
-        },
-    )?;
+            )?
+        };
+        if admitted.boundaries.get(index) != Some(&evidence) {
+            return Err(ConversionError("native-source-changed"));
+        }
+        Ok(path)
+    };
+    let metadata = resource_metadata(part, directory)?;
+    let resources = if session.is_some() {
+        // Reference state advances in resource order. Independent renditions
+        // retain their ordinary concurrency and shared resource admission.
+        conversion::execution::Scheduler::new(&converter.backend, Some(1)).run(
+            part.resources.len(),
+            admitted.media.tracks.len(),
+            metadata,
+            rewrite,
+        )?
+    } else {
+        converter.run_units(
+            part.resources.len(),
+            admitted.media.tracks.len(),
+            metadata,
+            rewrite,
+        )?
+    };
+    drop(session);
     drop(transformer);
     let (codecs, resolution) = {
         let _permit = proof::permit(converter)?;

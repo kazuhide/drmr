@@ -57,6 +57,7 @@ pub use presentation::{
     SourceValidationPurpose, TrackConversionRequest, VerificationRequest, VerificationSource,
 };
 mod verify;
+pub(in crate::conversion) mod vp9;
 use crate::{
     inspection::{self, InputFormat, Inspection, Protection, TargetProtection, TrackKind},
     toolrun::ToolRunner,
@@ -145,6 +146,7 @@ impl Converter {
             planned_destination: None,
             output_signaling: None,
             backend: Backend {
+                vp9_admission: None,
                 stop: crate::concurrency::Stop::new(),
                 runner,
                 packager: packager.into(),
@@ -438,6 +440,7 @@ impl Converter {
         if inspected.format != InputFormat::Mp4 {
             return Err(ConversionError("input-format-not-supported"));
         }
+        require_mp4_target(&inspected.tracks, target)?;
         if let Some(report) = self.finite_mp4(
             &snapshot,
             &destination,
@@ -582,6 +585,20 @@ impl Converter {
         )
     }
 }
+fn require_mp4_target(
+    tracks: &[inspection::Track],
+    target: TargetProtection,
+) -> Result<(), ConversionError> {
+    if target == TargetProtection::Cbcs
+        && tracks
+            .iter()
+            .any(|track| track.codec.as_deref() == Some("vp09"))
+    {
+        return Err(vp9::PROTECTION_NOT_SUPPORTED);
+    }
+    Ok(())
+}
+
 fn source_key<'a>(report: &Inspection, keys: &'a InputKeys) -> Option<&'a ContentKey> {
     if report.protection == Protection::Clear {
         return None;

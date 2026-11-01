@@ -80,6 +80,26 @@ fn hevc(value: &mut Value, metadata: &super::super::hevc::Metadata) {
         .map(|(top, bottom)| json!([top, bottom]))
         .unwrap_or_default();
 }
+fn vp9(value: &mut Value, metadata: &super::super::vp9::Metadata) {
+    let chroma = match (metadata.matrix_coefficients, metadata.chroma_subsampling) {
+        (0, _) => "gbrp",
+        (_, 0 | 1) => "yuv420p",
+        (_, 2) => "yuv422p",
+        _ => "yuv444p",
+    };
+    value["pix_fmt"] = if metadata.bit_depth == 8 {
+        chroma.into()
+    } else {
+        format!("{chroma}{}le", metadata.bit_depth).into()
+    };
+    value["bits_per_raw_sample"] = metadata.bit_depth.to_string().into();
+    value["field_order"] = "progressive".into();
+    value["color_range"] = if metadata.full_range { "pc" } else { "tv" }.into();
+    value["color_primaries"] = metadata.colour_primaries.into();
+    value["color_transfer"] = metadata.transfer_characteristics.into();
+    value["color_space"] = metadata.matrix_coefficients.into();
+    value["chroma_subsampling"] = metadata.chroma_subsampling.into();
+}
 pub(in crate::conversion) fn transport_profile(
     native: &ts::NativeEvidence,
 ) -> Result<Value, ConversionError> {
@@ -151,6 +171,14 @@ pub(in crate::conversion) fn mp4_profile(
         config.validate_entry(track.codec)?;
         hevc(&mut value, config.metadata());
         value["nal_length_size"] = width.to_string().into();
+        value["extradata_hash"] =
+            format!("SHA256:{}", hex::encode(config.semantic_identity())).into();
+    } else if track.decoder_config_kind == *b"vpcC" {
+        if track.protection.scheme == super::super::native_media::Scheme::Cbcs {
+            return Err(super::super::vp9::PROTECTION_NOT_SUPPORTED);
+        }
+        let config = super::super::vp9::Configuration::from_vpcc(&track.decoder_config)?;
+        vp9(&mut value, config.metadata());
         value["extradata_hash"] =
             format!("SHA256:{}", hex::encode(config.semantic_identity())).into();
     } else if track.decoder_config_kind == *b"esds" {

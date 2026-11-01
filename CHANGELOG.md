@@ -7,6 +7,9 @@ for installation, stable interfaces and versioning.
 
 ### Added
 
+- Convert and independently verify qualified VP9 MP4/fMP4 clear and CENC media,
+  including persistent reference/superframe checks, native cipher spans,
+  known-key roundtrips and separate generic/Apple HLS codec diagnostics.
 - Convert and independently verify qualified HEVC Main/Main10 in MP4 and fMP4
   HLS/DASH, including clear, CENC and CBCS media. Native checks read every sample,
   parameter set, slice header and clock; optional decoding remains separate.

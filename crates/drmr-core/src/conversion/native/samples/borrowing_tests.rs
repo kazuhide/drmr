@@ -180,6 +180,7 @@ fn continuation_identity_failures_remain_sticky_after_partial_canonical_storage(
                     crypt_byte_block: 0,
                     skip_byte_block: 0,
                     encrypted_bytes: 4,
+                    vp9_ranges: None,
                 }
             }
             11 => sample.chunk_offset = 3,

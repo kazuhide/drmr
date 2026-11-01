@@ -29,7 +29,7 @@ fn clear_movie(bytes: &mut [u8]) -> Result<(), ConversionError> {
             let supported = if node.kind() == *b"enca" {
                 format == *b"mp4a"
             } else {
-                matches!(&format, b"avc1" | b"avc3" | b"hvc1" | b"hev1")
+                matches!(&format, b"avc1" | b"avc3" | b"hvc1" | b"hev1" | b"vp09")
             };
             if !supported {
                 return Err(UNSUPPORTED);
@@ -78,6 +78,14 @@ pub(in crate::conversion) fn copy_progressive(
         return Err(BAD);
     }
     for track in &init.tracks {
+        if track.descriptor.codec == *b"vp09"
+            && track
+                .encryption
+                .as_ref()
+                .is_some_and(|protection| protection.scheme == super::Scheme::Cbcs)
+        {
+            return Err(super::super::vp9::PROTECTION_NOT_SUPPORTED);
+        }
         if let Some(protection) = &track.encryption
             && !keys.keys.iter().any(|key| key.id == protection.kid)
         {
@@ -147,11 +155,11 @@ mod format_tests {
     #[test]
     fn clearing_protection_restores_the_declared_video_format_without_rewriting_config() {
         let boxed = super::super::test_files::boxed;
-        for codec in [*b"avc1", *b"avc3", *b"hvc1", *b"hev1"] {
-            let config_kind = if matches!(&codec, b"hvc1" | b"hev1") {
-                *b"hvcC"
-            } else {
-                *b"avcC"
+        for codec in [*b"avc1", *b"avc3", *b"hvc1", *b"hev1", *b"vp09"] {
+            let config_kind = match &codec {
+                b"hvc1" | b"hev1" => *b"hvcC",
+                b"vp09" => *b"vpcC",
+                _ => *b"avcC",
             };
             let config = boxed(config_kind, &[1, 2, 3, 4]);
             let sinf = boxed(*b"sinf", &boxed(*b"frma", &codec));
@@ -175,9 +183,10 @@ mod format_tests {
     fn clearing_protection_refuses_an_unmodeled_or_wrong_role_format() {
         let boxed = super::super::test_files::boxed;
         for (kind, codec) in [
-            (*b"encv", *b"vp09"),
+            (*b"encv", *b"av01"),
             (*b"encv", *b"mp4a"),
             (*b"enca", *b"hvc1"),
+            (*b"enca", *b"vp09"),
         ] {
             let mut payload = vec![0; if kind == *b"encv" { 78 } else { 28 }];
             payload.extend(boxed(*b"sinf", &boxed(*b"frma", &codec)));

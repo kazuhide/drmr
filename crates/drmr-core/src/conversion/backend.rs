@@ -2,6 +2,7 @@
 
 mod decoded_hash;
 mod track_ids;
+mod vp9_reprotect;
 
 use super::{ContentKey, ConversionError, InputKeys, OutputKey};
 use crate::{
@@ -23,6 +24,7 @@ pub(super) struct Backend {
     pub measurement: Option<Arc<super::measurement::Measurements>>,
     pub activity: Option<Arc<dyn crate::events::Sink>>,
     pub preparation: Option<Arc<super::media_progress::PreparationContext>>,
+    pub vp9_admission: Option<Arc<vp9_reprotect::SourceAdmission>>,
     #[cfg(test)]
     pub scheduling_hardware: Option<crate::resources::Hardware>,
 }
@@ -199,6 +201,14 @@ impl Backend {
         decryption: Option<&InputKeys>,
         encryption: Option<(&OutputKey, TargetProtection)>,
     ) -> Result<(), ConversionError> {
+        if encryption.is_some_and(|(_, target)| target == TargetProtection::Cbcs) {
+            let media = crate::inspection::inspect(input)
+                .map_err(|_| ConversionError("invalid-input-media"))?;
+            if let Some(track) = media.tracks.get(index) {
+                super::require_mp4_target(std::slice::from_ref(track), TargetProtection::Cbcs)?;
+            }
+        }
+        self.admit_vp9_encrypted_input(input, index, decryption)?;
         if super::finite::window(input, index)?.is_none() {
             super::audio::require_supported_audio(input, index)?;
         }
@@ -266,6 +276,7 @@ impl Backend {
             self.run(&argv, "packager", &secrets)?;
         }
         super::finite::restore(input, index, Path::new(&output), &self.stop)?;
+        self.finish_vp9_mp4(input, index, Path::new(&output), encryption)?;
         super::private_file_mode(Path::new(&output))?;
         Ok(())
     }
@@ -892,6 +903,7 @@ mod packet_tests {
                 }),
             ));
             let backend = Backend {
+                vp9_admission: None,
                 stop: crate::concurrency::Stop::new(),
                 runner,
                 packager: String::new(),

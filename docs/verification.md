@@ -73,8 +73,8 @@ references (`tref`) and extended-language controls (`elng`). Metadata-only
 identification does not qualify those playback or selection semantics.
 
 Complete media admission accepts the implemented AVC (H.264), typed AAC and
-[HEVC Main/Main10 MP4/fMP4 profiles](#hevc-in-mp4-and-fmp4). Transport stream video
-still requires the implemented H.264 profile. Recognizing AV1, VP9, AC-3,
+[HEVC Main/Main10](#hevc-in-mp4-and-fmp4) and [VP9 MP4/fMP4 profiles](#vp9-in-mp4-and-fmp4). Transport stream video
+still requires the implemented H.264 profile. Recognizing AV1, AC-3,
 E-AC-3, Opus or FLAC configuration metadata does not establish complete native
 validation. Full operations refuse unimplemented profiles; metadata-only
 identification remains available. `--decode` cannot bypass native refusals.
@@ -176,6 +176,120 @@ payload/clock/sync changes and moved resource membership. Independent FFprobe
 packet hashes/clocks and explicit complete-decoding tests check the native
 implementation. See [the regression source](../crates/drmr-core/tests/conversion_hevc.rs).
 This evidence does not establish DRM license acquisition or device playback.
+
+## VP9 in MP4 and fMP4
+
+Current source supports VP9 stored as `vp09` in MP4 and fragmented MP4 in HLS or
+DASH, with clear or `cenc` samples. It is not included in the v1.0.3 release
+archives. VP9 in transport streams is outside this conversion profile.
+
+The supported profile/depth pairs are profile 0 at 8 bits, profile 1 at 8 bits,
+profile 2 at 10 or 12 bits, and profile 3 at 10 or 12 bits. Profiles 0 and 2 use
+4:2:0 chroma; profiles 1 and 3 accept the representable 4:2:2 or 4:4:4 forms.
+The MP4 decoder configuration (`vpcC`) must match the coded headers. Rust checks
+its version, flags, profile, bit depth, chroma arrangement and color declarations,
+and retains the declared level, including the defined value 0 (unspecified). Coding-Independent Code Points (CICP) identify
+color primaries, the transfer function and matrix coefficients; these values,
+the range flag and chroma-siting declaration remain part of exact configuration
+comparison. An identity RGB matrix uses the corresponding planar RGB format.
+Unsupported configuration values and initialization data are refused.
+
+Rust parses every coded frame in each MP4 sample, including hidden alternative
+reference frames and `show_existing_frame` displays. It checks complete
+uncompressed headers, reference availability, persistent header state,
+compressed-header and tile bounds, and any superframe index. A superframe index
+records the boundaries of several VP9 frames stored in one MP4 sample. State
+persists across samples and ordered resources with eight reference slots.
+Starting a dependent resource with an empty state, changing its order or
+continuing after a parser failure cannot establish complete evidence.
+
+The current profile requires exactly one displayed picture per MP4 sample.
+Coded and render dimensions must stay fixed, fit the sample entry's dimension
+bounds and remain unchanged in the comparison. The sample entry may provide a
+larger bound; it does not replace the dimensions parsed from the frames.
+Container sync declarations must agree with the whole sample's validated
+reference independence, including hidden frames. A neutral progressive `fiel`
+declaration is equivalent to its absence only after both tracks pass complete
+VP9 validation. Other VP9 field declarations are refused. Other retained
+semantic metadata remains strict.
+
+The encoded-content comparison retains every sample byte and its boundary,
+including uncompressed headers and superframe index bytes. It separately checks
+every presentation time, decode time, duration and synchronization declaration.
+Header validation does not decode entropy-coded coefficients or reconstruct
+pictures. Use `--decode` to add independent complete decoding and decoded-content
+comparison; it does not relax a native refusal. The supported encryption modes
+remain unauthenticated, so correspondence without an independent known clear
+reference does not authenticate a key or plaintext.
+
+For VP9, the [VP codec MP4 binding](https://www.webmproject.org/vp9/mp4/)
+requires `cenc`. The Rust segment writer keeps each complete uncompressed frame header
+and the complete superframe index clear. It adds the alignment residue before
+the protected bytes of each frame so its protected length is a whole number of
+16-byte blocks. A header-only display can therefore remain entirely clear within
+a CENC sample. Fresh sample/encryption checks still apply.
+
+Final CENC output must use that prefix layout, including MP4 and `stitch`
+packaging routes. After Shaka packaging, Rust rewrites the VP9 protection
+records and ciphertext with the same key before final checks. Provider PSSH
+data remains intact. This changes sample protection, without re-encoding
+pictures or changing their clocks. A successful packager exit or matching decrypted bytes alone
+cannot establish a conforming encryption map. Fresh verification checks the
+actual encrypted ranges against each parsed frame and its complete index.
+
+Packagers can also replace an unspecified VP9 level with an inferred one.
+The source level is restored only after all other typed configuration fields
+match. Final HLS/DASH codec declarations use the complete parameters from the
+actual resulting `vpcC`, including its restored level and color values.
+
+Known Shaka Packager 3.8 input with the alignment residue at the end of each
+frame is accepted only as a repair source after complete native checks.
+Analysis records `vp9-cenc-prefix-normalization-required`; conversion writes
+canonical prefix ranges. The same noncanonical media is refused as a verified
+final output. Whole-sample, header-encrypted and index-encrypted VP9 layouts
+remain outside the admitted source profile. Saved plans rederive these facts
+from current source bytes. No stored compatibility flag grants permission.
+
+VP9 `cbcs` sources and targets are refused with
+`vp9-protection-scheme-not-supported`. A packager accepting a VP9/CBCS request
+does not make that combination conform to this binding. Standalone conversion,
+saved-plan creation and replay retain this restriction. HLS whole-resource
+`AES-128` is a separate outer encryption layer and is supported for the
+qualified fMP4 HLS paths; it does not turn VP9 sample protection into CBCS.
+
+VP9 samples are bounded to 8 MiB. Oversized or incomplete samples cause refusal
+without falling back to an unchecked digest. The stateful VP9 resource rewrite
+runs in source order within a rendition. Independent tracks and outputs remain
+eligible for the ordinary bounded parallel scheduler; other codecs retain their
+existing resource scheduling.
+
+The attributed [VP9 fixtures](../crates/drmr/tests/fixtures/bbb/VP9.md) cover six
+real profile/depth pairs with ten seconds of Big Buck Bunny, two-second keyframe
+intervals and ordinary hidden alternative reference frames and superframes:
+
+| Profile | Bit depth | Real fixture chroma |
+| --- | --- | --- |
+| 0 | 8 | 4:2:0 |
+| 1 | 8 | 4:4:4 |
+| 2 | 10 and 12 | 4:2:0 |
+| 3 | 10 and 12 | 4:4:4 |
+
+These regressions cover clear/CENC MP4 conversion and rekeying, fMP4 HLS/DASH
+conversion, native source admission and fresh verification, selected complete
+decoding, and independent FFprobe packet hashes and clocks. A separate
+one-second-resource case starts its second resource with a dependent frame,
+checking state continuity across resource boundaries. Parser cases also cover
+4:2:2, RGB, header-only displays, one-frame indexes and malformed headers/indexes.
+Crafted cases do not establish a real encoded-media matrix for those variants.
+The higher-depth and 4:4:4 fixtures are adaptations of an 8-bit 4:2:0 source;
+they do not qualify source quality or HDR rendering. VP9 HDR boxes such as
+`SmDm` and `CoLL` remain outside the current sample-entry profile and are
+refused. Device/license-server playback is not qualified by this fixture set.
+
+The [VP9 bitstream specification](https://storage.googleapis.com/downloads.webmproject.org/docs/vp9/vp9-bitstream-specification-v0.7-20170222-draft.pdf)
+and [MP4 binding source](https://github.com/webmproject/vp9-dash/blob/master/VPCodecISOMediaFileFormatBinding.md)
+describe codec and storage rules; implementation limits and the evidence above
+define this path's supported scope.
 
 ## What `--decode` adds
 
