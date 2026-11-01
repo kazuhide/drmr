@@ -38,6 +38,7 @@ mod files;
 mod frozen;
 pub mod manifest_lint;
 pub use frozen::{FrozenSource, SourceFile, SourceInventory};
+pub(in crate::conversion) mod hevc;
 mod hls;
 mod keys;
 mod media_progress;
