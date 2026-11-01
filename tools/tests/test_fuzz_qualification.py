@@ -472,6 +472,72 @@ class FuzzExecution(unittest.TestCase):
             self.assertEqual(json.loads(output.getvalue()), {"schema_version": 1, "kind": "source-codec-fuzz",
                 "success": False, "error": "fuzz-qualification-failed"})
 
+    def rejected_report_destination(self, source, report):
+        output = io.StringIO()
+        actual_write = FUZZ.SUPPORT.private_write
+        with patch.object(FUZZ, "qualify") as qualify, \
+             patch.object(FUZZ.SUPPORT, "private_write", wraps=actual_write) as write, contextlib.redirect_stdout(output):
+            code = FUZZ.main(["--source", str(source), "--binary-dir", "binary", "--database", "database",
+                              "--cargo-audit", "audit", "--report", str(report)])
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(output.getvalue()), {"schema_version": 1, "kind": "source-codec-fuzz",
+            "success": False, "error": "fuzz-report-destination-invalid"})
+        qualify.assert_not_called()
+        write.assert_not_called()
+
+    def test_rejected_source_report_destination_never_becomes_a_failure_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source"
+            source.mkdir()
+            marker = source / "retained"
+            marker.write_bytes(b"unchanged source")
+            report = source / "new-report.json"
+            self.rejected_report_destination(source, report)
+            self.assertFalse(report.exists())
+            self.assertEqual(list(source.iterdir()), [marker])
+            self.assertEqual(marker.read_bytes(), b"unchanged source")
+
+    @unittest.skipUnless(os.name == "posix", "Linux fuzz report symlink parent")
+    def test_rejected_symlink_parent_never_receives_a_failure_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, outside, link = root / "source", root / "outside", root / "link"
+            source.mkdir()
+            outside.mkdir()
+            link.symlink_to(outside, target_is_directory=True)
+            self.rejected_report_destination(source, link / "new-report.json")
+            self.assertEqual(list(outside.iterdir()), [])
+            self.assertTrue(link.is_symlink())
+
+    def test_rejected_existing_report_destination_is_untouched(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            source.mkdir()
+            report = root / "retained-report.json"
+            report.write_bytes(b"retained report")
+            before = report.stat()
+            self.rejected_report_destination(source, report)
+            after = report.stat()
+            self.assertEqual(report.read_bytes(), b"retained report")
+            self.assertEqual((before.st_ino, before.st_size, before.st_mtime_ns), (after.st_ino, after.st_size, after.st_mtime_ns))
+
+    def test_authorized_outside_destination_still_receives_normal_failure_report(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            source.mkdir()
+            report = root / "failure-report.json"
+            output = io.StringIO()
+            with patch.object(FUZZ, "qualify", side_effect=RuntimeError("PRIVATE_VALUE")), contextlib.redirect_stdout(output):
+                code = FUZZ.main(["--source", str(source), "--binary-dir", "binary", "--database", "database",
+                                  "--cargo-audit", "audit", "--report", str(report)])
+            expected = {"schema_version": 1, "kind": "source-codec-fuzz", "success": False, "error": "fuzz-qualification-failed"}
+            self.assertEqual(code, 1)
+            self.assertEqual(json.loads(report.read_bytes()), expected)
+            self.assertEqual(json.loads(output.getvalue()), expected)
+            self.assertEqual(list(source.iterdir()), [])
+
     def test_cancellation_deadline_and_unconfirmed_cleanup_cannot_publish_success(self):
         for failure, expected in (("command-cancelled", "fuzz-cancelled"), ("command-deadline", "fuzz-timeout"),
                                   ("command-cleanup-unconfirmed", "fuzz-cleanup-unconfirmed"),

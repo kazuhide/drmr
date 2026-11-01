@@ -246,11 +246,12 @@ def main(argv=None):
         parser.add_argument("--cargo-audit", type=Path, required=True)
         parser.add_argument("--report", type=Path)
         args = parser.parse_args(argv)
-        path = args.report
-        if path is not None:
-            CONTRACT.require(not path.exists() and not path.is_symlink() and path.parent.is_dir()
-                             and not path.parent.is_symlink()
-                             and args.source.resolve() not in path.resolve().parents, "fuzz-report-destination-invalid")
+        candidate = args.report
+        if candidate is not None:
+            CONTRACT.require(not candidate.exists() and not candidate.is_symlink() and candidate.parent.is_dir()
+                             and not candidate.parent.is_symlink()
+                             and args.source.resolve() not in candidate.resolve().parents, "fuzz-report-destination-invalid")
+            path = candidate
         result = qualify(args.source.resolve(), args.binary_dir, args.database, args.cargo_audit)
     except KeyboardInterrupt:
         result = {"schema_version": 1, "kind": "source-codec-fuzz", "success": False, "error": "fuzz-cancelled"}
