@@ -636,6 +636,86 @@ consecutive runs are separate from the rotated four-build comparison; their
 timing difference cannot be attributed to the test-only configuration change.
 The measurement definitions and evidence limits above also apply here.
 
+## Temporary snapshot I/O (2026-11-01)
+
+Full native analysis of the retained seven-rendition HLS input took a median
+**5.038 seconds before and 2.271 seconds after** removing a durability flush from
+each disposable snapshot file. The same change reduced analysis of its separate
+audio playlist from **0.471 to 0.149 seconds**. Each comparison has three runs per
+build in balanced order: baseline/candidate, candidate/baseline,
+baseline/candidate. Every candidate observation was below every baseline
+observation for the corresponding input.
+
+| Native analysis input | Baseline median, s | Candidate median, s | Baseline range, s | Candidate range, s |
+| --- | ---: | ---: | ---: | ---: |
+| Six H.264 video renditions and one AAC audio rendition; 708 files, 857,447,176 bytes | 5.038 | 2.271 | 5.031–6.029 | 2.157–3.832 |
+| Separate 44.1 kHz AAC audio playlist; 101 files, 9,875,758 bytes | 0.471 | 0.149 | 0.464–0.489 | 0.138–0.188 |
+
+The roughly 597-second source uses a six-second segment target. These local
+measurements exclude downloading. Both optimized builds used Rust 1.99.0 on an
+Apple M5 with ten logical CPUs and 32 GiB of memory. The source bytes remained
+unchanged. Filesystem caches were uncontrolled, and other host work continued;
+the project's archive preflight had finished before the full-input analysis
+comparison. The [numeric report](benchmarks/temporary-snapshots-2026-11-01.json)
+records source and binary hashes, individual observations, host-load summaries,
+and measurement limits.
+
+### Why the snapshot path changed
+
+Profiling showed time in temporary-file copying, hashing and storage flushes.
+The copies are exclusive private files that the current command reads and then
+removes. Rust's [`File::sync_all`](https://doc.rust-lang.org/std/fs/struct.File.html#method.sync_all)
+requests persistent file data and metadata. These disposable copies need
+immediate readability and do not serve as restart checkpoints. Their unbuffered
+file writes now complete without a per-file durability barrier.
+
+The copy still streams every byte through a 64 KiB buffer and calculates its
+SHA-256 fingerprint. Expected sizes, fingerprints, file identities, directory
+confinement, cancellation and resource limits remain required. Native analysis
+checks the complete source, and conversion compares the final media with the
+source before publication. Regression checks cover partial writes, changes
+restored during a copy, replaced files, cancellation, worker cleanup and final
+publication guards.
+
+### Conversion and worker observations
+
+The same retained source was converted to CBCS DASH with Widevine/PlayReady and
+CBCS fMP4 HLS with FairPlay. All converted outputs passed sample payload,
+timing and metadata comparisons, the native manifest rules in scope, and their
+requested DRM declarations. Their reports were equal after excluding the plan
+identifier, measurements and the linter's worker count. Every run started
+15 Packager processes and no FFmpeg or ffprobe processes. Both builds use
+`--single_threaded` and `--io_cache_size=0` for Shaka; Rust work stays bounded and
+parallel.
+
+Whole-conversion observations varied substantially as other host work changed:
+the three interleaved baseline runs took 61.930–175.503 seconds, and the three
+candidate runs took 55.672–155.485 seconds. The numeric report retains every
+observation. This batch establishes the analysis improvement above; it does
+not establish a stable end-to-end conversion speedup or a memory reduction.
+
+The following worker exploration has one observation per cell. The commands
+perform different work, and the host load changed between runs; use these values
+to identify a useful local experiment rather than rank the worker settings.
+
+| Command and build | `--max-workers 1`, s | `--max-workers 2`, s | `--max-workers 4`, s | Automatic, s |
+| --- | ---: | ---: | ---: | ---: |
+| Two-output conversion, baseline | 133.975 | 96.476 | 88.735 | 67.120 |
+| Full-input native analysis, candidate | 4.417 | 2.188 | 1.633 | 2.157 |
+
+Ten-second HEVC Main10 and VP9 profile 2/12-bit MP4 inputs also passed conversion
+to two fMP4 outputs, using CBCS for HEVC and CENC for VP9. Both native and
+explicit complete-decoding checks passed. These are single observations per
+build and depth, covering the stated MP4-to-output routes. The numeric report
+keeps them separate from the repeated HLS analysis comparisons and from broader
+codec qualification.
+
+RSS comes from process-table samples; short-lived children can be missed and
+shared pages can be counted more than once. CPU totals include observer
+subprocesses. Workspace values cover selected checkpoints, and some concurrent
+output checkpoints are incomplete. Total physical I/O bytes are unmeasured.
+DRM device and license-server playback were not exercised.
+
 ## Compare your own retained input
 
 Use the same local original to separate processing from network transfer:
