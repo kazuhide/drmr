@@ -170,6 +170,19 @@ impl Converter {
                 }
                 return Ok(finite);
             }
+            if super::super::finite::fragmented_joint_profile(
+                &first.media,
+                &report,
+                &self.backend.stop,
+            )? {
+                self.progressive_codecs(
+                    &first.media,
+                    &report,
+                    (report.protection != Protection::Clear)
+                        .then_some(super::super::keys::ProbeKeys::All(input.input_keys)),
+                )?;
+                return Ok(true);
+            }
             return Ok(prepared.len() == 1);
         }
         Ok(actual != OutputFormat::HlsTs

@@ -348,6 +348,49 @@ fn rewrite_file(path: &Path, moov: &[u8], stop: &Stop) -> Result<(), ConversionE
     Ok(())
 }
 
+/// A finite complete presentation is distinct from an arbitrary multi-track MP4.
+pub(in crate::conversion) fn fragmented_joint_profile(
+    source: &Path,
+    input: &crate::inspection::Inspection,
+    stop: &Stop,
+) -> Result<bool, ConversionError> {
+    use crate::inspection::{Protection, TrackKind};
+    if input.tracks.len() != 2
+        || !super::progressive::profile_shape(input)
+        || !matches!(
+            input.protection,
+            Protection::Clear | Protection::Cenc | Protection::Cbcs
+        )
+        || input
+            .tracks
+            .iter()
+            .any(|track| track.protection != input.protection)
+        || !audio::movie(source)?.fragmented
+    {
+        return Ok(false);
+    }
+    let movie = super::native_media::inspect(source, stop)?;
+    if movie.tracks.len() != 2 {
+        return Ok(false);
+    }
+    for track in &movie.tracks {
+        if !matches!(track.edits.as_slice(), [edit]
+            if edit.duration > 0 && edit.media_time >= 0 && edit.rate_integer == 1 && edit.rate_fraction == 0)
+            || window(source, track.index)?.is_none()
+        {
+            return Ok(false);
+        }
+        if track.kind == TrackKind::Audio {
+            let config = super::native_media::AacConfiguration::parse(&track.decoder_config)?;
+            if config.object_type != 2 || config.core_object_type != 2 || config.sbr || config.ps {
+                return Ok(false);
+            }
+        }
+    }
+    super::signaling::qualified_mp4(source, stop, true)?;
+    Ok(true)
+}
+
 impl super::Converter {
     pub(super) fn finite_mp4(
         &self,
@@ -359,6 +402,11 @@ impl super::Converter {
         target: crate::inspection::TargetProtection,
     ) -> Result<Option<super::ConversionReport>, ConversionError> {
         use crate::inspection::{Protection, TargetProtection};
+        if fragmented_joint_profile(source, input, &self.backend.stop)? {
+            return self
+                .package_finite_mp4(source, destination, input, keys, output, target)
+                .map(Some);
+        }
         let finite = has_audio(source)? && !audio::movie(source)?.fragmented;
         if finite {
             if !super::progressive::validate_input(source, input, keys)? {
@@ -376,12 +424,12 @@ impl super::Converter {
         }
         if finite && matches!(target, TargetProtection::Cenc | TargetProtection::Cbcs) {
             return self
-                .finite_encrypted_mp4(
+                .package_finite_mp4(
                     source,
                     destination,
                     input,
                     keys,
-                    output.ok_or(ConversionError("output-key-required"))?,
+                    Some(output.ok_or(ConversionError("output-key-required"))?),
                     target,
                 )
                 .map(Some);
@@ -389,29 +437,56 @@ impl super::Converter {
         Ok(None)
     }
 
-    pub(super) fn finite_encrypted_mp4(
+    fn package_finite_mp4(
         &self,
         source: &Path,
         output: &Path,
         input: &crate::inspection::Inspection,
         keys: &super::InputKeys,
-        key: &super::OutputKey,
+        key: Option<&super::OutputKey>,
         target: crate::inspection::TargetProtection,
     ) -> Result<super::ConversionReport, ConversionError> {
-        self.progressive_codecs(
-            source,
-            input,
-            (input.protection != crate::inspection::Protection::Clear)
-                .then_some(super::keys::ProbeKeys::All(keys)),
-        )?;
+        use crate::inspection::{Protection, TargetProtection};
+        let key = if target == TargetProtection::Clear {
+            None
+        } else {
+            key
+        };
+        if target != TargetProtection::Clear && key.is_none() {
+            return Err(ConversionError("output-key-required"));
+        }
         let stage = super::workspace()?;
+        let fragmented = audio::movie(source)?.fragmented;
+        let views = if fragmented && input.protection != Protection::Clear {
+            let directory = stage.path().join("views");
+            super::files::create_dir(&directory)?;
+            Some(split_parts(source, &directory, &self.backend.stop)?)
+        } else {
+            None
+        };
+        if fragmented {
+            self.backend.native_validate_complete_mp4(
+                source,
+                Some(super::keys::ProbeKeys::All(keys)),
+                views.as_deref(),
+            )?;
+        } else {
+            self.progressive_codecs(
+                source,
+                input,
+                (input.protection != Protection::Clear)
+                    .then_some(super::keys::ProbeKeys::All(keys)),
+            )?;
+        }
         let mut parts = Vec::new();
         let clear_original = stage.path().join("whole-clear.mp4");
-        let packaging_source = if input.protection == crate::inspection::Protection::Clear {
-            source
+        let (packaging_source, decryption) = if input.protection == Protection::Clear {
+            (source, None)
+        } else if fragmented {
+            (source, Some(keys))
         } else {
             self.clear_finite(source, &clear_original, input, keys)?;
-            &clear_original
+            (clear_original.as_path(), None)
         };
 
         for index in 0..input.tracks.len() {
@@ -419,43 +494,29 @@ impl super::Converter {
             super::files::create_dir(&dir)?;
             let part = dir.join("fragment.mp4");
             let clear = dir.join("clear.mp4");
+            let (selected, selector) = views.as_ref().map_or((packaging_source, index), |views| {
+                (views[index].as_path(), 0)
+            });
             self.backend
-                .package_stream(packaging_source, index, &clear, None, None)?;
-            self.backend
-                .package_stream(&clear, 0, &part, None, Some((key, target)))?;
-            parts.push(part);
+                .package_stream(selected, selector, &clear, decryption, None)?;
+            if target == TargetProtection::Clear {
+                parts.push(clear);
+            } else {
+                self.backend.package_stream(
+                    &clear,
+                    0,
+                    &part,
+                    None,
+                    Some((key.ok_or(ConversionError("output-key-required"))?, target)),
+                )?;
+                parts.push(part);
+            }
         }
         let candidate = stage.path().join("result.mp4");
         fragment::combine(&parts, source, &candidate, &self.backend.stop)?;
-        let result_keys = super::InputKeys::new(vec![super::ContentKey::from_hex(
-            &key.0.id_hex(),
-            &key.0.key_hex(),
-        )?])?;
-        let empty = super::HlsInputKeys::default();
-        let verification = self.verify(super::VerificationRequest {
-            source: super::VerificationSource {
-                input: source,
-                input_keys: keys,
-                hls_keys: &empty,
-            },
-            output: super::VerificationSource {
-                input: &candidate,
-                input_keys: &result_keys,
-                hls_keys: &empty,
-            },
-        })?;
-        if !verification.passed {
-            return Err(ConversionError("round-trip-verification-failed"));
-        }
-        let actual = crate::inspection::inspect(&candidate).map_err(|_| BAD)?;
-        if actual.tracks.len() != input.tracks.len()
-            || actual
-                .tracks
-                .iter()
-                .any(|t| t.key_ids != [key.0.id_hex()] || t.protection.as_str() != target.as_str())
-        {
-            return Err(ConversionError("output-protection-mismatch"));
-        }
+        let (verification, actual) =
+            self.verify_finite_result(source, &candidate, keys, key, target, input.tracks.len())?;
+        self.backend.checkpoint(&[&stage]);
         self.publish(&stage, &candidate, output)?;
         Ok(super::ConversionReport {
             schema_version: 2,
@@ -467,6 +528,55 @@ impl super::Converter {
                 crate::inspection::InputPreparation::CompleteFile,
             )),
         })
+    }
+
+    fn verify_finite_result(
+        &self,
+        source: &Path,
+        candidate: &Path,
+        keys: &super::InputKeys,
+        key: Option<&super::OutputKey>,
+        target: crate::inspection::TargetProtection,
+        tracks: usize,
+    ) -> Result<(super::VerificationReport, crate::inspection::Inspection), ConversionError> {
+        use crate::inspection::TargetProtection;
+        let result_keys = if let Some(key) = key {
+            super::InputKeys::new(vec![super::ContentKey::from_hex(
+                &key.0.id_hex(),
+                &key.0.key_hex(),
+            )?])?
+        } else {
+            super::InputKeys::default()
+        };
+        let empty = super::HlsInputKeys::default();
+        let verification = self.verify(super::VerificationRequest {
+            source: super::VerificationSource {
+                input: source,
+                input_keys: keys,
+                hls_keys: &empty,
+            },
+            output: super::VerificationSource {
+                input: candidate,
+                input_keys: &result_keys,
+                hls_keys: &empty,
+            },
+        })?;
+        if !verification.passed {
+            return Err(ConversionError("round-trip-verification-failed"));
+        }
+        let actual = crate::inspection::inspect(candidate).map_err(|_| BAD)?;
+        if actual.tracks.len() != tracks
+            || actual.tracks.iter().any(|t| {
+                t.protection.as_str() != target.as_str()
+                    || key.map_or(!t.key_ids.is_empty(), |key| t.key_ids != [key.0.id_hex()])
+            })
+        {
+            return Err(ConversionError("output-protection-mismatch"));
+        }
+        if target == TargetProtection::Clear {
+            super::cenc::clear(&audio::movie(candidate)?)?;
+        }
+        Ok((verification, actual))
     }
 }
 

@@ -394,6 +394,55 @@ impl Backend {
     ) -> Result<VerificationReport, ConversionError> {
         self.native_validate_mp4_with_clock(input, index, keys, None)
     }
+    /// Qualify every track from one complete guarded sample scan.
+    pub(in crate::conversion) fn native_validate_complete_mp4(
+        &self,
+        input: &Path,
+        keys: Option<super::super::keys::ProbeKeys<'_>>,
+        views: Option<&[std::path::PathBuf]>,
+    ) -> Result<VerificationReport, ConversionError> {
+        let media = self.native_media(input, keys)?;
+        if views.is_some_and(|views| views.len() != media.tracks.len()) {
+            return Err(ConversionError("source-track-view-verification-failed"));
+        }
+        for (index, track) in media.tracks.iter().enumerate() {
+            super::mp4_profile(&track.descriptor)?;
+            let source_window = checked_window(
+                track,
+                media.movie.fragmented,
+                super::super::finite::window(input, index)?,
+            )?;
+            super::super::progressive::playback_controls_equal(input, index, input, index)?;
+            if let Some(views) = views {
+                let view = self.native_media(&views[index], keys)?;
+                let [selected] = view.tracks.as_slice() else {
+                    return Err(ConversionError("source-track-view-verification-failed"));
+                };
+                let result_window = checked_window(
+                    selected,
+                    view.movie.fragmented,
+                    super::super::finite::window(&views[index], 0)?,
+                )?;
+                let mut check =
+                    compare_tracks(&media, track, source_window, &view, selected, result_window)?;
+                check.checks.packet_timing_equal &=
+                    super::super::progressive::playback_controls_equal(
+                        input,
+                        index,
+                        &views[index],
+                        0,
+                    )?;
+                check.refresh_passed();
+                if !check.passed {
+                    return Err(ConversionError("source-track-view-verification-failed"));
+                }
+            }
+        }
+        let mut report = report(true, true, true);
+        report.scope = VerificationScope::SourceAdmission;
+        report.refresh_passed();
+        Ok(report)
+    }
     pub(in crate::conversion) fn native_validate_mp4_with_clock(
         &self,
         input: &Path,

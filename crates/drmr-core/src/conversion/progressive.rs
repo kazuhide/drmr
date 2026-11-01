@@ -124,7 +124,7 @@ fn edit(
         media_time,
     }))
 }
-fn profile_shape(report: &Inspection) -> bool {
+pub(super) fn profile_shape(report: &Inspection) -> bool {
     matches!(report.tracks.len(), 1 | 2)
         && report
             .tracks
@@ -587,7 +587,7 @@ impl Converter {
         input: &Inspection,
         keys: Option<super::keys::ProbeKeys<'_>>,
     ) -> Result<(), ConversionError> {
-        let sample_counts = if keys.is_some() {
+        let sample_counts = if keys.is_some() && !audio::movie(source)?.fragmented {
             Some(super::cenc::sample_counts(&audio::movie(source)?)?)
         } else {
             None
