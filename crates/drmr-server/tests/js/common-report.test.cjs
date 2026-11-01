@@ -314,3 +314,37 @@ test('report bindings clear on null evidence and reject path-like metadata', () 
   attrs.forEach(name => assert.equal(r.host.getAttribute('data-common-' + name), null, name));
   assert.doesNotMatch(r.text(), /not-dom/);
 });
+
+
+const diagnosticFailure = detail => ({ report_kind: 'failure', operation: 'analyze', report: {
+  schema_version: 1, status: 'failed', error: { code: 'key-file-invalid', hint: 'PRIVATE_CONFIGURATION_CANARY',
+    configuration: detail, last_activity: 'configuration' }
+} });
+const safeDiagnostic = () => ({ schema_version: 1, file: 'keys', path: ['input', 'keys', 0, 'key'],
+  expected: 'hex-16-bytes', line: 2, column: 4 });
+test('configuration failures render known schema positions and fixed expectations without raw hints', () => {
+  const text = renderResult(diagnosticFailure(safeDiagnostic()));
+  assert.match(text, /input.keys\[0\].key/);
+  assert.match(text, /commonConfigurationExpected_hex-16-bytes/);
+  assert.match(text, /commonConfigurationLineColumn/);
+  assert.doesNotMatch(text, /PRIVATE_CONFIGURATION_CANARY/);
+  const bundled = { schema_version: 1, file: 'keys', path: ['outputs', '*', 'key'], expected: 'hex-16-bytes' };
+  assert.match(renderResult(diagnosticFailure(bundled)), /outputs.\*.key/);
+  const outputs = diagnosticFailure({ schema_version: 1, file: 'outputs', path: ['outputs', 1, 'format'], expected: 'output-format' });
+  outputs.report.error.code = 'output-spec-invalid';
+  assert.match(renderResult(outputs), /outputs\[1\].format/);
+});
+test('forged configuration fields, contexts, values and positions never reach the DOM', () => {
+  for (const [field, value] of [
+    ['path', ['input', 'PRIVATE_CONFIGURATION_CANARY']], ['path', ['input', 'outputs', 0]],
+    ['path', ['outputs', 'PRIVATE_CONFIGURATION_CANARY', 'key']], ['path', ['input', 'keys', 65537, 'key']],
+    ['path', ['input', 'keys', -1, 'key']], ['path', ['__proto__']],
+    ['expected', 'PRIVATE_CONFIGURATION_CANARY'], ['expected', 'output-format'],
+    ['file', 'outputs'], ['line', 0], ['line', 65538], ['column', null],
+    ['column', 65537], ['schema_version', 2], ['PRIVATE_CONFIGURATION_CANARY', 'PRIVATE_CONFIGURATION_CANARY']
+  ]) {
+    const text = renderResult(diagnosticFailure({ ...safeDiagnostic(), [field]: value }));
+    assert.doesNotMatch(text, /PRIVATE_CONFIGURATION_CANARY/);
+    assert.doesNotMatch(text, /commonConfigurationExpected/);
+  }
+});

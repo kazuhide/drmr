@@ -18,6 +18,51 @@ The three file types have independent schema versions. The examples here use
 output-list version 3 and named-key-file version 2. The single-output
 `--to`/`--format` interface uses [key-file version 1](usage.md#separate-input-and-output-keys).
 
+## Correcting a configuration error
+
+`analyze`, `plan`, `convert` and `verify` validate a supplied key file before
+processing media. `plan` and direct `convert` also validate the output list.
+Invalid files keep the existing `key-file-invalid` or `output-spec-invalid`
+error code and exit status `2`.
+
+For example, a boolean instead of a key string produces guidance like this:
+
+```text
+keys configuration at input.keys[0].key (line 5, column 18): Use a string of exactly 32 hexadecimal characters (16 bytes).
+```
+
+Array positions start at zero: `keys[0]` is the first key. Fix the named field in
+your local file; drmr does not print its supplied value. `--json` includes the
+same guidance in `error.hint` and adds structured detail, for example:
+
+```json
+{
+  "code": "key-file-invalid",
+  "configuration": {
+    "schema_version": 1,
+    "file": "keys",
+    "path": ["input", "keys", 0, "key"],
+    "expected": "hex-16-bytes",
+    "line": 5,
+    "column": 18
+  }
+}
+```
+
+This is an excerpt from the `error` object, not a complete command result.
+Line and column are included for JSON decoding errors. A value that decodes
+successfully but fails validation may have a field position without a line or
+column. Unsupported combinations can point to the containing object rather than
+a single field. File-access failures and the 64 KiB file limit point to `root`.
+
+Diagnostics contain only known schema fields, array positions and fixed
+guidance. For named key domains, `outputs.*.key` points to a key in an output
+entry; `*` deliberately replaces the operator's output ID. An unknown field name
+is omitted, and the diagnostic points to the containing object. The original
+file path, supplied IDs, key material, URIs and raw parser messages are never
+included. Web and Desktop use the same safe fields. See
+[local security](security.md) for memory and process-argument handling.
+
 ## Before running an example
 
 Install the [required tools](requirements.md) for the selected conversion and

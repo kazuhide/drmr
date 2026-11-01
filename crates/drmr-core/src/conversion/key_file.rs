@@ -1,5 +1,6 @@
 //! Strict operator configuration; secret strings and input bytes are wiped on drop.
 
+use super::configuration::{self, Failure, Field as F, File as ConfigurationFile, Segment};
 use super::{
     Aes128Key, ContentKey, ConversionError, HlsInputKeys, HlsOutputKey, InputKeys, OutputKey,
     SegmentIv,
@@ -229,17 +230,27 @@ impl Drop for RawKey {
 
 /// Read at most 64 KiB from a protected, regular, singly linked operator file.
 pub fn read(path: &Path) -> Result<OperatorKeys, ConversionError> {
-    let bytes = read_bytes(path)?;
+    read_diagnostic(path).map_err(|error| error.cause)
+}
+
+/// Read exactly once, returning only public schema locations on failure.
+pub fn read_diagnostic(path: &Path) -> Result<OperatorKeys, Failure> {
+    let bytes = read_bytes(path).map_err(|_| Failure::root(ConfigurationFile::Keys))?;
     parse_single(&bytes)
 }
 
-fn parse_single(bytes: &[u8]) -> Result<OperatorKeys, ConversionError> {
-    let raw: RawFile = serde_json::from_slice(bytes).map_err(|_| INVALID)?;
+fn keys_failure(path: impl IntoIterator<Item = Segment>) -> Failure {
+    Failure::at(ConfigurationFile::Keys, path)
+}
+
+fn parse_single(bytes: &[u8]) -> Result<OperatorKeys, Failure> {
+    let raw: RawFile = configuration::parse(bytes, ConfigurationFile::Keys)?;
     if raw.schema_version != 1 {
-        return Err(INVALID);
+        return Err(keys_failure([F::SchemaVersion.into()]));
     }
     let (input, hls_input) = parse_input(&raw.input)?;
-    let mut output = parse_output(raw.output.as_ref())?;
+    let mut output = parse_output(raw.output.as_ref())
+        .map_err(|_| output_failure(raw.output.as_ref(), &[F::Output.into()]))?;
     output.input = input;
     output.hls_input = hls_input;
     Ok(output)
@@ -247,21 +258,30 @@ fn parse_single(bytes: &[u8]) -> Result<OperatorKeys, ConversionError> {
 
 /// Read a strict schema-version-2 file. Output identifiers carry no path authority.
 pub fn read_bundle(path: &Path) -> Result<BundleOperatorKeys, ConversionError> {
-    let bytes = read_bytes(path)?;
+    read_bundle_diagnostic(path).map_err(|error| error.cause)
+}
+
+/// Read a named-output key file without retaining output names in failures.
+pub fn read_bundle_diagnostic(path: &Path) -> Result<BundleOperatorKeys, Failure> {
+    let bytes = read_bytes(path).map_err(|_| Failure::root(ConfigurationFile::Keys))?;
     parse_bundle(&bytes)
 }
 
-fn parse_bundle(bytes: &[u8]) -> Result<BundleOperatorKeys, ConversionError> {
-    let raw: RawBundle = serde_json::from_slice(bytes).map_err(|_| INVALID)?;
+fn parse_bundle(bytes: &[u8]) -> Result<BundleOperatorKeys, Failure> {
+    let raw: RawBundle = configuration::parse(bytes, ConfigurationFile::Keys)?;
     if raw.schema_version != 2 {
-        return Err(INVALID);
+        return Err(keys_failure([F::SchemaVersion.into()]));
     }
     let (input, hls_input) = parse_input(&raw.input)?;
     let outputs = raw
         .outputs
         .iter()
-        .map(|(id, output)| Ok((id.clone(), parse_output(Some(output))?)))
-        .collect::<Result<_, ConversionError>>()?;
+        .map(|(id, output)| {
+            let keys = parse_output(Some(output))
+                .map_err(|_| output_failure(Some(output), &[F::Outputs.into(), F::Entry.into()]))?;
+            Ok((id.clone(), keys))
+        })
+        .collect::<Result<_, Failure>>()?;
     Ok(BundleOperatorKeys {
         input,
         hls_input,
@@ -273,12 +293,17 @@ fn parse_bundle(bytes: &[u8]) -> Result<BundleOperatorKeys, ConversionError> {
 /// The complete file is validated; output domains are discarded rather than inferred.
 /// Conversion and verification must still use the schema matching their output contract.
 pub fn read_source(path: &Path) -> Result<OperatorKeys, ConversionError> {
+    read_source_diagnostic(path).map_err(|error| error.cause)
+}
+
+/// Dispatch and validate from one protected buffer, without reopening the file.
+pub fn read_source_diagnostic(path: &Path) -> Result<OperatorKeys, Failure> {
     #[derive(Deserialize)]
     struct Version {
         schema_version: u32,
     }
-    let bytes = read_bytes(path)?;
-    let version: Version = serde_json::from_slice(&bytes).map_err(|_| INVALID)?;
+    let bytes = read_bytes(path).map_err(|_| Failure::root(ConfigurationFile::Keys))?;
+    let version: Version = configuration::parse(&bytes, ConfigurationFile::Keys)?;
     let (input, hls_input) = match version.schema_version {
         1 => {
             let keys = parse_single(&bytes)?;
@@ -288,7 +313,7 @@ pub fn read_source(path: &Path) -> Result<OperatorKeys, ConversionError> {
             let keys = parse_bundle(&bytes)?;
             (keys.input, keys.hls_input)
         }
-        _ => return Err(INVALID),
+        _ => return Err(keys_failure([F::SchemaVersion.into()])),
     };
     Ok(OperatorKeys {
         input,
@@ -309,32 +334,134 @@ fn read_bytes(path: &Path) -> Result<Zeroizing<Vec<u8>>, ConversionError> {
     Ok(bytes)
 }
 
-fn parse_input(raw: &RawInput) -> Result<(InputKeys, HlsInputKeys), ConversionError> {
+fn parse_input(raw: &RawInput) -> Result<(InputKeys, HlsInputKeys), Failure> {
+    let location = |field: F, index: usize, leaf: F| {
+        keys_failure([
+            F::Input.into(),
+            field.into(),
+            Segment::Index(index),
+            leaf.into(),
+        ])
+    };
     let input = raw
         .keys
         .iter()
-        .map(|key| ContentKey::from_hex(&key.kid, &key.key))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| INVALID)?;
-    let input = InputKeys::new(input).map_err(|_| INVALID)?;
+        .enumerate()
+        .map(|(index, key)| {
+            ContentKey::from_hex(&key.kid, &key.key).map_err(|error| {
+                location(
+                    F::Keys,
+                    index,
+                    if error.0 == "invalid-key-id" {
+                        F::Kid
+                    } else {
+                        F::Key
+                    },
+                )
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let input =
+        InputKeys::new(input).map_err(|_| keys_failure([F::Input.into(), F::Keys.into()]))?;
     let hls_input = raw
         .hls_keys
         .iter()
-        .map(|key| {
+        .enumerate()
+        .map(|(index, key)| {
             Ok((
                 key.uri.clone(),
-                Aes128Key::from_hex(&key.key).map_err(|_| INVALID)?,
+                Aes128Key::from_hex(&key.key).map_err(|_| location(F::HlsKeys, index, F::Key))?,
                 key.iv
                     .as_deref()
                     .map(SegmentIv::from_hex)
                     .transpose()
-                    .map_err(|_| INVALID)?,
+                    .map_err(|_| location(F::HlsKeys, index, F::Iv))?,
             ))
         })
-        .collect::<Result<Vec<_>, ConversionError>>()?;
-    let hls_input = HlsInputKeys::new_with_ivs(hls_input).map_err(|_| INVALID)?;
+        .collect::<Result<Vec<_>, Failure>>()?;
+    let hls_input = HlsInputKeys::new_with_ivs(hls_input)
+        .map_err(|_| keys_failure([F::Input.into(), F::HlsKeys.into()]))?;
     Ok((input, hls_input))
 }
+
+// Called only after the canonical output validator failed. Component validators
+// identify a useful location without rereading, formatting or retaining its values.
+fn output_failure(raw: Option<&RawOutput>, path: &[Segment]) -> Failure {
+    let at = |fields: &[F]| {
+        keys_failure(
+            path.iter()
+                .copied()
+                .chain(fields.iter().copied().map(Segment::from)),
+        )
+    };
+    let Some(raw) = raw else {
+        return at(&[]);
+    };
+    if let Some(kid) = &raw.kid {
+        if raw.iv.is_some() {
+            return at(&[]);
+        }
+        if let Err(error) = OutputKey::from_hex(kid, &raw.key) {
+            return at(&[if error.0 == "invalid-key-id" {
+                F::Kid
+            } else {
+                F::Key
+            }]);
+        }
+    } else if Aes128Key::from_hex(&raw.key).is_err() {
+        return at(&[F::Key]);
+    }
+    if raw
+        .iv
+        .as_deref()
+        .is_some_and(|iv| SegmentIv::from_hex(iv).is_err())
+    {
+        return at(&[F::Iv]);
+    }
+    if let Some(uri) = &raw.hls_key_uri {
+        if uri.is_empty()
+            || uri.len() > 4096
+            || uri.contains('"')
+            || uri.chars().any(char::is_control)
+        {
+            return at(&[F::HlsKeyUri]);
+        }
+    } else if raw.kid.is_none() {
+        return at(&[]);
+    }
+    if let Some(signaling) = &raw.signaling {
+        match signaling {
+            RawSignaling::PlayReady { license_url } => {
+                if super::OutputSignaling::playready(license_url).is_err() {
+                    return at(&[F::Signaling, F::LicenseUrl]);
+                }
+            }
+            RawSignaling::MultiDrm {
+                widevine_pssh,
+                playready_license_url,
+                fairplay,
+            } => {
+                if playready_license_url
+                    .as_deref()
+                    .is_some_and(|url| super::OutputSignaling::playready(url).is_err())
+                {
+                    return at(&[F::Signaling, F::PlayreadyLicenseUrl]);
+                }
+                if widevine_pssh.as_deref().is_some_and(|pssh| {
+                    super::OutputSignaling::multi_drm(Some(pssh), None, false).is_err()
+                }) {
+                    return at(&[F::Signaling, F::WidevinePssh]);
+                }
+                if *fairplay && raw.hls_key_uri.is_none() {
+                    return at(&[F::HlsKeyUri]);
+                }
+            }
+        }
+        return at(&[F::Signaling]);
+    }
+    at(&[])
+}
+
 fn parse_output(raw: Option<&RawOutput>) -> Result<OperatorKeys, ConversionError> {
     let (output, hls_output) = match raw {
         None => (None, None),

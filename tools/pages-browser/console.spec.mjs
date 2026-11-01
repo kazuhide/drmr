@@ -9,7 +9,7 @@ import { assertVerification as checks, decodeBadgeState, compatibilityPlan, lega
 
 const id = () => randomBytes(16).toString('hex');
 const privateValues = ['00112233445566778899aabbccddeeff', 'ffeeddccbbaa99887766554433221100',
-  '102132435465768798a9bacbdcedfe0f', 'private-browser-marker', 'private-browser-auth-marker'];
+  '102132435465768798a9bacbdcedfe0f', 'private-browser-marker', 'private-browser-auth-marker', 'private-configuration-canary'];
 let fixture, caps, importedPlans;
 const pages = new WeakMap();
 async function api(request, path, { method = 'GET', data, expected = 200 } = {}) {
@@ -438,6 +438,32 @@ for (const language of ['en', 'ja']) {
     await page.screenshot({ path: info.outputPath('verified-' + language + '.png'), fullPage: true });
   });
 }
+
+test('configuration diagnostics show known fields and keep private parser details out of the DOM', async ({ page }) => {
+  await openSession(page);
+  await pick(page, 'keys', 'invalid-keys.json');
+  const job = await observedJob(page, '#common-analyze', 'analyze', { expected: 'failed' });
+  expect(job.exit_code).toBe(2);
+  expect(job.observedReport.report.error.code).toBe('key-file-invalid');
+  expect(job.observedReport.report.error.configuration.path).toEqual(['input', 'keys', 0, 'key']);
+  const detail = page.locator('#common-analysis-report [data-common-configuration="keys"]');
+  await expect(detail).toBeVisible(); await expect(detail).toContainText('input.keys[0].key');
+  for (const language of ['en', 'ja']) {
+    await page.locator('#language-select').selectOption(language);
+    await expect(detail).toContainText(language === 'en' ? '32 hexadecimal characters' : '32桁の16進数文字列');
+  }
+  // Negative renderer controls supplement the real child-process failure above.
+  const text = await page.evaluate(envelope => {
+    const host = document.createElement('div'); document.body.appendChild(host);
+    try {
+      envelope.report.error.hint = 'private-configuration-canary';
+      envelope.report.error.configuration.path.push('private-configuration-canary');
+      window.App.CommonReport.render(host, envelope);
+      return { text: host.textContent, locations: host.querySelectorAll('[data-common-configuration]').length };
+    } finally { host.remove(); }
+  }, job.observedReport);
+  expect(text.locations).toBe(0); expect(text.text).not.toContain('private-configuration-canary');
+});
 
 test('CLI version-one saved plan can be independently verified without conversion', async ({ page }) => {
   await openSession(page, 'saved-plan', importedPlans.v1);
