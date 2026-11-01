@@ -152,6 +152,10 @@ prove that a particular asset can be processed.
 
 ## Supported input
 
+Current source accepts qualified H.264, HEVC Main/Main10 and AAC in MP4/fMP4.
+HEVC is not included in the v1.0.3 archives. See [HEVC validation and limits](docs/verification.md#hevc-in-mp4-and-fmp4).
+Transport stream conversion still requires the qualified H.264/AAC profiles.
+
 The generic `convert` command accepts qualified local MP4, fragmented MP4 DASH/HLS, and MPEG transport stream HLS profiles, including encrypted input. Transport stream input can be clear, AES-128, or SAMPLE-AES with supplied keys and initialization vectors. See [conversion support](docs/conversion-support.md) for restrictions and tested routes.
 
 Qualified TS HLS can also become one fragmented MP4 file with clear, `cenc`

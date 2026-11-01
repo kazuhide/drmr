@@ -72,14 +72,13 @@ Full MP4 admission also refuses unmodeled track apertures (`tapt`), track
 references (`tref`) and extended-language controls (`elng`). Metadata-only
 identification does not qualify those playback or selection semantics.
 
-Complete media admission currently accepts the implemented AVC (H.264) and
-typed AAC profiles. Recognizing HEVC, AV1, VP9, AC-3, E-AC-3, Opus or FLAC
-configuration metadata does not implement their complete native validation.
-Full media operations refuse those profiles with
-`native-codec-profile-not-supported`; metadata-only identification remains
-available. `--decode` still requires native admission and cannot bypass this
-refusal. Container and encryption support tables do not qualify every codec
-that those formats can carry.
+Complete media admission accepts the implemented AVC (H.264), typed AAC and
+[HEVC Main/Main10 MP4/fMP4 profiles](#hevc-in-mp4-and-fmp4). Transport stream video
+still requires the implemented H.264 profile. Recognizing AV1, VP9, AC-3,
+E-AC-3, Opus or FLAC configuration metadata does not establish complete native
+validation. Full operations refuse unimplemented profiles; metadata-only
+identification remains available. `--decode` cannot bypass native refusals.
+Container/encryption tables do not qualify every codec those formats can carry.
 
 When a saved plan selects `segments`, verification also compares each original
 resource's sample membership, fragment grouping and absolute clocks with the
@@ -99,6 +98,67 @@ refuses field-coded or mixed pictures, MBAFF, unsupported slice groups or slice
 ordering, and unsupported repeated-picture durations. A TS video timing clock
 must be available. Header parsing is not a claim that every AVC profile,
 bit depth, chroma arrangement or combination has been qualified.
+
+## HEVC in MP4 and fMP4
+
+Current source supports single-layer, progressive HEVC (H.265) Main and Main10
+with 4:2:0 chroma and matching 8-bit or 10-bit luma/chroma depths. This applies
+to progressive MP4 and fMP4 in HLS or DASH, with clear, `cenc` or `cbcs` samples.
+It is not included in the v1.0.3 release archives. HEVC transport streams and
+Dolby Vision are not qualified by this path.
+
+Rust parses the HEVC decoder configuration (`hvcC`) and the video, sequence and
+picture parameter sets (VPS/SPS/PPS). It checks their identifiers, profile,
+level, bit depth, dimensions, aspect ratio and colour information against each
+other and the MP4 declarations. Each compressed sample is parsed as one coded
+picture, with every Network Abstraction Layer (NAL) unit and slice header
+checked. I/P/B pictures, multiple slices, short/long-term references, weighted
+prediction, tiles, dependent slices and wavefront parallel processing are
+modeled. IDR, BLA and CRA random-access pictures and leading pictures retain
+their distinct headers and must match the MP4 sync declarations.
+
+The `hvc1` entry keeps parameter sets in its configuration and refuses in-band
+parameter sets. `hev1` accepts only byte-identical repetitions of the declared
+sets before a picture. Canonical comparison removes only these validated
+framing repetitions and length prefixes. It retains every other compressed
+byte, including supplemental enhancement information (SEI). Supported SEI
+includes timing, recovery, user data, active parameter sets, decoded-picture
+hashes and static HDR metadata. Decoded-picture hash messages are structurally
+validated and retained; native checks do not recompute pixel hashes. Header
+checks do not decode entropy-coded
+coding tree units; `--decode` separately compares every decoded picture.
+Retaining HDR metadata does not qualify HDR rendering or device playback.
+
+Native CENC/CBCS writing leaves the complete parsed slice header and non-slice
+NAL units clear. CENC protects a whole number of 16-byte blocks; CBCS begins
+immediately after the slice header and applies the declared block pattern,
+leaving incomplete final blocks clear. Each slice's pattern and encryption
+records are checked independently of the output's original success report.
+Native `segments` processing preserves resource membership and needs no
+Packager or decoder. `auto`/`stitch` packaging routes use Shaka Packager while
+Rust independently checks their complete input and output media.
+
+A neutral `fiel` value of `[1, 0]` declares progressive frames. Its omission by
+a packager is equivalent only when both independently parsed HEVC configurations
+establish progressive pictures. Other HEVC field declarations are refused;
+other display controls remain part of the comparison.
+
+The current validation profile requires one stable VPS, SPS and PPS. It refuses
+multilayer/other profiles, unmodeled extensions or SEI, field/repeated pictures,
+and a nonzero VUI default-display crop. These are implementation acceptance
+limits; HEVC defines additional configurations. Configuration is bounded to
+1 MiB and access units to 8 MiB and 4,096 NAL units. Exceeding a limit causes a
+refusal rather than a switch to unchecked raw samples.
+
+The attributed [Main/Main10 fixtures](../crates/drmr/tests/fixtures/bbb/HEVC.md)
+contain 240 pictures each, including reordered B pictures, multiple slices,
+CRA/leading pictures and in-band parameter repetition. The native regressions
+cover MP4 clear → CENC → CBCS → clear, DASH/HLS conversions in `auto`, `stitch`
+and `segments`, fresh independent verification, wrong/missing keys, late
+payload/clock/sync changes and moved resource membership. Independent FFprobe
+packet hashes/clocks and explicit complete-decoding tests check the native
+implementation. See [the regression source](../crates/drmr-core/tests/conversion_hevc.rs).
+This evidence does not establish DRM license acquisition or device playback.
 
 ## What `--decode` adds
 

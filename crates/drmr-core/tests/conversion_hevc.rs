@@ -494,7 +494,7 @@ fn malformed_configuration_and_a_late_forbidden_nal_never_publish() {
                 hls_key_uri: None,
                 hls_output_key: None,
             });
-            let error = result.err().expect("malformed HEVC must fail conversion");
+            let error = result.expect_err("malformed HEVC must fail conversion");
             assert!(
                 matches!(
                     error.0,
@@ -541,4 +541,71 @@ fn explicit_decode_adds_complete_main_and_main10_picture_comparison() {
             .iter()
             .any(|record| record.get("tool").and_then(serde_json::Value::as_str) == Some("ffmpeg"))
     );
+}
+
+#[test]
+fn hevc_with_aac_retains_finite_audio_presentations_without_decoder_processes() {
+    let root = common::private_tempdir().unwrap();
+    let audio = fixture("clip.mp4");
+    let original_audio = fs::read(&audio).unwrap();
+    let (command, events) = converter(ProcessingMode::Auto, true, false);
+    for (profile, (name, _)) in SEEDS.into_iter().enumerate() {
+        let source = root.path().join(format!("joint-{profile}.mp4"));
+        let status = std::process::Command::new("ffmpeg")
+            .args(["-v", "error", "-nostdin", "-threads", "1", "-i"])
+            .arg(fixture(name))
+            .arg("-i")
+            .arg(&audio)
+            .args([
+                "-map",
+                "0:v:0",
+                "-map",
+                "1:a:0",
+                "-c",
+                "copy",
+                "-map_metadata",
+                "-1",
+            ])
+            .arg(&source)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let original = fs::read(&source).unwrap();
+        let mut current = source.clone();
+        let mut keys = InputKeys::default();
+        for (ordinal, target) in [
+            TargetProtection::Cenc,
+            TargetProtection::Cbcs,
+            TargetProtection::Clear,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let destination = root.path().join(format!("joint-{profile}-{ordinal}.mp4"));
+            let (result, next_keys, _) = convert(
+                &command,
+                &current,
+                &keys,
+                &destination,
+                OutputFormat::Mp4,
+                target,
+                ordinal % 2,
+            );
+            assert_native(
+                &verify(
+                    &command,
+                    &source,
+                    &InputKeys::default(),
+                    &result,
+                    &next_keys,
+                )
+                .unwrap(),
+            );
+            current = result;
+            keys = next_keys;
+        }
+        assert_eq!(fs::read(source).unwrap(), original);
+    }
+    assert_eq!(fs::read(audio).unwrap(), original_audio);
+    assert_tools(&events, true);
 }
