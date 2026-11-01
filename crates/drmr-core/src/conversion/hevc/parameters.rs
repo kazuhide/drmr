@@ -306,7 +306,9 @@ fn sample_format(b: &mut Bits<'_>, profile: &Profile) -> Result<Metadata, Conver
         chroma_format_idc: chroma,
         bit_depth_luma: luma,
         bit_depth_chroma: chroma_depth,
-        progressive: true,
+        // Frame-only coding does not establish source scan type. PTL source flags 0/0
+        // explicitly mean unknown; only progressive=1/interlaced=0 is positive proof.
+        progressive: profile.raw[5] & 0xc0 == 0x80,
         sample_aspect_ratio: None,
         full_range: None,
         colour_primaries: None,

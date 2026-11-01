@@ -54,7 +54,7 @@ pub(super) fn hrd(
         }
         value
     };
-    for _ in 0..=max_sub {
+    for layer in 0..=max_sub {
         let general = b.flag()?;
         let fixed = general || b.flag()?;
         let low_delay = if fixed {
@@ -64,7 +64,11 @@ pub(super) fn hrd(
             b.flag()?
         };
         let cpb = if low_delay { 0 } else { b.ue(31)? };
-        value.cpb_count = cpb + 1;
+        // Buffering-period SEI initial delays use CpbCnt from temporal sublayer 0.
+        // Higher sublayers are still parsed completely with their own CPB counts.
+        if layer == 0 {
+            value.cpb_count = cpb + 1;
+        }
         for present in [value.nal, value.vcl] {
             if present {
                 for _ in 0..=cpb {

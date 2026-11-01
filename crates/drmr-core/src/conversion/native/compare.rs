@@ -610,6 +610,41 @@ mod hevc_metadata_tests {
     use super::*;
 
     #[test]
+    fn hevc_review_unknown_source_cannot_gain_progressive_or_field_metadata_equivalence() {
+        use super::super::super::{hevc, native_media};
+        let bytes = hevc::Configuration::test_unknown_source_configuration();
+        let (configuration, width) = hevc::Configuration::from_hvcc(&bytes).unwrap();
+        let (slice, _) = hevc::test_slice();
+        let mut sample = u32::try_from(slice.len()).unwrap().to_be_bytes().to_vec();
+        sample.extend(slice);
+        assert!(
+            configuration
+                .length_prefixed_access_unit(&sample, width, *b"hvc1")
+                .is_ok()
+        );
+        let neutral = SemanticBox {
+            kind: *b"fiel",
+            payload: vec![1, 0],
+        };
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../drmr/tests/fixtures/bbb/hevc-main.mp4");
+        let movie = native_media::inspect(&path, &crate::concurrency::Stop::new()).unwrap();
+        let mut descriptor = movie.tracks[0].clone();
+        descriptor.decoder_config = bytes;
+        descriptor.sample_entry_metadata.width = Some(128);
+        descriptor.sample_entry_metadata.height = Some(128);
+        let profile = super::super::profile::mp4_profile(&descriptor).unwrap();
+        assert_eq!(
+            (
+                configuration.metadata().progressive,
+                semantic_boxes_equal(&[neutral], &[], configuration.metadata().progressive),
+                &profile["field_order"],
+            ),
+            (false, false, &serde_json::Value::Null)
+        );
+    }
+
+    #[test]
     fn hevc_field_box_equivalence_requires_progressive_evidence_and_exact_neutral_value() {
         let neutral = SemanticBox {
             kind: *b"fiel",

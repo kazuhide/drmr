@@ -64,12 +64,26 @@ fn escaped(kind: u8, bytes: &[u8]) -> Vec<u8> {
     }
     nal
 }
-fn ptl(b: &mut Writer, depth: u8) {
+fn profile(b: &mut Writer, depth: u8, unknown_source: bool) {
     b.u(if depth == 8 { 1 } else { 2 }, 8);
     b.u(if depth == 8 { 0x6000_0000 } else { 0x2000_0000 }, 32);
-    b.u(0x9000_0000, 32);
+    b.u(
+        if unknown_source {
+            0x1000_0000
+        } else {
+            0x9000_0000
+        },
+        32,
+    );
     b.u(0, 16);
     b.u(60, 8);
+}
+fn ptl(b: &mut Writer, depth: u8, features: Features) {
+    profile(b, depth, features.unknown_source);
+    if features.max_sub != 0 {
+        // No sublayer-specific profile or level is present; the remaining pairs are reserved.
+        b.u(0, 16);
+    }
 }
 fn parameters(depth: u8) -> [Vec<u8>; 3] {
     parameters_with(depth, Features::default())
@@ -84,16 +98,45 @@ struct Features {
     dependent: bool,
     long_term: bool,
     weighted: bool,
+    unknown_source: bool,
+    hrd: bool,
+    max_sub: u8,
+}
+fn vui_hrd(b: &mut Writer, max_sub: u8) {
+    b.u(0, 8); // Optional display fields, field_seq_flag and frame_field_info_present_flag.
+    b.bit(true);
+    b.u(1, 32);
+    b.u(24, 32);
+    b.bit(false);
+    b.bit(true);
+    b.bit(true); // nal_hrd_parameters_present_flag.
+    b.bit(false);
+    b.bit(false);
+    b.u(0, 8); // Bit-rate and CPB-size scales.
+    for _ in 0..3 {
+        b.u(3, 5); // Four-bit initial, removal and output delays.
+    }
+    for layer in 0..=max_sub {
+        b.bit(true);
+        b.ue(0);
+        b.ue(u32::from(layer));
+        for _ in 0..=layer {
+            b.ue(0);
+            b.ue(0);
+            b.bit(false);
+        }
+    }
+    b.bit(false); // bitstream_restriction_flag.
 }
 fn parameters_with(depth: u8, features: Features) -> [Vec<u8>; 3] {
     let mut v = Writer::default();
     v.u(0, 4);
     v.u(3, 2);
     v.u(0, 6);
-    v.u(0, 3);
+    v.u(u32::from(features.max_sub), 3);
     v.bit(true);
     v.u(65535, 16);
-    ptl(&mut v, depth);
+    ptl(&mut v, depth, features);
     v.bit(false);
     v.ue(4);
     v.ue(2);
@@ -104,9 +147,9 @@ fn parameters_with(depth: u8, features: Features) -> [Vec<u8>; 3] {
     v.bit(false);
     let mut s = Writer::default();
     s.u(0, 4);
-    s.u(0, 3);
+    s.u(u32::from(features.max_sub), 3);
     s.bit(true);
-    ptl(&mut s, depth);
+    ptl(&mut s, depth, features);
     s.ue(0);
     s.ue(1);
     s.ue(128);
@@ -138,7 +181,10 @@ fn parameters_with(depth: u8, features: Features) -> [Vec<u8>; 3] {
     }
     s.bit(true);
     s.bit(true);
-    s.bit(false);
+    s.bit(features.hrd);
+    if features.hrd {
+        vui_hrd(&mut s, features.max_sub);
+    }
     s.bit(false);
     let mut p = Writer::default();
     p.ue(0);
@@ -183,7 +229,7 @@ pub(super) fn hvcc(depth: u8) -> Vec<u8> {
 fn hvcc_with(depth: u8, features: Features) -> Vec<u8> {
     let mut data = vec![1];
     let mut identity = Writer::default();
-    ptl(&mut identity, depth);
+    profile(&mut identity, depth, features.unknown_source);
     data.extend(identity.bytes());
     data.extend([
         0xf0,
@@ -194,7 +240,7 @@ fn hvcc_with(depth: u8, features: Features) -> Vec<u8> {
         0xf8 | (depth - 8),
         0,
         0,
-        0x0f,
+        ((features.max_sub + 1) << 3) | 7,
         3,
     ]);
     for (kind, nal) in (32..=34).zip(parameters_with(depth, features)) {
@@ -204,6 +250,84 @@ fn hvcc_with(depth: u8, features: Features) -> Vec<u8> {
         data.extend(nal);
     }
     data
+}
+impl Configuration {
+    pub(in crate::conversion) fn test_unknown_source_configuration() -> Vec<u8> {
+        hvcc_with(
+            8,
+            Features {
+                unknown_source: true,
+                ..Features::default()
+            },
+        )
+    }
+}
+
+#[test]
+fn hevc_review_tsa_and_stsa_require_nonzero_temporal_id_in_headers_and_access_units() {
+    let features = Features {
+        max_sub: 1,
+        ..Features::default()
+    };
+    let (configuration, width) = Configuration::from_hvcc(&hvcc_with(8, features)).unwrap();
+    for kind in 2..=5 {
+        let mut nal = inter_slice(1, features);
+        nal[0] = kind << 1;
+        nal[1] = 2; // TemporalId 1.
+        assert_eq!(bits::header(&nal).unwrap().temporal, 1);
+        let unit = configuration
+            .length_prefixed_access_unit(&packed(&[&nal], width), width, *b"hvc1")
+            .unwrap();
+        assert_eq!(unit.slice_count, 1);
+        assert!(!unit.is_sync);
+        nal[1] = 1; // TemporalId 0 is forbidden for TSA/STSA, even with a complete valid slice.
+        let header_rejected = bits::header(&nal).is_err();
+        let access_unit_rejected = configuration
+            .length_prefixed_access_unit(&packed(&[&nal], width), width, *b"hvc1")
+            .is_err();
+        assert!(header_rejected && access_unit_rejected, "NAL type {kind}");
+    }
+}
+
+#[test]
+fn hevc_review_buffering_period_uses_layer_zero_cpb_count_and_checks_every_sublayer() {
+    let features = Features {
+        max_sub: 1,
+        hrd: true,
+        ..Features::default()
+    };
+    let (configuration, width) = Configuration::from_hvcc(&hvcc_with(8, features)).unwrap();
+    let mut period = Writer::default();
+    period.ue(0); // bp_seq_parameter_set_id.
+    period.bit(false); // irap_cpb_params_present_flag.
+    period.bit(false); // concatenation_flag.
+    period.u(0, 4);
+    period.u(1, 4);
+    period.u(2, 4); // Exactly one layer-0 initial-delay pair, despite two CPBs in layer 1.
+    period.align();
+    let prefix = sei_nal(39, &[(0, period.bytes())]);
+    let (slice, _) = idr_slice(true, 0, true);
+    assert!(
+        configuration
+            .length_prefixed_access_unit(&packed(&[&prefix, &slice], width), width, *b"hvc1")
+            .is_ok()
+    );
+    assert_eq!(configuration.sps.timing.hrd.unwrap().cpb_count, 1);
+
+    let mut hrd = Writer::default();
+    vui_hrd(&mut hrd, 1);
+    hrd.align();
+    let bytes = hrd.bytes();
+    // Removing the final byte cuts the second sublayer's CPB syntax, not just layer 0.
+    let mut metadata = configuration.metadata().clone();
+    assert!(
+        vui::parse(
+            &mut bits::Bits::new(&bytes[..bytes.len() - 1]),
+            1,
+            &mut metadata
+        )
+        .is_err()
+    );
 }
 #[test]
 fn main_and_main10_configuration_are_parsed_from_declared_parameter_sets() {
