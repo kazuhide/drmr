@@ -279,6 +279,8 @@ KID は key identifier、つまり鍵を選ぶための識別子で、秘密の�
 
 作業場所は所有者だけがアクセスできるディレクトリにします。macOS/Linux では、秘密情報を入力する前にファイルを保護してください。作成済みの非公開 `keys.json` には `chmod 600 keys.json` を使えます。Windows の ACL 設定は第12章にあります。安全でない権限、シンボリックリンク、複数のハードリンク、重複・不明なフィールド、未対応の schema_version、上限を超える設定は拒否します。鍵ファイルは原本・出力のディレクトリとバージョン管理の対象から外してください。
 
+設定の誤りを特定できる場合は、値を伏せたまま項目の位置と必要な形式を表示します。[設定エラーの修正方法](https://github.com/kazuhide/drmr/blob/main/docs/configuration.md#correcting-a-configuration-error)を参照してください。
+
 ## 名前付き出力の鍵ファイルの例
 
 以下の値は公開のテスト用データです。実際の鍵と識別子に置き換えてください。clear 入力から cenc または cbcs の `dash` 出力を作る場合は、次の内容を `keys.json` に保存します。

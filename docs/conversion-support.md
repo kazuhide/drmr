@@ -16,7 +16,8 @@ fMP4 HLS can use it; VP9/CBCS is refused with
 `vp9-protection-scheme-not-supported`. Generic HLS does not establish Apple or
 DRM-device support. Transport stream video still requires the H.264 profile.
 
-HEVC and VP9 support is included in current source, not the v1.0.3 archives.
+Qualified HEVC and VP9 support is available from v1.1.0; the v1.0.3 archives
+do not include it.
 Metadata-only recognition of AV1, AC-3, E-AC-3, Opus or FLAC remains separate
 from complete validation. Full operations refuse unimplemented profiles,
 including with `--decode`.

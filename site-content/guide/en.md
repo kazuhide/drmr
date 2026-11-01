@@ -263,6 +263,8 @@ A KID (key identifier) selects a key; it is not the secret key. Keys and KIDs us
 
 Use an owner-only work directory. On macOS/Linux, protect a new file before entering secrets; for an existing private `keys.json`, use `chmod 600 keys.json`. Chapter 12 explains Windows ACLs. The CLI refuses unsafe files, symbolic links, multiple hard links, duplicate or unknown fields, unsupported schemas and oversized settings. Keep keys outside source/result directories and version control.
 
+Configuration errors can show known field positions and required formats without private values. See [correcting settings](https://github.com/kazuhide/drmr/blob/main/docs/configuration.md#correcting-a-configuration-error).
+
 ## Complete named-output key examples
 
 The following values are public test data. Replace them with your own keys and identifiers. For clear input and a `dash` output using cenc or cbcs, save this complete file as `keys.json`:

@@ -63,15 +63,19 @@ cargo fetch --manifest-path fuzz/Cargo.toml --locked
 cargo metadata --manifest-path fuzz/Cargo.toml --locked --offline --format-version 1
 
 # Keep instrumented build files and mutation outputs outside the repository.
+export CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true
+export CARGO_PROFILE_RELEASE_OVERFLOW_CHECKS=true
 fuzz_work=$(mktemp -d)
 mkdir "$fuzz_work/hevc" "$fuzz_work/vp9" "$fuzz_work/artifacts"
 CARGO_NET_OFFLINE=true cargo +nightly-2026-11-01 fuzz build \
-  --fuzz-dir fuzz --target-dir "$fuzz_work/target"
+  --fuzz-dir fuzz --target-dir "$fuzz_work/target" \
+  --sanitizer address --debug-assertions
 
 for codec in hevc vp9; do
   CARGO_NET_OFFLINE=true cargo +nightly-2026-11-01 fuzz run "$codec" \
     "$fuzz_work/$codec" "fuzz/corpus/$codec" \
-    --fuzz-dir fuzz --target-dir "$fuzz_work/target" -- \
+    --fuzz-dir fuzz --target-dir "$fuzz_work/target" \
+    --sanitizer address --debug-assertions -- \
     -max_total_time=60 -timeout=2 -rss_limit_mb=512 -malloc_limit_mb=128 \
     -max_len=65536 -seed=1 -print_final_stats=1 \
     -artifact_prefix="$fuzz_work/artifacts/"

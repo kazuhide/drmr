@@ -21,6 +21,14 @@ for installation, stable interfaces and versioning.
 - Qualify extracted native CLI archives with eight codec smoke round trips and
   38 refusal controls in ordinary CI, and 534 codec round trips plus those
   controls for a release. Keep the existing H.264/AAC release conditions.
+- Explain supported `keys.json` and `outputs.json` errors with known schema
+  fields, array positions and fixed format guidance in the CLI and experimental
+  Web/Desktop reports. Omit private values, map IDs and unknown field names;
+  retain existing failure codes and exit statuses.
+- Exercise the native HEVC and VP9 parsers with two bounded, address-sanitized
+  fuzz campaigns. Require an exact-source report during release assembly,
+  alongside the native archive checks. Fuzzing remains a separate development
+  dependency and does not establish the absence of defects.
 
 ### Changed
 

@@ -8,8 +8,10 @@ qualification. The local Web console and Desktop host remain experimental.
 
 Version 1.1.0 adds native HEVC Main/Main10 and VP9 conversion and verification
 for the qualified MP4 and fragmented MP4 profiles. It also improves temporary
-verification snapshots and checks extracted CLI archives against the full codec
-matrix described below. These results do not establish HDR, DRM license
+verification snapshots, adds safe configuration diagnostics and checks extracted
+CLI archives against the full codec matrix described below. Release assembly
+also requires finite HEVC/VP9 parser fuzzing for the exact source. These results
+do not establish HDR, DRM license
 acquisition or device playback.
 
 Version 1.0.3 added CENC DASH DRM declarations, TS output from qualified
@@ -335,3 +337,44 @@ mismatched identities block publication assembly. The reports themselves are
 included in the release manifest and `SHA256SUMS`. Test keys use temporary
 owner-protected files; reports contain allowlisted evidence rather than keys,
 source addresses or raw command output.
+
+## Finite codec parser fuzzing
+
+Release assembly also requires `cli-codec-fuzz.json` for the exact source commit,
+tree and version. This is a separate Linux source test, not another native CLI
+archive or decoding test. Coverage-guided fuzzing mutates short, attributed
+HEVC and VP9 seeds and sends them through the actual native sample parsers.
+The 26 initial seeds include accepted profiles and explicit refusal cases;
+ordinary Rust tests also replay the bounded parser adapters.
+
+Each release runs both targets with AddressSanitizer, debug assertions and
+overflow checks. The development compiler is pinned to `nightly-2026-11-01`,
+with `cargo-fuzz` 0.13.2 and `libfuzzer-sys` 0.4.13. Each target runs for 60 seconds
+in one process, with a two-second per-input timeout, a 65,536-byte input limit,
+a 512 MiB resident-memory limit and a 128 MiB allocation limit. The harness also
+bounds configuration size and sample counts. These tools belong to the separate
+`fuzz/Cargo.toml` workspace; installing or running the normal CLI does not need
+them. See the [fuzzing instructions](https://github.com/kazuhide/drmr/blob/main/fuzz/README.md).
+
+The runner audits the locked development graph against the official RustSec
+database, checks the retained source backports, and records the database revision.
+It verifies the source, lockfile, harness, corpus, vendor patches and instrumented
+binary identities before and after execution. A failed, cancelled, incomplete or
+source-mismatched campaign blocks release assembly. Findings must be reproduced
+and fixed with a regression before retrying publication.
+
+Only fixed classifications, counts, resource bounds and hashes enter the public
+report. Mutation corpora and raw child diagnostics are temporary and are not
+uploaded. A passing finite campaign does not prove that all bitstreams are
+supported or that no parser defects remain. It does not establish decoded
+equality, DRM license acquisition or device playback.
+
+Final `tools/prepare_release.py` assembly requires `--fuzz-report FILE` together
+with the three native `--roundtrip-reports`. The native-input staging step does
+not require a fuzz report and cannot produce a publishable packet. A complete
+packet contains 15 public assets: three archives, nine native verification
+reports, `cli-codec-fuzz.json`, `release-manifest.json` and `SHA256SUMS`.
+The manifest's `fuzz_report` names and hashes the fuzz report; `SHA256SUMS`
+contains 14 entries for the other assets. `release-notes.md` supplies the release
+body separately. A manual or weekly Linux workflow can run the same bounded
+source test without publishing a release.
