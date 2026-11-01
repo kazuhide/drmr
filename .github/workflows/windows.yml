@@ -46,6 +46,8 @@ jobs:
         run: |
           ./.github/scripts/test-windows-native-parallel.ps1
           ./.github/scripts/test-windows-media-cache.ps1
+          python -W error::ResourceWarning -m unittest discover -s tools/tests -p test_ci_test_plan.py -v
+          if ($LASTEXITCODE -ne 0) { throw 'The native test plan controls failed' }
 
       - name: Check vendored source bytes before native compilation
         run: python -W error::ResourceWarning -m unittest discover -s tools/tests -p test_verify_private_fs.py -v
@@ -108,6 +110,7 @@ jobs:
             ${{ runner.temp }}/drmr-native-user/stdout.log
             ${{ runner.temp }}/drmr-native-user/stderr.log
             ${{ runner.temp }}/drmr-native-user/groups/progress.log
+            ${{ runner.temp }}/drmr-native-user/test-plan.json
           if-no-files-found: warn
 
   release:
