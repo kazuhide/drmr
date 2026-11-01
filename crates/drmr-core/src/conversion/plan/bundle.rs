@@ -739,7 +739,14 @@ impl Converter {
 
 /// Read a public, non-secret output recipe without accepting commands or arbitrary paths.
 pub fn read_output_spec(path: &Path) -> Result<Vec<BundleOutputIntent>, ConversionError> {
-    const ERROR: ConversionError = ConversionError("output-spec-invalid");
+    read_output_spec_diagnostic(path).map_err(|error| error.cause)
+}
+
+/// Return safe field positions from the same bounded read used for processing.
+pub fn read_output_spec_diagnostic(
+    path: &Path,
+) -> Result<Vec<BundleOutputIntent>, crate::conversion::configuration::Failure> {
+    use crate::conversion::configuration::{self, Failure, Field as F, File, Segment};
     const SPEC_LIMIT: u64 = 65_536;
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -747,30 +754,66 @@ pub fn read_output_spec(path: &Path) -> Result<Vec<BundleOutputIntent>, Conversi
         schema_version: u32,
         outputs: Vec<BundleOutputIntent>,
     }
-    let file = files::regular_input(path).map_err(|_| ERROR)?;
+    let at = |path: Vec<Segment>| Failure::at(File::Outputs, path);
+    let file = files::regular_input(path).map_err(|_| at(vec![]))?;
     let mut bytes = Vec::new();
     file.take(SPEC_LIMIT + 1)
         .read_to_end(&mut bytes)
-        .map_err(|_| ERROR)?;
+        .map_err(|_| at(vec![]))?;
     if bytes.len() as u64 > SPEC_LIMIT {
-        return Err(ERROR);
+        return Err(at(vec![]));
     }
-    let spec: Specification = serde_json::from_slice(&bytes).map_err(|_| ERROR)?;
-    if !matches!(spec.schema_version, 1..=3)
-        || (spec.schema_version == 1
-            && spec
-                .outputs
-                .iter()
-                .any(|output| output.processing.is_some()))
-        || spec.schema_version < 3
-            && spec
-                .outputs
-                .iter()
-                .any(|output| output.dash_addressing.is_some())
-    {
-        return Err(ERROR);
+    let spec: Specification = configuration::parse(&bytes, File::Outputs)?;
+    if !matches!(spec.schema_version, 1..=3) {
+        return Err(at(vec![F::SchemaVersion.into()]));
     }
-    normalized(&spec.outputs).map_err(|_| ERROR)
+    for (index, output) in spec.outputs.iter().enumerate() {
+        let field = if spec.schema_version == 1 && output.processing.is_some() {
+            Some(F::Processing)
+        } else if spec.schema_version < 3 && output.dash_addressing.is_some() {
+            Some(F::DashAddressing)
+        } else {
+            None
+        };
+        if let Some(field) = field {
+            return Err(at(vec![
+                F::Outputs.into(),
+                Segment::Index(index),
+                field.into(),
+            ]));
+        }
+    }
+    normalized(&spec.outputs).map_err(|_| {
+        if spec.outputs.is_empty() || spec.outputs.len() > MAX_OUTPUTS {
+            return at(vec![F::Outputs.into()]);
+        }
+        let mut ids = BTreeSet::new();
+        for (index, output) in spec.outputs.iter().enumerate() {
+            let field = if !valid_id(&output.id) || !ids.insert(&output.id) {
+                Some(F::Id)
+            } else if output.drms.len() > 3 || {
+                let mut systems = output.drms.clone();
+                systems.sort();
+                systems.windows(2).any(|pair| pair[0] == pair[1])
+            } {
+                Some(F::Drms)
+            } else if output.conformance == ManifestValidation::Required
+                && output.format == OutputFormat::Mp4
+            {
+                Some(F::Conformance)
+            } else if output.format != OutputFormat::Dash && output.dash_addressing.is_some() {
+                Some(F::DashAddressing)
+            } else {
+                None
+            };
+            if field.is_some() || normalized(std::slice::from_ref(output)).is_err() {
+                let mut path = vec![F::Outputs.into(), Segment::Index(index)];
+                path.extend(field.map(Segment::from));
+                return at(path);
+            }
+        }
+        at(vec![F::Outputs.into()])
+    })
 }
 
 fn output_error(error: ConversionError) -> ConversionError {

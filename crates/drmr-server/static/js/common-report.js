@@ -133,6 +133,7 @@
     "download-source-changed": "commonSourceChanged",
     "analysis-source-changed": "commonSourceChanged",
     "key-file-invalid": "commonKeyFileInvalid",
+    "output-spec-invalid": "commonOutputSpecInvalid",
     "input-key-required": "commonInputKeysRequired",
     "hls-input-key-required": "commonInputKeysRequired",
     "output-key-required": "commonOutputKeysRequired",
@@ -175,6 +176,46 @@
   function errorInfo(error) {
     var code = error && error.code;
     return typeof code === 'string' && Object.prototype.hasOwnProperty.call(ERROR_KEYS, code) ? { code: code, key: ERROR_KEYS[code] } : { code: null, key: 'commonError' };
+  }
+  // Every transition is a public schema name. Output map IDs use only the '*' token.
+  var CONFIGURATION_NODES = {
+    keys: { expected: 'keys-object', fields: { schema_version: 'schema-version', input: 'input', output: 'output-key', outputs: 'output-domains' } },
+    outputs: { expected: 'outputs-object', fields: { schema_version: 'schema-version', outputs: 'outputs-array' } },
+    input: { expected: 'input-object', fields: { keys: 'input-keys', hls_keys: 'hls-keys' } },
+    'input-keys': { expected: 'input-keys', item: 'key-object' },
+    'key-object': { expected: 'key-object', fields: { kid: 'hex-16-bytes', key: 'hex-16-bytes' } },
+    'hls-keys': { expected: 'hls-keys', item: 'hls-key-object' },
+    'hls-key-object': { expected: 'hls-key-object', fields: { uri: 'uri', key: 'hex-16-bytes', iv: 'segment-iv' } },
+    'output-domains': { expected: 'output-domains', fields: { '*': 'output-key' } },
+    'output-key': { expected: 'output-key', fields: { kid: 'hex-16-bytes', key: 'hex-16-bytes', hls_key_uri: 'uri', iv: 'segment-iv', signaling: 'signaling' } },
+    signaling: { expected: 'signaling', fields: { system: 'signaling-system', license_url: 'license-url', widevine_pssh: 'pssh', playready_license_url: 'license-url', fairplay: 'boolean' } },
+    'outputs-array': { expected: 'outputs-array', item: 'output-object' },
+    'output-object': { expected: 'output-object', fields: { id: 'output-id', format: 'output-format', target: 'target-protection', drms: 'drms', conformance: 'conformance', processing: 'processing', dash_addressing: 'dash-addressing' } },
+    drms: { expected: 'drms', item: 'drm-system' }
+  };
+  function configurationInfo(error) {
+    var detail = error && error.configuration, own = Object.prototype.hasOwnProperty;
+    if (!detail || typeof detail !== 'object' || Array.isArray(detail) || detail.schema_version !== 1 ||
+      !((error.code === 'key-file-invalid' && detail.file === 'keys') || (error.code === 'output-spec-invalid' && detail.file === 'outputs')) ||
+      Object.keys(detail).some(function (key) { return ['schema_version', 'file', 'path', 'expected', 'line', 'column'].indexOf(key) === -1; }) ||
+      !Array.isArray(detail.path) || detail.path.length > 16) return null;
+    var node = detail.file, location = '';
+    for (var index = 0; index < detail.path.length; index++) {
+      var step = detail.path[index], state = own.call(CONFIGURATION_NODES, node) ? CONFIGURATION_NODES[node] : null;
+      if (!state) return null;
+      if (Number.isSafeInteger(step) && step >= 0 && step <= 65536 && state.item) {
+        node = state.item; location += '[' + step + ']';
+      } else if (typeof step === 'string' && state.fields && own.call(state.fields, step)) {
+        node = state.fields[step]; location += (location ? '.' : '') + step;
+      } else return null;
+    }
+    var expected = own.call(CONFIGURATION_NODES, node) ? CONFIGURATION_NODES[node].expected : node;
+    if (detail.expected !== expected) return null;
+    var hasPosition = own.call(detail, 'line') || own.call(detail, 'column');
+    if (hasPosition && !(Number.isSafeInteger(detail.line) && detail.line >= 1 && detail.line <= 65537 &&
+      Number.isSafeInteger(detail.column) && detail.column >= 0 && detail.column <= 65536)) return null;
+    return { file: detail.file, path: location || 'root', expected: expected,
+      position: hasPosition ? { line: detail.line, column: detail.column } : null };
   }
   function render(host, envelope) {
     var UI = App.UI, h = UI.h, updates = [];
@@ -326,6 +367,19 @@
       }
       return section;
     }
+    function configurationView(error) {
+      var detail = configurationInfo(error);
+      if (!detail) return null;
+      var view = h('dl', { className: 'kv', 'data-common-configuration': detail.file },
+        word('dt', 'commonConfigurationFile'), h('dd', null, code(detail.file)),
+        word('dt', 'commonConfigurationField'), h('dd', null, h('code', { text: detail.path })),
+        word('dt', 'commonConfigurationExpected'), word('dd', 'commonConfigurationExpected_' + detail.expected));
+      if (detail.position) {
+        view.appendChild(word('dt', 'commonConfigurationPosition'));
+        view.appendChild(dynamic('dd', 'commonConfigurationLineColumn', detail.position));
+      }
+      return view;
+    }
     function failureView(value) {
       var info = errorInfo(value.error);
       var operation = { analyze: 'commonAnalyze', plan: 'commonSavePlan', convert: 'commonConvert', verify: 'commonVerify' }[envelope.operation] || 'commonUnknown';
@@ -334,6 +388,7 @@
       return h('div', { className: 'common-result-block' },
         dynamic('p', 'commonFailedOperation', function () { return { operation: t(operation) }; }, { className: 'help' }),
         h('div', { className: 'notice notice-' + (value.status === 'cancelled' ? 'warn' : 'fail'), role: value.status === 'cancelled' ? 'status' : 'alert' }, word('span', info.key), info.code ? code(info.code) : null),
+        configurationView(value.error),
         activities.indexOf(activity) !== -1 ? h('p', { className: 'help' }, word('span', 'commonLastActivity'), word('span', 'commonActivity_' + activity)) : null);
     }
     var report = envelope && envelope.report, content = [];

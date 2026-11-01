@@ -151,14 +151,17 @@ pub struct ManifestArgs {
     pub dash_validator_bin: Option<String>,
 }
 
-pub(crate) fn load(path: Option<&PathBuf>) -> Result<OperatorKeys, ConversionError> {
-    path.map_or_else(|| Ok(OperatorKeys::default()), |path| key_file::read(path))
-}
-
-pub(crate) fn load_source(path: Option<&PathBuf>) -> Result<OperatorKeys, ConversionError> {
+pub(crate) fn load(path: Option<&PathBuf>) -> Result<OperatorKeys, ConfigurationError> {
     path.map_or_else(
         || Ok(OperatorKeys::default()),
-        |path| key_file::read_source(path),
+        |path| key_file::read_diagnostic(path).map_err(Into::into),
+    )
+}
+
+pub(crate) fn load_source(path: Option<&PathBuf>) -> Result<OperatorKeys, ConfigurationError> {
+    path.map_or_else(
+        || Ok(OperatorKeys::default()),
+        |path| key_file::read_source_diagnostic(path).map_err(Into::into),
     )
 }
 
@@ -313,28 +316,42 @@ fn error_hint(code: &str) -> Option<&'static str> {
 
 pub(crate) fn error_value(
     command: &str,
-    error: ConversionError,
+    error: impl Into<ConfigurationError>,
     progress: &Progress,
 ) -> serde_json::Value {
-    serde_json::json!({
+    configured_error_value(command, &error.into(), progress)
+}
+fn configured_error_value(
+    command: &str,
+    error: &ConfigurationError,
+    progress: &Progress,
+) -> serde_json::Value {
+    let mut value = serde_json::json!({
         "schema_version": 1, "command": command,
-        "status": if error.0 == "cancelled" { "cancelled" } else { "failed" },
-        "error": {"code": error.0, "hint": error_hint(error.0).unwrap_or("Review the error code and source profile before retrying with a new output destination."), "last_activity": progress.last_activity()}
-    })
+        "status": if error.cause.0 == "cancelled" { "cancelled" } else { "failed" },
+        "error": {"code": error.cause.0, "hint": error.hint().unwrap_or_else(|| "Review the error code and source profile before retrying with a new output destination.".into()), "last_activity": progress.last_activity()}
+    });
+    if let Some(diagnostic) = &error.diagnostic {
+        value["error"]["configuration"] =
+            serde_json::to_value(diagnostic).expect("safe configuration fields serialize");
+    }
+    value
 }
 pub(crate) fn error(
     command: &str,
-    error: ConversionError,
+    error: impl Into<ConfigurationError>,
     as_json: bool,
     progress: &Progress,
     exit_override: Option<u8>,
 ) -> ExitCode {
-    progress.diagnostic(command, error.0);
+    let error = error.into();
+    let code = error.cause.0;
+    progress.diagnostic(command, code);
     let result = progress.write_result(|| {
         if as_json {
-            json(&error_value(command, error, progress))
+            json(&configured_error_value(command, &error, progress))
         } else if !progress.structured()
-            && let Some(hint) = error_hint(error.0)
+            && let Some(hint) = error.hint()
         {
             writeln!(std::io::stderr().lock(), "{hint}")
         } else {
@@ -345,12 +362,12 @@ pub(crate) fn error(
         progress.diagnostic(command, "result-output-unavailable");
         return ExitCode::from(1);
     }
-    if error.0 == "cancelled" {
+    if code == "cancelled" {
         return ExitCode::from(130);
     }
-    ExitCode::from(exit_override.unwrap_or({
+    ExitCode::from(exit_override.or(error.exit).unwrap_or({
         if matches!(
-            error.0,
+            code,
             "key-file-invalid"
                 | "external-validator-required"
                 | "manifest-lint-profile-unsupported"
@@ -391,10 +408,33 @@ pub(crate) fn error(
 pub(crate) struct ConfigurationError {
     pub(crate) cause: ConversionError,
     pub(crate) exit: Option<u8>,
+    diagnostic: Option<drmr_core::conversion::configuration::Diagnostic>,
 }
 impl From<ConversionError> for ConfigurationError {
     fn from(cause: ConversionError) -> Self {
-        Self { cause, exit: None }
+        Self {
+            cause,
+            exit: None,
+            diagnostic: None,
+        }
+    }
+}
+
+impl From<drmr_core::conversion::configuration::Failure> for ConfigurationError {
+    fn from(error: drmr_core::conversion::configuration::Failure) -> Self {
+        Self {
+            cause: error.cause,
+            exit: None,
+            diagnostic: Some(error.diagnostic),
+        }
+    }
+}
+impl ConfigurationError {
+    fn hint(&self) -> Option<String> {
+        self.diagnostic
+            .as_ref()
+            .map(drmr_core::conversion::configuration::Diagnostic::message)
+            .or_else(|| error_hint(self.cause.0).map(str::to_owned))
     }
 }
 
@@ -431,8 +471,8 @@ pub(crate) fn configured_download(
                     .expect("clap requires a direct output"),
             )
             .map_err(|cause| ConfigurationError {
-                cause,
                 exit: Some(2),
+                ..cause.into()
             })?;
             drmr_core::conversion::download_policy::read(url, args.fetch_policy.as_deref())
                 .map(Some)
@@ -621,7 +661,7 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
     };
     let fetch_policy = match configured_download(args, &input) {
         Ok(policy) => policy,
-        Err(cause) => return error("convert", cause.cause, args.json, &progress, cause.exit),
+        Err(cause) => return error("convert", cause, args.json, &progress, None),
     };
     let Ok(cancellation) = crate::cancellation::Cancellation::install() else {
         return error(

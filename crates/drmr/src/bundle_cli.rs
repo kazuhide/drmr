@@ -9,7 +9,7 @@ use drmr_core::conversion::{
     key_file::{self, BundleOperatorKeys},
     plan::{
         self,
-        bundle::{BundlePlan, BundlePlanRequest, read_output_spec},
+        bundle::{BundlePlan, BundlePlanRequest, read_output_spec_diagnostic},
     },
 };
 use serde_json::Value;
@@ -86,7 +86,7 @@ impl Session {
         let keys = keys
             .map_or_else(
                 || Ok(BundleOperatorKeys::default()),
-                |path| key_file::read_bundle(path),
+                |path| key_file::read_bundle_diagnostic(path),
             )
             .map_err(|cause| convert_cli::error(command, cause, json, &progress, None))?;
         let converter = convert_cli::converter(
@@ -104,7 +104,12 @@ impl Session {
         })
     }
 
-    fn failed(&self, command: &str, error: ConversionError, json: bool) -> ExitCode {
+    fn failed(
+        &self,
+        command: &str,
+        error: impl Into<convert_cli::ConfigurationError>,
+        json: bool,
+    ) -> ExitCode {
         convert_cli::error(command, error, json, &self.progress, None)
     }
 
@@ -390,7 +395,7 @@ pub fn save(args: &PlanArgs) -> ExitCode {
         }
         Err(code) => return code,
     };
-    let outputs = match read_output_spec(
+    let outputs = match read_output_spec_diagnostic(
         args.outputs
             .as_deref()
             .expect("multiple-output mode was selected"),
@@ -475,7 +480,7 @@ pub fn convert_direct(args: &ConvertArgs) -> ExitCode {
     let policy = match convert_cli::configured_download(args, &input) {
         Ok(policy) => policy,
         Err(error) => {
-            return convert_cli::error("convert", error.cause, args.json, &progress, error.exit);
+            return convert_cli::error("convert", error, args.json, &progress, None);
         }
     };
     let session = match Session::start_observed(
@@ -490,7 +495,7 @@ pub fn convert_direct(args: &ConvertArgs) -> ExitCode {
         Ok(session) => session.with_new_intent(ProcessingMode::Auto, args.dash_addressing),
         Err(code) => return code,
     };
-    let mut outputs = match read_output_spec(
+    let mut outputs = match read_output_spec_diagnostic(
         args.outputs
             .as_deref()
             .expect("multiple-output mode was selected"),

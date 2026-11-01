@@ -82,6 +82,8 @@ await privateJson(join(config, 'keys.json'), { schema_version: 2, outputs: {
   dash: { kid, key, signaling: { system: 'multi-drm', widevine_pssh: pssh.toString('hex'), playready_license_url: 'https://license.example.invalid/private-browser-marker' } },
   hls: { kid, key, hls_key_uri: 'skd://private-browser-marker', signaling: { system: 'multi-drm', fairplay: true } },
 } });
+await privateJson(join(config, 'invalid-keys.json'), { schema_version: 2, input: { keys: [{ kid, key: false }] },
+  outputs: {}, 'private-configuration-canary': 'private-configuration-canary' });
 await privateJson(join(config, 'fetch.json'), { allowed_origins: [fixtureOrigin],
   headers_by_origin: { [fixtureOrigin]: { Authorization: 'Bearer private-browser-auth-marker' } },
   allow_http: true, allow_private_network: true, timeout: 3, connections: 2 });
@@ -116,7 +118,7 @@ child = spawn(binary, ['serve'], { env: { ...process.env, PATH: tools + ':' + pr
 ended = new Promise(resolve => { child.once('exit', (code, signal) => resolve({ code, signal })); child.once('error', () => resolve({ code: null, signal: 'spawn-error' })); });
 await privateJson(join(reportRoot, 'fixture.json'), { ...identity, root, input, output, config, tools,
   source, progressive, origin: consoleOrigin, fixtureOrigin, serverPid: child.pid,
-  configurationFiles: ['fetch.json', 'keys.json', 'wrong-keys.json'],
+  configurationFiles: ['fetch.json', 'invalid-keys.json', 'keys.json', 'wrong-keys.json'],
   ownedIdentity: { uid: owned.uid, device: owned.dev, inode: owned.ino } });
 let closing = false;
 async function close(signal) {

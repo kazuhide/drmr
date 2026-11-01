@@ -16,6 +16,7 @@ pub use download::{DownloadedSource, preflight_download_output};
 mod audio;
 mod audio_presentation;
 mod backend;
+pub mod configuration;
 pub(crate) mod dash;
 pub mod dash_addressing;
 mod execution;

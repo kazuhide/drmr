@@ -585,7 +585,10 @@ fn failure(v: &Value, operation: OperationName) -> Result<Value> {
         return Err(bad());
     }
     text(&v["status"], &["failed", "cancelled"])?;
-    object(&v["error"], &["code", "hint", "last_activity"])?;
+    object(
+        &v["error"],
+        &["code", "hint", "last_activity", "configuration"],
+    )?;
     let code = text(&v["error"]["code"], FAILURE_CODES)?;
     let activity = v["error"]["last_activity"].as_str();
     if !v["error"]["last_activity"].is_null()
@@ -593,9 +596,16 @@ fn failure(v: &Value, operation: OperationName) -> Result<Value> {
     {
         return Err(bad());
     }
-    Ok(
-        json!({"schema_version":1,"command":operation.as_str(),"status":v["status"],"error":{"code":code,"hint":"Review the error code and current source or saved plan before choosing the next operation.","last_activity":activity}}),
-    )
+    let mut value = json!({"schema_version":1,"command":operation.as_str(),"status":v["status"],"error":{"code":code,"hint":"Review the error code and current source or saved plan before choosing the next operation.","last_activity":activity}});
+    if let Some(raw) = v["error"].get("configuration") {
+        let detail: drmr_core::conversion::configuration::Diagnostic = typed(raw)?;
+        if !detail.valid_for_code(code) {
+            return Err(bad());
+        }
+        value["error"]["hint"] = detail.message().into();
+        value["error"]["configuration"] = serde_json::to_value(detail).map_err(|_| bad())?;
+    }
+    Ok(value)
 }
 fn analysis(v: &Value) -> Result<(Value, &'static str, bool)> {
     Ok({
@@ -927,6 +937,46 @@ mod coverage_tests {
             "native-codec-profile-not-supported"
         );
         assert!(!refused.value.to_string().contains("PRIVATE_TOOL_MARKER"));
+    }
+
+    #[test]
+    fn configuration_failure_locations_are_closed_and_child_text_is_never_reused() {
+        let private = "PRIVATE_CONFIGURATION_CANARY_7e96419a";
+        for operation in [
+            OperationName::Analyze,
+            OperationName::Plan,
+            OperationName::Convert,
+            OperationName::Verify,
+        ] {
+            let payload = json!({"schema_version":1,"command":operation.as_str(),"status":"failed",
+                "error":{"code":"key-file-invalid","hint":private,"last_activity":"configuration",
+                    "configuration":{"schema_version":1,"file":"keys","path":["input","keys",0,"key"],"expected":"hex-16-bytes","line":2,"column":4}}});
+            let projected = project(operation, None, None, &payload).unwrap();
+            assert!(!projected.success);
+            assert_eq!(
+                projected.value["error"]["configuration"],
+                payload["error"]["configuration"]
+            );
+            assert!(
+                projected.value["error"]["hint"]
+                    .as_str()
+                    .unwrap()
+                    .contains("input.keys[0].key")
+            );
+            assert!(!projected.value.to_string().contains(private));
+            for (field, value) in [
+                ("path", json!(["input", private])),
+                ("path", json!(["input", "outputs", 0])),
+                ("expected", json!(private)),
+                ("line", json!(0)),
+                ("file", json!("outputs")),
+                (private, json!(private)),
+            ] {
+                let mut forged = payload.clone();
+                forged["error"]["configuration"][field] = value;
+                assert!(project(operation, None, None, &forged).is_err());
+            }
+        }
     }
 
     #[test]
