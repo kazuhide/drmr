@@ -1,16 +1,25 @@
 # Conversion support
 
-MP4 and fragmented MP4 presentations accept the implemented AVC (H.264),
-[HEVC Main/Main10](verification.md#hevc-in-mp4-and-fmp4) and typed AAC profiles.
-HEVC supports clear, `cenc` and `cbcs` media in MP4, fMP4 HLS and DASH; transport
-stream video still requires the H.264 profile. These codec conditions apply to
-every container/encryption table below. A format can contain other codecs that
-drmr does not completely validate.
+MP4 and fragmented MP4 accept the qualified AVC (H.264), HEVC Main/Main10,
+VP9 and AAC profiles. Container support does not qualify every codec a format
+can contain. These codec conditions apply to every table below:
 
-HEVC support is included in the current source, not the v1.0.3 release archives.
-Recognizing AV1, VP9, AC-3, E-AC-3, Opus or FLAC configuration remains separate
-from complete native validation. Full operations refuse unimplemented codec
-profiles, even with `--decode`. See the [HEVC limits and regression evidence](verification.md#hevc-in-mp4-and-fmp4).
+| Codec | Sample protection in MP4/fMP4 | Validation and limits |
+| --- | --- | --- |
+| AVC (H.264) | Clear, `cenc`, `cbcs` | [Native video checks](verification.md#what-the-default-checks-establish) |
+| HEVC Main/Main10 | Clear, `cenc`, `cbcs` | [HEVC profile](verification.md#hevc-in-mp4-and-fmp4) |
+| VP9 (`vp09`) | Clear, `cenc` | [VP9 profile](verification.md#vp9-in-mp4-and-fmp4) |
+| AAC | Clear, `cenc`, `cbcs` | [Audio and timing checks](verification.md) |
+
+HLS whole-resource AES-128 is separate from sample encryption. Qualified VP9
+fMP4 HLS can use it; VP9/CBCS is refused with
+`vp9-protection-scheme-not-supported`. Generic HLS does not establish Apple or
+DRM-device support. Transport stream video still requires the H.264 profile.
+
+HEVC and VP9 support is included in current source, not the v1.0.3 archives.
+Metadata-only recognition of AV1, AC-3, E-AC-3, Opus or FLAC remains separate
+from complete validation. Full operations refuse unimplemented profiles,
+including with `--decode`.
 
 One qualified source can also produce [multiple named outputs](multiple-outputs.md)
 through the common CLI. The `auto` and `stitch` multi-DRM routes support qualified
@@ -233,11 +242,13 @@ MP4 can use an edit list to specify which part of decoded audio should play. Thi
 | `cenc` | Clear, `cenc`, `cbcs` | Clear, `cenc`, `cbcs` | Clear, `cenc`, `cbcs`, AES-128 |
 | `cbcs` | Clear, `cenc`, `cbcs` | Clear, `cenc`, `cbcs` | Clear, `cenc`, `cbcs`, AES-128 |
 
-The source must contain one AAC-LC (AAC Low Complexity) audio track stored as `mp4a`, with optional H.264 video (`avc1`) or qualified HEVC Main/Main10 video (`hvc1`/`hev1`), from the same complete progressive file. A single normal-rate audio edit must have a nonnegative start and a finite duration that converts exactly into audio clock units. Encrypted input requires every track key by identifier. The supported encryption layouts and presentation checks are described in [processing and verification](media-processing.md#finite-audio-presentation-windows). Multiple edits, initial empty edits, rate changes, extra tracks, combining different source files, key rotation, and input DRM initialization headers remain outside this profile.
+The source must contain one AAC-LC (AAC Low Complexity) audio track stored as `mp4a`, with optional H.264 (`avc1`), qualified HEVC Main/Main10 (`hvc1`/`hev1`) or VP9 (`vp09`) video, from the same complete progressive file. A single normal-rate audio edit must have a nonnegative start and a finite duration that converts exactly into audio clock units. Encrypted input requires every track key by identifier. The supported encryption layouts and presentation checks are described in [processing and verification](media-processing.md#finite-audio-presentation-windows). Multiple edits, initial empty edits, rate changes, extra tracks, combining different source files, key rotation, and input DRM initialization headers remain outside this profile.
 
 Clear MP4 output retains progressive sample tables. Encrypted MP4 output contains fragments and can retain both tracks from this qualified source in one file. DASH and fMP4 HLS use separate audio and video tracks with a two-second segment target. Each track keeps its original finite playback range; packet payloads, absolute clocks and playback settings must match before publication. Complete decoded media must also match when `--decode` is required. Separate DASH/HLS source tracks are not combined into one MP4 by this feature.
 
 The resulting joint fragmented MP4 can also be converted again to clear, `cenc` or `cbcs` MP4. This reinput path requires exactly one supported video and one AAC-LC audio track, matching protection, and one positive normal-rate finite edit per track in the same complete file. It packages the tracks separately, restores each original window, combines them, and independently checks every sample, clock and playback setting before publication. Unlike progressive-to-clear copying, clear output from this path remains fragmented. Other multi-track fragmented layouts are not admitted by this condition.
+
+The VP9/AAC profile supports clear or CENC sample protection. The CBCS entries above apply to the qualified AVC/HEVC/AAC profiles.
 
 For clear input and output, no key configuration is needed:
 

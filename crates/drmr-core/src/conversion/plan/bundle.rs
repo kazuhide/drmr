@@ -303,6 +303,7 @@ impl Converter {
             if !qualified.eligible_formats.contains(&output.format) {
                 return Err(UNSUPPORTED);
             }
+            qualified.require_target_binding(output.target)?;
             if !output.drms.is_empty() {
                 let child = command.with_processing_clone(processing.selection.resolved);
                 if child.processing_mode == command.processing_mode {
@@ -536,6 +537,9 @@ impl Converter {
         {
             return Err(UNSUPPORTED);
         }
+        for output in &plan.outputs {
+            qualified.require_target_binding(output.target)?;
+        }
         revalidate_output_settings(&command, plan, source.input, &qualified)?;
         for output in &plan.outputs {
             if !output.drms.is_empty() {
@@ -597,18 +601,13 @@ impl Converter {
             input_keys: &keys.input,
             hls_keys: &keys.hls_input,
         };
-        // Scheduling needs actual track state even for a freshly reopened plan.
-        // Native pre-admission does not add another complete decode to decoded verification.
-        let qualified = command
-            .with_processing_clone(source_processing(
-                plan.outputs
-                    .iter()
-                    .map(|output| plan.processing_mode(&output.id)),
-            ))
+        // Source admission uses the same saved generation as execution. Final
+        // outputs retain their separate strict verification admission below.
+        // Native pre-admission does not add another complete decode.
+        command
+            .with_processing_clone(command.processing_mode)
             .with_decode(false)
-            .validate_source(source, SourceValidationPurpose::Verification)?;
-        command.register_bundle_tracks(qualified.track_protection.len());
-        revalidate_output_settings(&command, plan, source.input, &qualified)?;
+            .validate_bundle_source(plan, source)?;
         let manifests = outputs::ManifestDemands::capture(&command, plan)?;
         let (execution, retained) =
             execution::Execution::new(&command)
@@ -1144,3 +1143,5 @@ mod options_tests;
 mod source_progress_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod vp9_tests;

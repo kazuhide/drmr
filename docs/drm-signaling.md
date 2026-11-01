@@ -29,6 +29,8 @@ the originals. Container changes use `stitch`. The supported codecs, playback
 windows and record checks remain mandatory; a recognized DRM name alone does
 not qualify the media.
 
+VP9 sample protection uses CENC under the [VP9 MP4 binding](https://www.webmproject.org/vp9/mp4/#common-encryption); VP9/CBCS is refused. HLS whole-resource AES-128 is separate. A DRM declaration does not establish codec support in a license service or device, and this path does not qualify FairPlay playback.
+
 ## Supported outputs
 
 | Output | Encryption | Explicit DRM selection |

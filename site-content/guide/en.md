@@ -98,9 +98,13 @@ Common `plan`, `convert` and `verify` commands accept an output list for DASH wi
 
 # 3. Supported input and output profiles
 
-MP4 and fMP4 HLS/DASH accept the implemented AVC (H.264), HEVC (H.265) and AAC profiles. Transport stream video still requires H.264. HEVC supports single-layer, progressive Main/Main10 with 4:2:0 chroma and matching 8-bit or 10-bit luma/chroma depths. It requires one stable set of video, sequence and picture decoding parameters (VPS/SPS/PPS). See [HEVC validation and limits](https://github.com/kazuhide/drmr/blob/main/docs/verification.md#hevc-in-mp4-and-fmp4) for the exact accepted syntax and refusal conditions.
+MP4 and fMP4 HLS/DASH accept the implemented AVC (H.264), HEVC (H.265), VP9 and AAC profiles. Transport stream video still requires H.264. HEVC supports single-layer, progressive Main/Main10 with 4:2:0 chroma and matching 8-bit or 10-bit luma/chroma depths. It requires one stable set of video, sequence and picture decoding parameters (VPS/SPS/PPS). See [HEVC validation and limits](https://github.com/kazuhide/drmr/blob/main/docs/verification.md#hevc-in-mp4-and-fmp4) for the exact accepted syntax and refusal conditions.
 
-HEVC support is included in current source, not the v1.0.3 release archives. Metadata-only identification of AV1, VP9, AC-3, E-AC-3, Opus or FLAC does not establish complete validation. Full operations refuse unimplemented codec profiles, even with `--decode`. Container and encryption tables do not qualify every codec those formats can carry.
+HEVC and VP9 support is included in current source, not the v1.0.3 release archives. Metadata-only identification of AV1, AC-3, E-AC-3, Opus or FLAC does not establish complete validation. Full operations refuse unimplemented codec profiles, even with `--decode`. Container and encryption tables do not qualify every codec those formats can carry.
+
+VP9 (`vp09`) supports clear/CENC MP4 and fMP4 HLS/DASH. Outer HLS AES-128 is separate; VP9/CBCS fails with `vp9-protection-scheme-not-supported`. See [VP9 validation and limits](https://github.com/kazuhide/drmr/blob/main/docs/verification.md#vp9-in-mp4-and-fmp4). Generic HLS can pass base checks while the Apple VOD profile rejects VP9 under section 1.1.
+
+Analysis marks compatible tail-aligned input with `vp9-cenc-prefix-normalization-required`; conversion writes canonical prefix alignment.
 
 ## Accepted input containers
 
@@ -151,7 +155,9 @@ With `auto`/`stitch`, DRM output requires complete source admission for a suppor
 
 This is an MP4 playback-metadata profile, not a separate codec. An edit list can specify the exact decoded-audio start and duration, excluding encoder warm-up and final padding.
 
-The complete progressive source must contain one AAC-LC audio track (`mp4a`), optionally with one H.264 (`avc1`) or qualified HEVC Main/Main10 (`hvc1`/`hev1`) video track. The audio edit must be one normal-rate continuous window, have a nonnegative start and convert exactly into integer audio clock units.
+The complete progressive source must contain one AAC-LC audio track (`mp4a`), optionally with one H.264 (`avc1`), qualified HEVC Main/Main10 (`hvc1`/`hev1`) or VP9 (`vp09`) video track. The audio edit must be one normal-rate continuous window, have a nonnegative start and convert exactly into integer audio clock units.
+
+VP9 uses clear or CENC samples. The CBCS choices below apply to the other qualified codecs.
 
 The qualified clear, cenc and cbcs inputs share the output choices above: MP4/DASH clear, cenc or cbcs; fMP4 HLS also permits AES-128.
 
@@ -1275,6 +1281,7 @@ Progress excludes URLs, keys, headers, paths and raw metadata/tool output. `--pr
 | `presentation-window-not-supported` | Check edit structure, start/end, normal rate and exact clock conversion; do not trim the original |
 | `progressive-cenc-profile-not-supported` / `progressive-cbcs-profile-not-supported` | Check sample encryption, IV/auxiliary layout and input initialization headers |
 | `unsupported-packet-timing` | Check complete PTS/DTS/duration evidence and required tools; do not invent missing clocks |
+| `vp9-protection-scheme-not-supported` | Use clear/CENC VP9 samples; the VP9 MP4 binding does not define CBCS. Outer HLS AES-128 is separate. |
 | `round-trip-verification-failed` | Inspect native metadata, encoded payloads, timing and any required decode evidence individually |
 | `resource-budget` | Check observed CPU/memory, media size/dimensions; more workers may not help |
 | `media-output-limit` / `media-probe-output-limit` | Inspect capture/record bounds; truncated evidence cannot prove success |

@@ -57,15 +57,21 @@ pub(in crate::conversion) struct SegmentInput {
     source: PathBuf,
     identity: FileIdentity,
     fingerprint: [u8; 32],
+    complete: bool,
 }
 impl SegmentInput {
     pub fn new(source: &Path, stop: &Stop) -> Result<Self, ConversionError> {
+        Self::open(source, stop, false)
+    }
+    fn open(source: &Path, stop: &Stop, complete: bool) -> Result<Self, ConversionError> {
         let mut reader = read::Reader::open(source, stop, true)?;
-        if reader.length > MAX_METADATA_BYTES as u64 {
+        if !complete && reader.length > MAX_METADATA_BYTES as u64 {
             return Err(ConversionError("resource-budget"));
         }
         let layout = reader.layout()?;
-        if !layout.moofs.is_empty() || layout.mdats.iter().any(|range| !range.is_empty()) {
+        if !complete
+            && (!layout.moofs.is_empty() || layout.mdats.iter().any(|range| !range.is_empty()))
+        {
             return Err(UNSUPPORTED);
         }
         let mut initialization = init::parse(&layout)?;
@@ -76,7 +82,14 @@ impl SegmentInput {
         let identity = FileIdentity::read(&reader.file).map_err(|_| BAD)?;
         let fingerprint = reader.expected_fingerprint().ok_or(BAD)?;
         let length = reader.length;
-        let original = reader.read(0..length, MAX_METADATA_BYTES)?;
+        let original = if complete {
+            if layout.moofs.is_empty() {
+                return Err(UNSUPPORTED);
+            }
+            complete_initialization(&mut reader, &layout)?
+        } else {
+            reader.read(0..length, MAX_METADATA_BYTES)?
+        };
         reader.finish()?;
         Ok(Self {
             layout,
@@ -85,6 +98,7 @@ impl SegmentInput {
             source: source.into(),
             identity,
             fingerprint,
+            complete,
         })
     }
     pub fn movie(&self) -> &Movie {
@@ -146,7 +160,18 @@ impl SegmentInput {
     ) -> Result<(read::Reader<'a>, read::Layout, init::Initialization), ConversionError> {
         self.check_initialization(stop)?;
         let mut reader = read::Reader::open(resource, stop, true)?;
-        let layout = reader.resource_layout(&self.layout)?;
+        let layout = if self.complete {
+            if resource != self.source {
+                return Err(BAD);
+            }
+            let layout = reader.layout()?;
+            if layout.movie != self.layout.movie {
+                return Err(BAD);
+            }
+            layout
+        } else {
+            reader.resource_layout(&self.layout)?
+        };
         if layout.moofs.is_empty() {
             return Err(BAD);
         }
@@ -271,19 +296,159 @@ impl SegmentInput {
     }
 }
 
+fn top_box(reader: &mut read::Reader<'_>, at: u64) -> Result<([u8; 4], u64), ConversionError> {
+    let header = reader.read(at..at.checked_add(8).ok_or(BAD)?, 8)?;
+    let small = read::integer(&header, 0)?;
+    let (size, head) = match small {
+        0 => (reader.length.checked_sub(at).ok_or(BAD)?, 8),
+        1 => (
+            read::unsigned64(&reader.read(at + 8..at.checked_add(16).ok_or(BAD)?, 8)?, 0)?,
+            16,
+        ),
+        value => (u64::from(value), 8),
+    };
+    let end = at
+        .checked_add(size)
+        .filter(|end| *end <= reader.length)
+        .ok_or(BAD)?;
+    if size < head {
+        return Err(BAD);
+    }
+    Ok((header[4..8].try_into().map_err(|_| BAD)?, end))
+}
+
+fn complete_initialization(
+    reader: &mut read::Reader<'_>,
+    layout: &read::Layout,
+) -> Result<Vec<u8>, ConversionError> {
+    let mut bytes = Vec::new();
+    let mut at = 0;
+    let first = layout.moofs.first().ok_or(BAD)?.start;
+    while at < reader.length {
+        read::check_stop(reader.stop)?;
+        let (kind, end) = top_box(reader, at)?;
+        if matches!(&kind, b"ftyp" | b"moov") || kind == *b"pssh" && at < first {
+            let remaining = MAX_METADATA_BYTES.checked_sub(bytes.len()).ok_or(BAD)?;
+            bytes.extend(reader.read(at..end, remaining)?);
+        }
+        at = end;
+    }
+    Ok(bytes)
+}
+
+fn copy_top_pssh(
+    reader: &mut read::Reader<'_>,
+    mut at: u64,
+    end: u64,
+    output: &mut super::write::Output,
+) -> Result<(), ConversionError> {
+    while at < end {
+        read::check_stop(reader.stop)?;
+        let (kind, next) = top_box(reader, at)?;
+        if next > end {
+            return Err(BAD);
+        }
+        if kind == *b"pssh" {
+            let bytes = reader.read(at..next, MAX_METADATA_BYTES)?;
+            for part in bytes.chunks(CHUNK_BYTES) {
+                output.write(part)?;
+            }
+        }
+        at = next;
+    }
+    Ok(())
+}
+
 /// Rewrites each original resource without joining resources or changing sample grouping.
 pub(in crate::conversion) struct SegmentTransformer<'a> {
     source: SegmentInput,
     scheme: super::Scheme,
     key: Option<&'a super::super::OutputKey>,
     constant_ivs: Vec<Zeroizing<[u8; 16]>>,
+    preserve_signaling: bool,
 }
+
+/// One ordered rendition retains VP9 reference slots across original resources.
+pub(in crate::conversion) struct SegmentSession<'a, 'key> {
+    transformer: &'a SegmentTransformer<'key>,
+    generators: Vec<super::encrypt::Generator>,
+    failed: bool,
+}
+
+impl SegmentSession<'_, '_> {
+    /// A persistent session is required when later VP9 resources reuse earlier references.
+    pub fn rewrite_segment(
+        &mut self,
+        resource: &Path,
+        output_path: &Path,
+        keys: &InputKeys,
+        stop: &Stop,
+    ) -> Result<SegmentEvidence, ConversionError> {
+        if self.failed {
+            return Err(ConversionError("native-cipher-session-failed"));
+        }
+        let result = self.transformer.rewrite_segment_with_generators(
+            resource,
+            output_path,
+            keys,
+            stop,
+            &mut self.generators,
+        );
+        self.failed |= result.is_err();
+        result
+    }
+}
+
 impl<'a> SegmentTransformer<'a> {
     pub fn new(
         source_init: &Path,
         output_init: &Path,
         target: crate::inspection::TargetProtection,
         key: Option<&'a super::super::OutputKey>,
+        stop: &Stop,
+    ) -> Result<Self, ConversionError> {
+        Self::build(
+            SegmentInput::new(source_init, stop)?,
+            output_init,
+            target,
+            key,
+            false,
+            stop,
+        )
+    }
+    /// Repair only a fresh private producer result with the already-known output key.
+    pub(in crate::conversion) fn reprotect_generated(
+        source: &Path,
+        output_init: &Path,
+        key: &'a super::super::OutputKey,
+        complete: bool,
+        stop: &Stop,
+    ) -> Result<Self, ConversionError> {
+        let source = SegmentInput::open(source, stop, complete)?;
+        let [track] = source.movie.tracks.as_slice() else {
+            return Err(UNSUPPORTED);
+        };
+        if track.codec != *b"vp09"
+            || track.protection.scheme != super::Scheme::Cenc
+            || track.protection.key_id != Some(key.0.id)
+        {
+            return Err(UNSUPPORTED);
+        }
+        Self::build(
+            source,
+            output_init,
+            crate::inspection::TargetProtection::Cenc,
+            Some(key),
+            true,
+            stop,
+        )
+    }
+    fn build(
+        source: SegmentInput,
+        output_init: &Path,
+        target: crate::inspection::TargetProtection,
+        key: Option<&'a super::super::OutputKey>,
+        preserve_signaling: bool,
         stop: &Stop,
     ) -> Result<Self, ConversionError> {
         use crate::inspection::TargetProtection;
@@ -296,7 +461,6 @@ impl<'a> SegmentTransformer<'a> {
         if scheme != super::Scheme::Clear && key.is_none() {
             return Err(ConversionError("output-key-required"));
         }
-        let source = SegmentInput::new(source_init, stop)?;
         for track in &source.movie.tracks {
             match &track.codec {
                 b"avc1" | b"avc3" => {
@@ -306,6 +470,14 @@ impl<'a> SegmentTransformer<'a> {
                     super::super::hevc::Configuration::from_hvcc(&track.decoder_config)?
                         .0
                         .validate_entry(track.codec)?;
+                }
+                b"vp09" => {
+                    if scheme == super::Scheme::Cbcs
+                        || track.protection.scheme == super::Scheme::Cbcs
+                    {
+                        return Err(super::super::vp9::PROTECTION_NOT_SUPPORTED);
+                    }
+                    super::super::vp9::Configuration::from_vpcc(&track.decoder_config)?;
                 }
                 b"mp4a" => {
                     super::AacConfiguration::parse(&track.decoder_config)?;
@@ -324,15 +496,25 @@ impl<'a> SegmentTransformer<'a> {
         } else {
             Vec::new()
         };
-        let bytes = super::write::initialization(
-            &source.original,
-            &source.layout,
-            &parsed,
-            scheme,
-            key.map(|key| &key.0.id),
-            &constant_ivs,
-            stop,
-        )?;
+        let bytes = if preserve_signaling {
+            super::write::reprotect_initialization(
+                &source.original,
+                &source.layout,
+                &parsed,
+                &key.ok_or(BAD)?.0.id,
+                stop,
+            )?
+        } else {
+            super::write::initialization(
+                &source.original,
+                &source.layout,
+                &parsed,
+                scheme,
+                key.map(|key| &key.0.id),
+                &constant_ivs,
+                stop,
+            )?
+        };
         let mut output = super::write::Output::new(output_init)?;
         for bytes in bytes.chunks(CHUNK_BYTES) {
             read::check_stop(stop)?;
@@ -345,6 +527,7 @@ impl<'a> SegmentTransformer<'a> {
             scheme,
             key,
             constant_ivs,
+            preserve_signaling,
         })
     }
     #[cfg(test)]
@@ -362,6 +545,40 @@ impl<'a> SegmentTransformer<'a> {
         keys: &InputKeys,
         stop: &Stop,
     ) -> Result<SegmentEvidence, ConversionError> {
+        self.session()?
+            .rewrite_segment(resource, output_path, keys, stop)
+    }
+
+    pub fn requires_ordered_resources(&self) -> bool {
+        self.source
+            .movie
+            .tracks
+            .iter()
+            .any(|track| track.codec == *b"vp09")
+    }
+
+    pub fn session(&self) -> Result<SegmentSession<'_, 'a>, ConversionError> {
+        Ok(SegmentSession {
+            transformer: self,
+            generators: self
+                .source
+                .movie
+                .tracks
+                .iter()
+                .map(|track| super::encrypt::Generator::new(track, self.scheme))
+                .collect::<Result<_, _>>()?,
+            failed: false,
+        })
+    }
+
+    fn rewrite_segment_with_generators(
+        &self,
+        resource: &Path,
+        output_path: &Path,
+        keys: &InputKeys,
+        stop: &Stop,
+        generators: &mut [super::encrypt::Generator],
+    ) -> Result<SegmentEvidence, ConversionError> {
         let (mut reader, layout, initialization) = self.source.prepare(resource, keys, stop)?;
         let mut state = ResourceState {
             hashes: initialization
@@ -370,10 +587,19 @@ impl<'a> SegmentTransformer<'a> {
                 .map(|track| TrackHash::new(&track.descriptor))
                 .collect(),
             ordinals: vec![0; initialization.tracks.len()],
+            generators,
         };
         let mut output = super::write::Output::new(output_path)?;
         // Regenerated manifests own the timeline; old byte-index and DRM records are omitted.
+        let mut signaling_at = if self.source.complete {
+            layout.moofs[0].start
+        } else {
+            0
+        };
         for (fragment_index, range) in layout.moofs.iter().enumerate() {
+            if self.preserve_signaling {
+                copy_top_pssh(&mut reader, signaling_at, range.start, &mut output)?;
+            }
             let fragment = fragment::parse(&mut reader, range, &layout, &initialization)?;
             let source = SourceFragment {
                 fragment: &fragment,
@@ -392,6 +618,11 @@ impl<'a> SegmentTransformer<'a> {
             output.write(&moof)?;
             output.write(&mdat)?;
             self.write_payload(&mut reader, &mut output, &source, &plans, starts)?;
+            signaling_at = range.end;
+        }
+        if self.preserve_signaling {
+            let end = reader.length;
+            copy_top_pssh(&mut reader, signaling_at, end, &mut output)?;
         }
         reader.finish()?;
         self.source.check_initialization(stop)?;
@@ -413,7 +644,7 @@ impl<'a> SegmentTransformer<'a> {
         reader: &mut read::Reader<'_>,
         source: &SourceFragment<'_>,
         fragment_index: usize,
-        state: &mut ResourceState,
+        state: &mut ResourceState<'_>,
     ) -> Result<Vec<super::write::OutputPart>, ConversionError> {
         let stop = reader.stop;
         let fragment = source.fragment;
@@ -422,6 +653,7 @@ impl<'a> SegmentTransformer<'a> {
         for (part_index, part) in fragment.tracks.iter().enumerate() {
             let track = source.initialization.tracks.get(part.index).ok_or(BAD)?;
             let hash = state.hashes.get_mut(part.index).ok_or(BAD)?;
+            let generator = state.generators.get_mut(part.index).ok_or(BAD)?;
             hash.grouping.update((fragment_index as u64).to_be_bytes());
             hash.grouping.update((part_index as u64).to_be_bytes());
             hash.grouping.update(part.count.to_be_bytes());
@@ -453,6 +685,7 @@ impl<'a> SegmentTransformer<'a> {
                             },
                             source.keys,
                             hash,
+                            generator,
                         )?;
                         budget =
                             budget
@@ -486,16 +719,22 @@ impl<'a> SegmentTransformer<'a> {
         sample: super::Payload<'_>,
         keys: &InputKeys,
         hash: &mut TrackHash,
+        generator: &mut super::encrypt::Generator,
     ) -> Result<super::write::OutputSample, ConversionError> {
         let stop = reader.stop;
         let track = sample.track;
         let info = sample.info.clone();
         let video = track.descriptor.kind == crate::inspection::TrackKind::Video;
-        let buffered = self.scheme != super::Scheme::Clear && video;
+        let buffered =
+            video && (self.scheme != super::Scheme::Clear || generator.requires_buffer());
         let mut data = Zeroizing::new(Vec::new());
         if buffered {
             if info.size > 8 * 1024 * 1024 {
-                return Err(ConversionError("ts-access-unit-size-limit"));
+                return Err(ConversionError(if generator.requires_buffer() {
+                    "vp9-sample-size-limit"
+                } else {
+                    "ts-access-unit-size-limit"
+                }));
             }
             data.try_reserve_exact(usize::try_from(info.size).map_err(|_| BAD)?)
                 .map_err(|_| ConversionError("resource-budget"))?;
@@ -509,11 +748,16 @@ impl<'a> SegmentTransformer<'a> {
             }
             Ok(())
         })?;
+        let generated = if buffered {
+            Some(generator.sample(&track.descriptor, &data, self.scheme, stop)?)
+        } else {
+            None
+        };
         let (iv, spans) = if self.scheme == super::Scheme::Clear {
             (None, Vec::new())
         } else {
             let spans = if video {
-                super::encrypt::subsamples(&track.descriptor, &data, self.scheme, stop)?
+                generated.ok_or(BAD)?
             } else {
                 vec![super::crypto::Subsample {
                     clear: 0,
@@ -606,9 +850,10 @@ struct SourceFragment<'a> {
     initialization: &'a init::Initialization,
     keys: &'a InputKeys,
 }
-struct ResourceState {
+struct ResourceState<'a> {
     hashes: Vec<TrackHash>,
     ordinals: Vec<u64>,
+    generators: &'a mut [super::encrypt::Generator],
 }
 
 fn source_auxiliary<'a>(
@@ -723,5 +968,117 @@ impl TrackHash {
             samples: self.samples.finalize(),
             grouping: self.grouping.finalize(),
         })
+    }
+}
+
+#[cfg(test)]
+mod vp9_tests {
+    use super::*;
+    use crate::conversion::{ContentKey, OutputKey};
+
+    fn non_sap_resources(root: &Path) -> (PathBuf, [PathBuf; 2]) {
+        std::fs::create_dir(root).unwrap();
+        let source =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/vp9-p0-8.mp4");
+        let output = std::process::Command::new("packager")
+            .arg(format!("input={},stream=video,init_segment={}/init.mp4,segment_template={}/seg_$Number$.m4s,playlist_name=video.m3u8",
+                source.display(), root.display(), root.display()))
+            .args([
+                "--single_threaded", "--segment_duration", "1", "--fragment_duration", "1",
+                "--segment_sap_aligned=false", "--fragment_sap_aligned=false",
+                "--mp4_reset_initial_composition_offset_to_zero=false", "--hls_master_playlist_output",
+            ])
+            .arg(root.join("master.m3u8"))
+            .output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        (
+            root.join("init.mp4"),
+            [root.join("seg_1.m4s"), root.join("seg_2.m4s")],
+        )
+    }
+
+    #[test]
+    fn vp9_sessions_retain_references_across_resources_and_latch_wrong_order_failures() {
+        let owner = crate::conversion::workspace().unwrap();
+        let (init, resources) = non_sap_resources(&owner.path().join("source"));
+        let stop = Stop::new();
+        let empty = InputKeys::default();
+        let key = OutputKey::from_hex(
+            "000102030405060708090a0b0c0d0e0f",
+            "101112131415161718191a1b1c1d1e1f",
+        )
+        .unwrap();
+        let keys = InputKeys::new(vec![
+            ContentKey::from_hex(
+                "000102030405060708090a0b0c0d0e0f",
+                "101112131415161718191a1b1c1d1e1f",
+            )
+            .unwrap(),
+        ])
+        .unwrap();
+        let source = SegmentInput::new(&init, &stop).unwrap();
+        let expected = resources
+            .iter()
+            .map(|resource| source.evidence(resource, &empty, &stop).unwrap())
+            .collect::<Vec<_>>();
+        for target in [
+            crate::inspection::TargetProtection::Clear,
+            crate::inspection::TargetProtection::Cenc,
+        ] {
+            let target_init = owner.path().join(format!("{target:?}-init.mp4"));
+            let transformer = SegmentTransformer::new(
+                &init,
+                &target_init,
+                target,
+                (target == crate::inspection::TargetProtection::Cenc).then_some(&key),
+                &stop,
+            )
+            .unwrap();
+            assert!(transformer.requires_ordered_resources());
+            let mut session = transformer.session().unwrap();
+            let output = SegmentInput::new(&target_init, &stop).unwrap();
+            for (index, resource) in resources.iter().enumerate() {
+                let path = owner.path().join(format!("{target:?}-{index}.m4s"));
+                assert_eq!(
+                    session
+                        .rewrite_segment(resource, &path, &empty, &stop)
+                        .unwrap(),
+                    expected[index]
+                );
+                assert_eq!(
+                    output
+                        .evidence(
+                            &path,
+                            if target == crate::inspection::TargetProtection::Cenc {
+                                &keys
+                            } else {
+                                &empty
+                            },
+                            &stop
+                        )
+                        .unwrap(),
+                    expected[index]
+                );
+            }
+            let mut fresh = transformer.session().unwrap();
+            let bad = owner.path().join(format!("{target:?}-wrong-order.m4s"));
+            assert!(
+                fresh
+                    .rewrite_segment(&resources[1], &bad, &empty, &stop)
+                    .is_err()
+            );
+            assert!(!bad.exists());
+            assert_eq!(
+                fresh
+                    .rewrite_segment(&resources[0], &bad, &empty, &stop)
+                    .unwrap_err(),
+                ConversionError("native-cipher-session-failed")
+            );
+            assert!(!bad.exists());
+        }
     }
 }

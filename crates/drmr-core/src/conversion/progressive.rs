@@ -137,7 +137,7 @@ pub(super) fn profile_shape(report: &Inspection) -> bool {
             .iter()
             .filter(|t| {
                 t.kind == TrackKind::Video
-                    && matches!(t.codec.as_deref(), Some("avc1" | "hvc1" | "hev1"))
+                    && matches!(t.codec.as_deref(), Some("avc1" | "hvc1" | "hev1" | "vp09"))
             })
             .count()
             == report.tracks.len() - 1
@@ -154,6 +154,7 @@ fn samples(
         (TrackKind::Video, Some("avc1")) => *b"avc1",
         (TrackKind::Video, Some("hvc1")) => *b"hvc1",
         (TrackKind::Video, Some("hev1")) => *b"hev1",
+        (TrackKind::Video, Some("vp09")) => *b"vp09",
         _ => return Err(UNSUPPORTED),
     };
     if stsd.children.len() != 1
@@ -401,6 +402,13 @@ pub(super) fn validate_input(
     input: &Inspection,
     keys: &super::InputKeys,
 ) -> Result<bool, ConversionError> {
+    if input
+        .tracks
+        .iter()
+        .any(|track| track.codec.as_deref() == Some("vp09") && track.protection == Protection::Cbcs)
+    {
+        return Err(super::vp9::PROTECTION_NOT_SUPPORTED);
+    }
     if !input.tracks.iter().any(|t| t.kind == TrackKind::Audio) {
         return Ok(false);
     }
@@ -606,6 +614,7 @@ impl Converter {
                 (TrackKind::Audio, Some("mp4a")) => "aac",
                 (TrackKind::Video, Some("avc1")) => "h264",
                 (TrackKind::Video, Some("hvc1" | "hev1")) => "hevc",
+                (TrackKind::Video, Some("vp09")) => "vp9",
                 _ => return Err(UNSUPPORTED),
             };
             if profile["codec_name"] != expected {
@@ -678,7 +687,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn finite_progressive_shape_accepts_hevc_with_aac_but_keeps_other_codec_refusals() {
+    fn finite_progressive_shape_accepts_supported_video_with_aac_but_keeps_other_codec_refusals() {
         let path =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/cenc-iv8.mp4");
         let mut report = crate::inspection::inspect(&path).unwrap();
@@ -687,11 +696,11 @@ mod tests {
             .iter()
             .position(|track| track.kind == TrackKind::Video)
             .unwrap();
-        for codec in ["avc1", "hvc1", "hev1"] {
+        for codec in ["avc1", "hvc1", "hev1", "vp09"] {
             report.tracks[video].codec = Some(codec.into());
             assert!(profile_shape(&report), "{codec}");
         }
-        for codec in ["vp09", "av01", "dvh1", "dvhe"] {
+        for codec in ["av01", "dvh1", "dvhe"] {
             report.tracks[video].codec = Some(codec.into());
             assert!(!profile_shape(&report), "{codec}");
         }

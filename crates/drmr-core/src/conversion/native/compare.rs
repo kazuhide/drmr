@@ -16,7 +16,7 @@ fn entry_equal(a: &Track, b: &Track) -> Result<bool, ConversionError> {
             (&a.descriptor.codec, &b.descriptor.codec),
             (b"avc1", b"avc3") | (b"avc3", b"avc1") | (b"hvc1", b"hev1") | (b"hev1", b"hvc1")
         );
-    let (configuration, progressive_hevc) = if a.descriptor.decoder_config_kind == *b"hvcC"
+    let (configuration, progressive_video) = if a.descriptor.decoder_config_kind == *b"hvcC"
         && b.descriptor.decoder_config_kind == *b"hvcC"
     {
         let (left, _) = super::super::hevc::Configuration::from_hvcc(&a.descriptor.decoder_config)?;
@@ -27,6 +27,15 @@ fn entry_equal(a: &Track, b: &Track) -> Result<bool, ConversionError> {
         (
             left.semantic_eq(&right),
             left.metadata().progressive && right.metadata().progressive,
+        )
+    } else if a.descriptor.decoder_config_kind == *b"vpcC"
+        && b.descriptor.decoder_config_kind == *b"vpcC"
+    {
+        let left = super::super::vp9::Configuration::from_vpcc(&a.descriptor.decoder_config)?;
+        let right = super::super::vp9::Configuration::from_vpcc(&b.descriptor.decoder_config)?;
+        (
+            left.semantic_eq(&right) && a.samples.vp9_geometry == b.samples.vp9_geometry,
+            a.samples.vp9_geometry.is_some() && b.samples.vp9_geometry.is_some(),
         )
     } else {
         let equal = match (&a.config, &b.config) {
@@ -58,18 +67,19 @@ fn entry_equal(a: &Track, b: &Track) -> Result<bool, ConversionError> {
                 && matches!(y.alternate_group, 0 | 1)))
         && super::semantics::aspect_ratio(&a.descriptor)?
             == super::semantics::aspect_ratio(&b.descriptor)?
-        && semantic_boxes_equal(&x.boxes, &y.boxes, progressive_hevc))
+        && semantic_boxes_equal(&x.boxes, &y.boxes, progressive_video))
 }
 
 fn semantic_boxes_equal(
     a: &[super::super::native_media::SemanticBox],
     b: &[super::super::native_media::SemanticBox],
-    progressive_hevc: bool,
+    progressive_video: bool,
 ) -> bool {
     // A one-frame progressive declaration is equivalent to its absence only
-    // when both independently parsed HEVC configurations establish progressive pictures.
+    // when both independently validated video tracks establish progressive pictures.
     let redundant = |node: &&super::super::native_media::SemanticBox| {
-        node.kind == *b"pasp" || progressive_hevc && node.kind == *b"fiel" && node.payload == [1, 0]
+        node.kind == *b"pasp"
+            || progressive_video && node.kind == *b"fiel" && node.payload == [1, 0]
     };
     let mut a: Vec<_> = a
         .iter()
@@ -214,7 +224,13 @@ fn compare_tracks(
     second: &super::media::Media,
     b: &Track,
     result_window: Option<super::super::finite::Window>,
+    allow_tail_repair: bool,
 ) -> Result<VerificationReport, ConversionError> {
+    if b.samples.vp9_protection == Some(super::super::native_media::Vp9Protection::ShakaTailCenc)
+        && !allow_tail_repair
+    {
+        return Err(super::super::native_media::VP9_LAYOUT);
+    }
     let windows_equal = match (source_window, result_window) {
         (Some(a), Some(b)) => a.equivalent(b),
         (None, None) => true,
@@ -282,7 +298,15 @@ impl Backend {
             second.movie.fragmented,
             super::super::finite::window(result.metadata, result.index)?,
         )?;
-        compare_tracks(&first, a, None, &second, b, result_window)
+        compare_tracks(
+            &first,
+            a,
+            None,
+            &second,
+            b,
+            result_window,
+            self.vp9_source_repair_allowed(),
+        )
     }
     pub(in crate::conversion) fn native_admit_segmented(
         &self,
@@ -299,6 +323,7 @@ impl Backend {
             super::mp4_profile(&track.descriptor)?;
             fragmented_window(&media.media, track)?;
             admitted_controls(&media.media, track)?;
+            self.observe_vp9_protection(track.samples.vp9_protection)?;
         }
         if let Some(presentation) = media.audio_presentation {
             let [track] = media.media.tracks.as_slice() else {
@@ -341,6 +366,7 @@ impl Backend {
                 b,
                 second,
                 fragmented_window(b, second)?,
+                self.vp9_source_repair_allowed(),
             )?;
             metadata &= compared.checks.stream_metadata.is_pass();
             payload &= compared.checks.packet_payloads_equal
@@ -376,8 +402,15 @@ impl Backend {
             second.movie.fragmented,
             super::super::finite::window(result.metadata, result.index)?,
         )?;
-        let mut result_report =
-            compare_tracks(&first, a, source_window, &second, b, result_window)?;
+        let mut result_report = compare_tracks(
+            &first,
+            a,
+            source_window,
+            &second,
+            b,
+            result_window,
+            self.vp9_source_repair_allowed(),
+        )?;
         result_report.checks.packet_timing_equal &=
             super::super::progressive::presentation_windows_equal(
                 source.metadata,
@@ -424,7 +457,8 @@ impl Backend {
                     super::super::finite::window(&views[index], 0)?,
                 )?;
                 let mut check =
-                    compare_tracks(&media, track, source_window, &view, selected, result_window)?;
+                    // These views represent the same guarded source, before any repair/output.
+                    compare_tracks(&media, track, source_window, &view, selected, result_window, true)?;
                 check.checks.packet_timing_equal &=
                     super::super::progressive::playback_controls_equal(
                         input,

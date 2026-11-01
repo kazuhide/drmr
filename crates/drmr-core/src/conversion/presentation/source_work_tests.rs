@@ -194,6 +194,57 @@ fn original_to_intermediate_checks_overlap_and_keep_track_order() {
 }
 
 #[test]
+fn vp9_review_distinct_source_views_allow_modeled_tail_without_relaxing_outputs() {
+    let root = crate::native::private_tempdir().unwrap();
+    let seed =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/vp9-p0-8.mp4");
+    let source = root.path().join("tail.mp4");
+    super::super::native_media::vp9_binding_tests::prepare_tail(&seed, &source);
+    let original = fs::read(&source).unwrap();
+    let media = root.path().join("source-view.mp4");
+    fs::write(&media, &original).unwrap();
+    let keys = InputKeys::new(vec![
+        super::super::ContentKey::from_hex(
+            "000102030405060708090a0b0c0d0e0f",
+            "101112131415161718191a1b1c1d1e1f",
+        )
+        .unwrap(),
+    ])
+    .unwrap();
+    let mut prepared = prepare(&source, 0, TrackKind::Video, &keys).unwrap();
+    prepared.media = media.clone();
+    let observed = Arc::new(Collector::default());
+    let runner = Arc::new(ToolRunner::new(Arc::new(Secrets::new()), observed.clone()));
+    let command = Converter::new(runner, "absent-packager", "absent-ffmpeg")
+        .with_ffprobe("absent-ffprobe")
+        .with_decode(false);
+    let mut tracks = Vec::new();
+    command
+        .verify_source_tracks(&[prepared], &mut tracks, &keys)
+        .unwrap();
+    assert_eq!(tracks.len(), 1);
+    assert_eq!(tracks[0].source, media);
+    assert_eq!(
+        command
+            .backend
+            .verify_views(
+                StreamView::new(&source, 0, None).with_all_keys(&keys),
+                StreamView::new(&media, 0, None).with_all_keys(&keys)
+            )
+            .unwrap_err(),
+        super::super::native_media::VP9_LAYOUT
+    );
+    assert!(
+        observed
+            .records()
+            .iter()
+            .all(|event| event.get("event").and_then(serde_json::Value::as_str) != Some("command"))
+    );
+    assert_eq!(fs::read(source).unwrap(), original);
+    assert_eq!(fs::read(media).unwrap(), original);
+}
+
+#[test]
 fn capacity_one_source_checks_release_admission_for_nested_media_work() {
     let root = crate::native::private_tempdir().unwrap();
     let source = video(root.path());

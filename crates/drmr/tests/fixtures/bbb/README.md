@@ -69,3 +69,6 @@ The finite progressive two-key CENC fixtures and their offline generation instru
 
 The separate video-only HEVC Main and Main 10 seeds, including open-GOP, in-band
 parameter-set and SEI coverage, are documented in [HEVC.md](HEVC.md).
+
+The six VP9 profile/bit-depth seeds, including hidden alternate reference
+pictures and superframe indexes, are documented in [VP9.md](VP9.md).

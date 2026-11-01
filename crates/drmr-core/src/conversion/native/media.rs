@@ -124,8 +124,8 @@ fn canonical(
                 Ok(None)
             }
         }
-        // HEVC has its own access-unit evidence and never claims a TS profile.
-        b"hvcC" => Ok(None),
+        // These MP4 video codecs have their own evidence and never claim a TS profile.
+        b"hvcC" | b"vpcC" => Ok(None),
         _ => Err(ConversionError("native-codec-profile-not-supported")),
     }
 }
@@ -156,6 +156,37 @@ pub(super) fn accumulator_with_clock(
             return Err(ConversionError("native-hevc-field-order-not-supported"));
         }
         samples = samples.with_hevc(configuration, width, descriptor.codec)?;
+    }
+    if descriptor.decoder_config_kind == *b"vpcC" {
+        if descriptor.codec != *b"vp09" {
+            return Err(ConversionError("native-codec-profile-not-supported"));
+        }
+        if descriptor.protection.scheme == native_media::Scheme::Cbcs {
+            return Err(super::super::vp9::PROTECTION_NOT_SUPPORTED);
+        }
+        if descriptor
+            .sample_entry_metadata
+            .boxes
+            .iter()
+            .any(|node| node.kind == *b"fiel" && node.payload != [1, 0])
+        {
+            return Err(ConversionError("native-vp9-field-order-not-supported"));
+        }
+        let configuration =
+            super::super::vp9::Configuration::from_vpcc(&descriptor.decoder_config)?;
+        samples = samples.with_vp9(
+            configuration,
+            descriptor
+                .sample_entry_metadata
+                .width
+                .map(u32::from)
+                .ok_or(ConversionError("native-video-dimensions-mismatch"))?,
+            descriptor
+                .sample_entry_metadata
+                .height
+                .map(u32::from)
+                .ok_or(ConversionError("native-video-dimensions-mismatch"))?,
+        )?;
     }
     if descriptor.decoder_config_kind == *b"esds" {
         let aac = native_media::AacConfiguration::parse(&descriptor.decoder_config)?;
@@ -235,7 +266,9 @@ impl Backend {
         self.native_media_projected(input, keys, clock, None)
     }
 
-    fn native_sample_permit(&self) -> Result<crate::resources::Permit, ConversionError> {
+    pub(in crate::conversion) fn native_sample_permit(
+        &self,
+    ) -> Result<crate::resources::Permit, ConversionError> {
         self.runner
             .native_permit(
                 crate::resources::Claim {
@@ -303,16 +336,25 @@ impl Backend {
             }
             pending.samples.push(info, bytes)
         };
-        let mut movie = match projection {
-            Some(projection) => native_media::scan_with_metadata(
-                input,
-                keys,
-                &self.stop,
-                &mut |movie, part| projection.metadata(movie, part),
-                &mut visitor,
-            )?,
-            None => native_media::scan(input, keys, &self.stop, &mut visitor)?,
-        };
+        let mut movie = native_media::scan_with_metadata(
+            input,
+            keys,
+            &self.stop,
+            &mut |movie, part| {
+                // Refuse the unsupported binding before a key or payload is consumed.
+                if movie.tracks.iter().any(|track| {
+                    track.decoder_config_kind == *b"vpcC"
+                        && track.protection.scheme == native_media::Scheme::Cbcs
+                }) {
+                    return Err(super::super::vp9::PROTECTION_NOT_SUPPORTED);
+                }
+                if let Some(projection) = projection {
+                    projection.metadata(movie, part)?;
+                }
+                Ok(())
+            },
+            &mut visitor,
+        )?;
         if let Some(projection) = projection {
             projection.movie(&mut movie)?;
         }
@@ -323,6 +365,9 @@ impl Backend {
         self.check_cancelled()?;
         let media = Media { movie, tracks };
         super::duration_headers::validate(&media)?;
+        for track in &media.tracks {
+            self.observe_vp9_protection(track.samples.vp9_protection)?;
+        }
         if let Some(projection) = projection {
             projection.bind(&media)?;
         }

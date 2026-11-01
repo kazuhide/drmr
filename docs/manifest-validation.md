@@ -39,6 +39,13 @@ available CPU capacity, `--max-workers`, and memory admission bound concurrency.
 The report order is deterministic. Memory admission estimates the parser's
 working allocation; it is separate from a measurement of total process memory.
 
+VP9 fMP4 HLS can pass the base checks while failing the Apple VOD authoring
+profile. [Apple section 1.1](https://developer.apple.com/streaming/hls-authoring-specification-for-apple-devices.html)
+does not include VP9 among its supported video codecs. `apple-vod` reports
+`APPLE-HLS-VIDEO-CODEC` for regular and I-frame VP9 variants. Resolution or DRM
+declarations do not override that rule; manifest checks and device playback
+remain separate evidence.
+
 ## Choose when to check
 
 To check an existing final output without a source or keys:

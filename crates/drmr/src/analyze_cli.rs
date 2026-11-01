@@ -115,6 +115,9 @@ fn compatibility_explanation(note: SourceCompatibilityNote) -> &'static str {
         SourceCompatibilityNote::HlsEmptyCuePair => {
             "Adjacent zero-duration HLS cue markers have no active interval; the original playlist is retained."
         }
+        SourceCompatibilityNote::Vp9CencPrefixNormalizationRequired => {
+            "VP9 alignment bytes follow encrypted data in this source. Conversion rewrites the encryption map with the required clear prefix; the original input is retained."
+        }
     }
 }
 

@@ -1,5 +1,10 @@
 //! Bounded sample digests keep packet boundaries and exact rational clocks.
-use super::super::{ConversionError, hevc, native_media::SampleInfo, ts::CanonicalConfig};
+use super::super::{
+    ConversionError, hevc,
+    native_media::{SampleInfo, Vp9Protection},
+    ts::CanonicalConfig,
+    vp9,
+};
 use crate::sha256::Sha256;
 use std::cmp::Ordering;
 use zeroize::Zeroizing;
@@ -94,6 +99,9 @@ pub(in crate::conversion) struct SampleEvidence {
     pub presented_end_pts: Ratio,
     pub continuous_decode: bool,
     pub protected_samples: u64,
+    /// Fixed coded width/height and render width/height after every VP9 frame passed.
+    pub vp9_geometry: Option<[u32; 4]>,
+    pub vp9_protection: Option<super::super::native_media::Vp9Protection>,
 }
 impl SampleEvidence {
     pub fn clocks_equal(&self, other: &Self) -> bool {
@@ -159,6 +167,12 @@ impl Hevc {
     }
 }
 
+struct Vp9 {
+    parser: vp9::Parser,
+    geometry: Option<[u32; 4]>,
+    protection: Option<super::super::native_media::Vp9Protection>,
+}
+
 pub(super) struct Samples {
     scale: u32,
     expected: u64,
@@ -167,6 +181,7 @@ pub(super) struct Samples {
     canonical: Option<(CanonicalConfig, u8, Sha256)>,
     avc: Option<super::super::ts::avc::Configuration>,
     hevc: Option<Hevc>,
+    vp9: Option<Vp9>,
     audio_clock: Option<super::audio_clock::AudioClock>,
     clocks: Sha256,
     presentation_clocks: Sha256,
@@ -209,6 +224,7 @@ impl Samples {
             canonical: canonical.map(|(config, width)| (config, width, Sha256::new())),
             avc,
             hevc: None,
+            vp9: None,
             audio_clock: None,
             clocks: Sha256::new(),
             presentation_clocks: Sha256::new(),
@@ -259,7 +275,11 @@ impl Samples {
         width: u8,
         codec: [u8; 4],
     ) -> Result<Self, ConversionError> {
-        if self.canonical.is_some() || self.hevc.is_some() || !matches!(width, 1 | 2 | 4) {
+        if self.canonical.is_some()
+            || self.hevc.is_some()
+            || self.vp9.is_some()
+            || !matches!(width, 1 | 2 | 4)
+        {
             return Err(BAD);
         }
         configuration.validate_entry(codec)?;
@@ -272,6 +292,22 @@ impl Samples {
             max_temporal: 0,
             hrd_operation_points,
             terminal: hevc::Terminal::None,
+        });
+        Ok(self)
+    }
+    pub(super) fn with_vp9(
+        mut self,
+        configuration: vp9::Configuration,
+        width: u32,
+        height: u32,
+    ) -> Result<Self, ConversionError> {
+        if self.canonical.is_some() || self.hevc.is_some() || self.vp9.is_some() {
+            return Err(BAD);
+        }
+        self.vp9 = Some(Vp9 {
+            parser: vp9::Parser::new(configuration, width, height)?,
+            geometry: None,
+            protection: None,
         });
         Ok(self)
     }
@@ -300,6 +336,9 @@ impl Samples {
                 if self.hevc.is_some() {
                     return Err(ConversionError("native-hevc-access-unit-size-limit"));
                 }
+                if self.vp9.is_some() {
+                    return Err(ConversionError("native-vp9-sample-size-limit"));
+                }
                 self.canonical = None;
             }
             if bytes.len() == size {
@@ -326,7 +365,7 @@ impl Samples {
             .filter(|n| *n <= info.size)
             .ok_or(BAD)?;
         self.raw.update(bytes);
-        if self.canonical.is_some() || self.hevc.is_some() {
+        if self.canonical.is_some() || self.hevc.is_some() || self.vp9.is_some() {
             if pending.canonical_bytes.capacity() == 0 {
                 pending
                     .canonical_bytes
@@ -345,6 +384,44 @@ impl Samples {
         self.record_sample(info, &pending.canonical_bytes)
     }
     fn record_sample(&mut self, info: &SampleInfo, bytes: &[u8]) -> Result<(), ConversionError> {
+        if let Some(vp9) = &mut self.vp9 {
+            let sample = vp9.parser.sample(bytes)?;
+            let protection = super::super::native_media::classify_vp9_protection(
+                &sample,
+                info.size,
+                &info.protection,
+            )?;
+            vp9.protection = Some(match (vp9.protection, protection) {
+                (None | Some(Vp9Protection::Clear), value) => value,
+                (Some(old), Vp9Protection::Clear) => old,
+                (Some(old), value) if old == value => value,
+                (
+                    Some(Vp9Protection::CanonicalCenc | Vp9Protection::ShakaTailCenc),
+                    Vp9Protection::CanonicalCenc | Vp9Protection::ShakaTailCenc,
+                ) => Vp9Protection::ShakaTailCenc,
+            });
+            if sample.displayed_pictures != 1 {
+                return Err(ConversionError("native-vp9-display-count-not-supported"));
+            }
+            let geometry = [
+                sample.width,
+                sample.height,
+                sample.render_width,
+                sample.render_height,
+            ];
+            if vp9
+                .geometry
+                .replace(geometry)
+                .is_some_and(|old| old != geometry)
+            {
+                return Err(ConversionError(
+                    "native-vp9-dynamic-dimensions-not-supported",
+                ));
+            }
+            if info.is_sync != sample.is_sync {
+                return Err(ConversionError("native-vp9-sync-sample-mismatch"));
+            }
+        }
         if let Some(hevc) = &mut self.hevc {
             hevc.record(info, bytes)?;
         }
@@ -449,6 +526,13 @@ impl Samples {
             Some(hevc) => Some(hevc.finish()?),
             None => self.canonical.map(|(_, _, hash)| hash.finalize()),
         };
+        let (vp9_geometry, vp9_protection) = match self.vp9 {
+            Some(vp9) => (
+                Some(vp9.geometry.ok_or(BAD)?),
+                Some(vp9.protection.ok_or(BAD)?),
+            ),
+            None => (None, None),
+        };
         Ok(SampleEvidence {
             count: self.count,
             raw_payload: self.raw.finalize(),
@@ -478,6 +562,8 @@ impl Samples {
                 .subtract(self.presentation_offset)?,
             continuous_decode: self.continuous,
             protected_samples: self.protected,
+            vp9_geometry,
+            vp9_protection,
         })
     }
 }
@@ -502,6 +588,10 @@ mod borrowing_tests;
 #[cfg(test)]
 #[path = "hevc_samples_tests.rs"]
 mod hevc_tests;
+
+#[cfg(test)]
+#[path = "vp9_samples_tests.rs"]
+mod vp9_tests;
 
 #[cfg(test)]
 mod tests {

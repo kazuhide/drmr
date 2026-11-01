@@ -63,6 +63,109 @@ pub(super) struct Encryptor {
     skip: usize,
     block: usize,
 }
+
+/// VP9 header syntax depends on reference slots retained by preceding samples.
+pub(super) struct Generator {
+    vp9: Option<super::super::vp9::Parser>,
+    failed: bool,
+}
+
+impl Generator {
+    pub(super) fn new(track: &TrackDescriptor, scheme: Scheme) -> Result<Self, ConversionError> {
+        let vp9 = if track.codec == *b"vp09" {
+            if scheme == Scheme::Cbcs || track.protection.scheme == Scheme::Cbcs {
+                return Err(super::super::vp9::PROTECTION_NOT_SUPPORTED);
+            }
+            if track.kind != TrackKind::Video || track.decoder_config_kind != *b"vpcC" {
+                return Err(super::UNSUPPORTED);
+            }
+            Some(super::super::vp9::Parser::new(
+                super::super::vp9::Configuration::from_vpcc(&track.decoder_config)?,
+                u32::from(track.sample_entry_metadata.width.ok_or(BAD)?),
+                u32::from(track.sample_entry_metadata.height.ok_or(BAD)?),
+            )?)
+        } else {
+            None
+        };
+        Ok(Self { vp9, failed: false })
+    }
+
+    pub(super) fn requires_buffer(&self) -> bool {
+        self.vp9.is_some()
+    }
+
+    pub(super) fn sample(
+        &mut self,
+        track: &TrackDescriptor,
+        bytes: &[u8],
+        scheme: Scheme,
+        stop: &Stop,
+    ) -> Result<Vec<crypto::Subsample>, ConversionError> {
+        let Some(parser) = &mut self.vp9 else {
+            return subsamples(track, bytes, scheme, stop);
+        };
+        if self.failed {
+            return Err(ConversionError("native-cipher-generator-failed"));
+        }
+        let result = (|| {
+            read::check_stop(stop)?;
+            if scheme == Scheme::Cbcs {
+                return Err(super::super::vp9::PROTECTION_NOT_SUPPORTED);
+            }
+            let sample = parser.sample(bytes)?;
+            read::check_stop(stop)?;
+            if scheme == Scheme::Clear {
+                Ok(Vec::new())
+            } else {
+                vp9_subsamples(&sample, bytes.len(), stop)
+            }
+        })();
+        self.failed |= result.is_err();
+        result
+    }
+}
+
+fn vp9_subsamples(
+    sample: &super::super::vp9::Sample,
+    size: usize,
+    stop: &Stop,
+) -> Result<Vec<crypto::Subsample>, ConversionError> {
+    let mut spans = Vec::new();
+    let mut clear = 0_u64;
+    let mut expected = 0_usize;
+    for frame in &sample.frames {
+        read::check_stop(stop)?;
+        if frame.offset != expected || frame.size == 0 {
+            return Err(BAD);
+        }
+        expected = expected.checked_add(frame.size).ok_or(BAD)?;
+        let protected = frame.size.checked_sub(frame.header_bytes).ok_or(BAD)?;
+        // The VP9 binding aligns each frame by extending its clear prefix.
+        // https://www.webmproject.org/vp9/mp4/
+        let aligned = protected - protected % 16;
+        clear = clear
+            .checked_add(u64::try_from(frame.size - aligned).map_err(|_| BAD)?)
+            .ok_or(BAD)?;
+        if aligned != 0 {
+            append_span(&mut spans, clear, u32::try_from(aligned).map_err(|_| BAD)?)?;
+            clear = 0;
+        }
+    }
+    if expected.checked_add(sample.index_bytes) != Some(size) {
+        return Err(BAD);
+    }
+    clear = clear
+        .checked_add(u64::try_from(sample.index_bytes).map_err(|_| BAD)?)
+        .ok_or(BAD)?;
+    if clear != 0 {
+        append_span(&mut spans, clear, 0)?;
+    }
+    if spans.is_empty() {
+        return Err(BAD);
+    }
+    Ok(spans)
+}
+
 impl Encryptor {
     pub(super) fn new(
         key: &[u8; 16],
@@ -237,6 +340,155 @@ fn append_span(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn vp9_track() -> TrackDescriptor {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../drmr/tests/fixtures/bbb/vp9-p0-8.mp4");
+        super::super::inspect(&path, &Stop::new())
+            .unwrap()
+            .tracks
+            .remove(0)
+    }
+
+    #[test]
+    fn vp9_prefix_alignment_keeps_the_entire_header_and_one_frame_index_clear() {
+        use super::super::super::vp9;
+        let mut track = vp9_track();
+        track.decoder_config = vp9::test_configuration();
+        track.sample_entry_metadata.width = Some(128);
+        track.sample_entry_metadata.height = Some(128);
+        let (key, header) = vp9::test_key_frame();
+        assert_eq!(key.len() - header, 65);
+        let indexed = vp9::test_superframe(&[&key], 1);
+        let mut generator = Generator::new(&track, Scheme::Cenc).unwrap();
+        let spans = generator
+            .sample(&track, &indexed, Scheme::Cenc, &Stop::new())
+            .unwrap();
+        assert_eq!(
+            spans
+                .iter()
+                .map(|span| (span.clear, span.encrypted))
+                .collect::<Vec<_>>(),
+            [(u32::try_from(header + 1).unwrap(), 64), (3, 0)]
+        );
+        let shown = vp9::test_show_existing_frame();
+        for sample in [shown.clone(), vp9::test_superframe(&[&shown], 1)] {
+            let spans = generator
+                .sample(&track, &sample, Scheme::Cenc, &Stop::new())
+                .unwrap();
+            assert_eq!(spans.len(), 1);
+            assert_eq!(
+                (spans[0].clear, spans[0].encrypted),
+                (u32::try_from(sample.len()).unwrap(), 0)
+            );
+        }
+    }
+
+    #[test]
+    fn vp9_generators_refuse_cbcs_and_cannot_resume_after_a_failed_sample() {
+        use super::super::super::vp9;
+        let mut track = vp9_track();
+        assert_eq!(
+            Generator::new(&track, Scheme::Cbcs).err(),
+            Some(vp9::PROTECTION_NOT_SUPPORTED)
+        );
+        track.protection.scheme = Scheme::Cbcs;
+        assert_eq!(
+            Generator::new(&track, Scheme::Clear).err(),
+            Some(vp9::PROTECTION_NOT_SUPPORTED)
+        );
+        track.protection.scheme = Scheme::Clear;
+        let mut generator = Generator::new(&track, Scheme::Cenc).unwrap();
+        assert!(
+            generator
+                .sample(&track, &[0], Scheme::Cenc, &Stop::new())
+                .is_err()
+        );
+        assert_eq!(
+            generator
+                .sample(&track, &[0x88], Scheme::Cenc, &Stop::new())
+                .err(),
+            Some(ConversionError("native-cipher-generator-failed"))
+        );
+    }
+
+    fn vp9_mask(
+        sample: &super::super::super::vp9::Sample,
+        spans: &[crypto::Subsample],
+        size: usize,
+    ) {
+        let mut mask = Vec::new();
+        for span in spans {
+            assert_eq!(span.encrypted % 16, 0);
+            mask.extend(std::iter::repeat_n(false, span.clear as usize));
+            mask.extend(std::iter::repeat_n(true, span.encrypted as usize));
+        }
+        assert_eq!(mask.len(), size);
+        for frame in &sample.frames {
+            let protected = frame.size - frame.header_bytes;
+            let start = frame.offset + frame.header_bytes + protected % 16;
+            let end = frame.offset + frame.size;
+            assert!(mask[frame.offset..start].iter().all(|value| !value));
+            assert!(mask[start..end].iter().all(|value| *value));
+        }
+        assert!(mask[size - sample.index_bytes..].iter().all(|value| !value));
+    }
+
+    #[test]
+    fn all_vp9_profiles_keep_frame_headers_superframe_indexes_and_reference_state() {
+        use super::super::super::vp9;
+        for name in [
+            "vp9-p0-8.mp4",
+            "vp9-p1-8.mp4",
+            "vp9-p2-10.mp4",
+            "vp9-p2-12.mp4",
+            "vp9-p3-10.mp4",
+            "vp9-p3-12.mp4",
+        ] {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../drmr/tests/fixtures/bbb")
+                .join(name);
+            let mut generator = None;
+            let mut parser = None;
+            let mut bytes = Vec::new();
+            let mut count = 0;
+            let mut superframes = 0;
+            super::super::scan(
+                &path,
+                &super::super::InputKeys::default(),
+                &Stop::new(),
+                &mut |track, info, data| {
+                    if info.chunk_offset == 0 {
+                        bytes.clear();
+                    }
+                    bytes.extend_from_slice(data);
+                    if info.is_last_chunk {
+                        let generator = generator
+                            .get_or_insert_with(|| Generator::new(track, Scheme::Cenc).unwrap());
+                        let parser = parser.get_or_insert_with(|| {
+                            vp9::Parser::new(
+                                vp9::Configuration::from_vpcc(&track.decoder_config).unwrap(),
+                                u32::from(track.sample_entry_metadata.width.unwrap()),
+                                u32::from(track.sample_entry_metadata.height.unwrap()),
+                            )
+                            .unwrap()
+                        });
+                        let sample = parser.sample(&bytes).unwrap();
+                        superframes += usize::from(sample.frames.len() > 1);
+                        let spans = generator
+                            .sample(track, &bytes, Scheme::Cenc, &Stop::new())
+                            .unwrap();
+                        vp9_mask(&sample, &spans, bytes.len());
+                        count += 1;
+                    }
+                    Ok(())
+                },
+            )
+            .unwrap();
+            assert_eq!(count, 240, "{name}");
+            assert!(superframes > 0, "{name}");
+        }
+    }
 
     #[test]
     fn hevc_escaped_header_extent_is_clear_before_cipher_alignment() {

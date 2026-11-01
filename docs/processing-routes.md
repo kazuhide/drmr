@@ -38,7 +38,7 @@ and `boundaries` separately from the handler identifier. See
 | --- | --- | --- |
 | `fmp4-segments` | Supported original fMP4 resources with their sample grouping, clocks and segment boundaries retained; encryption and initialization metadata are rewritten natively. | None at native depth |
 | `mpeg-ts-segments` | Supported original TS resources with each segment's frames and clocks retained; native encryption updates TS signaling and packet layout as needed. | None at native depth |
-| `progressive-mp4` | Qualified clear, `cenc`, or `cbcs` progressive AAC-LC, optionally with H.264 or qualified HEVC from the same file, to clear MP4. Native copying and decryption preserve the finite audio end. | None at native depth |
+| `progressive-mp4` | Qualified clear, `cenc`, or `cbcs` progressive AAC-LC, optionally with qualified video from the same file, to clear MP4. Native copying and decryption preserve the finite audio end. | None at native depth |
 | `fragmented-mp4` | One supported track, or qualified finite audio and optional video from the same complete MP4 source, to clear, `cenc`, or `cbcs` MP4. Shaka Packager creates fragments; qualified finite playback windows are preserved. | Shaka Packager |
 | `dash-presentation` | Supported complete local tracks to static DASH. Source manifest resources are localized and assembled into tracks before new segmentation. | Shaka Packager |
 | `fmp4-hls-presentation` | Supported complete tracks to fragmented MP4 HLS. Sample encryption applies within media samples; HLS AES-128 separately encrypts each complete output resource. | Shaka Packager |

@@ -121,6 +121,9 @@ fn sample_entry(
     allowed: &mut BTreeSet<usize>,
 ) -> Result<usize, ConversionError> {
     let audio = actual.kind == TrackKind::Audio;
+    if actual.codec.as_deref() == Some("vp09") && actual.protection == Protection::Cbcs {
+        return Err(super::vp9::PROTECTION_NOT_SUPPORTED);
+    }
     let chunk_map = child(stbl, *b"stsc")?.header.payload(data);
     full(chunk_map, 0, 0)?;
     let chunks = usize::try_from(u32_at(chunk_map, 4)?).map_err(|_| UNSUPPORTED)?;
@@ -167,6 +170,7 @@ fn sample_entry(
         (TrackKind::Video, Some("avc1")) => b"avc1",
         (TrackKind::Video, Some("hvc1")) => b"hvc1",
         (TrackKind::Video, Some("hev1")) => b"hev1",
+        (TrackKind::Video, Some("vp09")) => b"vp09",
         _ => return Err(UNSUPPORTED),
     };
     if mark(sinf, *b"frma", allowed)?.header.payload(data) != expected {
@@ -531,7 +535,7 @@ mod tests {
         let at = format.header.offset + format.header.header_size;
         // This layer qualifies encryption records; native codec admission separately
         // binds the decoder configuration and encoded samples to this declaration.
-        for codec in ["avc1", "hvc1", "hev1"] {
+        for codec in ["avc1", "hvc1", "hev1", "vp09"] {
             let mut changed = audio::movie(&path).unwrap();
             changed.bytes[at..at + 4].copy_from_slice(codec.as_bytes());
             report.tracks[video].codec = Some(codec.into());

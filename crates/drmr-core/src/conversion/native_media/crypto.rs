@@ -1,9 +1,69 @@
 //! CENC counter and CBCS pattern processing over exact sample subsample ranges.
 use super::{BAD, ConversionError, Scheme, UNSUPPORTED};
 use aes::cipher::{BlockCipherEncrypt as _, KeyInit as _};
+use std::ops::Range;
 use zeroize::Zeroizing;
 
 const BATCH_BLOCKS: usize = 32;
+
+pub(super) fn protected_ranges_digest(
+    size: u32,
+    ranges: impl IntoIterator<Item = Result<Range<u32>, ConversionError>>,
+) -> Result<[u8; 32], ConversionError> {
+    let mut hash = crate::sha256::Sha256::new();
+    hash.update(b"vp9-protected-byte-ranges-v1");
+    hash.update(size.to_be_bytes());
+    let mut pending: Option<Range<u32>> = None;
+    let mut count = 0_u32;
+    for range in ranges {
+        let range = range?;
+        if range.start > range.end || range.end > size {
+            return Err(BAD);
+        }
+        if range.is_empty() {
+            continue;
+        }
+        if let Some(old) = &mut pending {
+            if range.start < old.end {
+                return Err(BAD);
+            }
+            if range.start == old.end {
+                old.end = range.end;
+                continue;
+            }
+            hash.update(old.start.to_be_bytes());
+            hash.update(old.end.to_be_bytes());
+            count = count.checked_add(1).ok_or(BAD)?;
+        }
+        pending = Some(range);
+    }
+    if let Some(last) = pending {
+        hash.update(last.start.to_be_bytes());
+        hash.update(last.end.to_be_bytes());
+        count = count.checked_add(1).ok_or(BAD)?;
+    }
+    hash.update(count.to_be_bytes());
+    Ok(hash.finalize())
+}
+
+pub(super) fn subsample_digest(
+    spans: &[Subsample],
+    size: u32,
+) -> Result<[u8; 32], ConversionError> {
+    let mut position = 0_u32;
+    let digest = protected_ranges_digest(
+        size,
+        spans.iter().map(|span| {
+            let start = position.checked_add(span.clear).ok_or(BAD)?;
+            position = start.checked_add(span.encrypted).ok_or(BAD)?;
+            Ok(start..position)
+        }),
+    )?;
+    if position != size {
+        return Err(BAD);
+    }
+    Ok(digest)
+}
 
 pub(super) struct TrackEncryption {
     pub scheme: Scheme,

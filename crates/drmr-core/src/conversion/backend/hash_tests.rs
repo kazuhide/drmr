@@ -4,6 +4,7 @@ use sha2::{Digest as _, Sha256};
 fn backend(root: &Path, spec: &drmr_test_support::ToolSpec) -> Backend {
     let tool = drmr_test_support::install(&root.join("ffmpeg"), spec).unwrap();
     Backend {
+        vp9_admission: None,
         stop: crate::concurrency::Stop::new(),
         runner: Arc::new(
             ToolRunner::new(

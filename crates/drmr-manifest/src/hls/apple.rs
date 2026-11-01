@@ -61,6 +61,23 @@ pub(super) fn variant(
     sink: &mut DiagnosticSink<'_>,
 ) {
     let present = |name| syntax::get(attributes, name).is_some();
+    if syntax::get(attributes, "CODECS").is_some_and(|attribute| {
+        attribute
+            .value
+            .split(',')
+            .any(|codec| codec.trim().split('.').next() == Some("vp09"))
+    }) {
+        check(
+            sink,
+            apple_rule(
+                "APPLE-HLS-VIDEO-CODEC",
+                "apple-hls-video-codec-not-supported",
+                "1.1",
+            ),
+            false,
+            line.span,
+        );
+    }
     let video = kind(attributes);
     let valid = present("CODECS")
         && (!(iframe || video == Kind::Video) || present("RESOLUTION"))
