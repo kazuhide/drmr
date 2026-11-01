@@ -176,6 +176,119 @@ fn parser() -> Parser {
     )
     .unwrap()
 }
+
+fn segmented_key(
+    absolute: bool,
+    segment: usize,
+    feature: usize,
+    magnitude: u32,
+    negative: bool,
+) -> (Vec<u8>, usize) {
+    let mut b = Writer::default();
+    b.prefix(0);
+    b.flag(false);
+    b.flag(false);
+    b.flag(true);
+    b.flag(false);
+    b.u(0x0049_8342, 24);
+    b.u(0, 3);
+    b.flag(false);
+    b.dimensions(128, 128);
+    b.flag(true);
+    b.flag(true);
+    b.u(0, 2);
+    b.u(0, 6);
+    b.u(0, 3);
+    b.flag(false);
+    b.u(4, 8);
+    for _ in 0..3 {
+        b.flag(false);
+    }
+    b.flag(true); // segmentation_enabled
+    b.flag(false); // segmentation_update_map
+    b.flag(true); // segmentation_update_data
+    b.flag(absolute);
+    for segment_id in 0..8 {
+        for (feature_id, width) in [8, 6, 2, 0].into_iter().enumerate() {
+            let enabled = segment_id == segment && feature_id == feature;
+            b.flag(enabled);
+            if enabled {
+                b.u(magnitude, width);
+                b.flag(negative);
+            }
+        }
+    }
+    b.flag(false); // tile_rows_log2
+    b.u(1, 16);
+    let mut bytes = b.finish();
+    let clear = bytes.len();
+    bytes.push(0);
+    bytes.extend([0x55; 64]);
+    (bytes, clear)
+}
+
+fn reject_absolute_feature_sign(feature: usize, magnitude: u32) {
+    for segment in [0, 7] {
+        let (frame, _) = segmented_key(true, segment, feature, magnitude, true);
+        let mut parser = parser();
+        assert_eq!(
+            parser.sample(&frame).err(),
+            Some(BAD),
+            "absolute feature{feature} segment{segment} magnitude{magnitude} with sign1"
+        );
+        assert_eq!(parser.sample(&super::test_key_frame().0).err(), Some(BAD));
+    }
+}
+
+#[test]
+fn segmentation_absolute_quantizer_rejects_negative_values() {
+    for magnitude in [1, 255] {
+        reject_absolute_feature_sign(0, magnitude);
+    }
+}
+
+#[test]
+fn segmentation_absolute_filter_rejects_negative_values() {
+    for magnitude in [1, 63] {
+        reject_absolute_feature_sign(1, magnitude);
+    }
+}
+
+#[test]
+fn segmentation_absolute_quantizer_rejects_sign_on_zero() {
+    reject_absolute_feature_sign(0, 0);
+}
+
+#[test]
+fn segmentation_absolute_filter_rejects_sign_on_zero() {
+    reject_absolute_feature_sign(1, 0);
+}
+
+#[test]
+fn segmentation_absolute_unsigned_and_delta_signed_values_remain_modeled() {
+    for (feature, maximum) in [(0, 255), (1, 63)] {
+        for segment in [0, 7] {
+            for magnitude in [0, 1, maximum] {
+                for (absolute, negative) in [(true, false), (false, false), (false, true)] {
+                    let (frame, clear) =
+                        segmented_key(absolute, segment, feature, magnitude, negative);
+                    let mut parser = parser();
+                    let sample = parser.sample(&frame).unwrap();
+                    assert!(sample.is_sync);
+                    assert_eq!(sample.frames[0].header_bytes, clear);
+                    assert_eq!(parser.state.segment_absolute, absolute);
+                    assert!(parser.state.segment_enabled[segment][feature]);
+                    let value = i16::try_from(magnitude).unwrap();
+                    assert_eq!(
+                        parser.state.segment_data[segment][feature],
+                        if negative { -value } else { value }
+                    );
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn one_frame_superframe_indexes_and_all_eight_reference_slots_are_real_state() {
     let mut parser = parser();

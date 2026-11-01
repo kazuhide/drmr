@@ -393,6 +393,10 @@ fn segmentation(b: &mut Bits<'_>, state: &mut State) -> Result<(), ConversionErr
                 state.segment_data[segment][feature] = if enabled {
                     let value = i16::try_from(b.u(width)?).map_err(|_| BAD)?;
                     if feature < 2 && b.flag()? {
+                        // Absolute features require a zero sign bit, even for zero magnitude.
+                        if state.segment_absolute {
+                            return Err(BAD);
+                        }
                         -value
                     } else {
                         value
