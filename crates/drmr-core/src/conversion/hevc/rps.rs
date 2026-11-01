@@ -6,7 +6,7 @@ pub(super) struct Rps {
 }
 impl Rps {
     pub fn used(&self) -> u32 {
-        self.pictures.iter().filter(|(_, used)| *used).count() as u32
+        self.pictures.iter().map(|(_, used)| u32::from(*used)).sum()
     }
 }
 pub(super) fn parse(

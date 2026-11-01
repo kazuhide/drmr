@@ -7,6 +7,8 @@ use super::ConversionError;
 use crate::sha256::Sha256;
 use parameters::{Sps, Vps};
 use pps::Pps;
+use std::fmt::Write as _;
+mod access;
 mod bits;
 mod parameters;
 mod pps;
@@ -84,48 +86,7 @@ impl Configuration {
         if width == 3 {
             return Err(CONFIG);
         }
-        let mut at = 23;
-        let mut arrays = Vec::new();
-        let mut total = 0;
-        for _ in 0..data[22] {
-            let array = *data.get(at).ok_or(BAD)?;
-            at += 1;
-            let kind = array & 63;
-            if array & 64 != 0
-                || !matches!(kind, 32..=34 | 39 | 40)
-                || arrays.iter().any(|a: &Array| a.kind == kind)
-            {
-                return Err(CONFIG);
-            }
-            let count = word(data, &mut at)?;
-            if count == 0 || (matches!(kind, 32..=34) && count != 1) {
-                return Err(CONFIG);
-            }
-            total += usize::from(count);
-            if total > MAX_UNITS {
-                return Err(CONFIG);
-            }
-            let mut units = Vec::new();
-            for _ in 0..count {
-                let size = usize::from(word(data, &mut at)?);
-                let end = at.checked_add(size).ok_or(BAD)?;
-                let nal = data.get(at..end).ok_or(BAD)?;
-                at = end;
-                if bits::header(nal)?.kind != kind {
-                    return Err(BAD);
-                }
-                units.push(nal.to_vec());
-            }
-            arrays.push(Array {
-                kind,
-                complete: array & 128 != 0,
-                units,
-            });
-        }
-        if at != data.len() {
-            return Err(BAD);
-        }
-        arrays.sort_unstable_by_key(|array| array.kind);
+        let arrays = configuration_arrays(data)?;
         let find = |kind| -> Result<&[u8], ConversionError> {
             Ok(arrays
                 .iter()
@@ -218,7 +179,7 @@ impl Configuration {
             .rposition(|b| *b != 0)
             .map_or(0, |at| at + 1);
         for byte in &constraints[..end] {
-            text.push_str(&format!(".{byte:02X}"));
+            write!(text, ".{byte:02X}").map_err(|_| BAD)?;
         }
         Ok(text)
     }
@@ -252,149 +213,7 @@ impl Configuration {
         width: u8,
         codec: [u8; 4],
     ) -> Result<AccessUnit, ConversionError> {
-        self.validate_entry(codec)?;
-        let units = units(data, width)?;
-        let mut picture = None;
-        let mut last_address = None;
-        let mut slices = 0_u32;
-        let mut suffix = false;
-        let mut ended = false;
-        let mut timing = false;
-        let mut recovery = None;
-        let mut aud = None;
-        let mut observed_types = 0_u32;
-        let mut pending_entry = None;
-        for (index, nal) in units.iter().enumerate() {
-            let head = bits::header(nal)?;
-            if head.temporal > self.sps.max_sub {
-                return Err(BAD);
-            }
-            match head.kind {
-                32..=34 if picture.is_none() && !ended => {
-                    if codec == *b"hvc1" {
-                        return Err(ConversionError(
-                            "native-hevc-in-band-parameter-set-not-supported",
-                        ));
-                    }
-                    let original = self
-                        .arrays
-                        .iter()
-                        .find(|a| a.kind == head.kind)
-                        .ok_or(CONFIG)?;
-                    if original.units[0].as_slice() != *nal {
-                        return Err(ConversionError(
-                            "native-hevc-parameter-set-change-not-supported",
-                        ));
-                    }
-                }
-                35 if index == 0 => {
-                    let rbsp = bits::rbsp(nal)?;
-                    let b = &mut bits::Bits::new(&rbsp);
-                    let kind = b.u(3)?;
-                    if kind > 2 {
-                        return Err(BAD);
-                    }
-                    b.trailing()?;
-                    aud = Some(kind);
-                }
-                39 if picture.is_none() && !ended => {
-                    let observed = sei::parse(nal, &self.sps, self.vps.id)?;
-                    if observed.picture_timing {
-                        if timing {
-                            return Err(BAD);
-                        }
-                        timing = true;
-                    }
-                    if let Some(point) = observed.recovery {
-                        if recovery.replace(point).is_some() {
-                            return Err(BAD);
-                        }
-                    }
-                }
-                0..=9 | 16..=21 if !suffix && !ended => {
-                    let header = slice::parse(nal, &self.sps, &self.pps)?;
-                    let address = self.pps.tile_scan_address(header.address, &self.sps)?;
-                    if (slices == 0 && (!header.first || header.dependent || address != 0))
-                        || (slices != 0 && header.first)
-                        || last_address.is_some_and(|old| address <= old)
-                    {
-                        return Err(BAD);
-                    }
-                    if let Some(old) = &picture {
-                        let old: &slice::Picture = old;
-                        if old.nal != header.nal
-                            || old.no_prior != header.no_prior
-                            || header.picture.as_ref().is_some_and(|new| new != old)
-                        {
-                            return Err(BAD);
-                        }
-                    } else {
-                        picture = header.picture.clone();
-                    }
-                    if let Some((start, count)) = pending_entry {
-                        if self.pps.entry_points(start, address)? != count {
-                            return Err(BAD);
-                        }
-                    }
-                    pending_entry = Some((address, header.entry_points));
-                    if let Some(kind) = header.slice_type {
-                        observed_types |= 1 << kind;
-                    }
-                    slices = slices.checked_add(1).ok_or(BAD)?;
-                    last_address = Some(address);
-                }
-                40 if picture.is_some() && !ended => {
-                    sei::parse(nal, &self.sps, self.vps.id)?;
-                    suffix = true;
-                }
-                36 if picture.is_some() && !ended => {
-                    let rbsp = bits::rbsp(nal)?;
-                    bits::Bits::new(&rbsp).trailing()?;
-                    ended = true;
-                }
-                37 if picture.is_some() && index + 1 == units.len() => {
-                    let rbsp = bits::rbsp(nal)?;
-                    bits::Bits::new(&rbsp).trailing()?;
-                    ended = true;
-                }
-                38 if !ended => {
-                    let rbsp = bits::rbsp(nal)?;
-                    let (&last, fill) = rbsp.split_last().ok_or(BAD)?;
-                    if last != 0x80 || fill.iter().any(|b| *b != 255) {
-                        return Err(BAD);
-                    }
-                }
-                _ => return Err(ConversionError("native-hevc-nal-order-not-supported")),
-            }
-        }
-        let picture = picture.ok_or(BAD)?;
-        if slices == 0 {
-            return Err(BAD);
-        }
-        if let Some((start, count)) = pending_entry {
-            if self.pps.entry_points(start, self.sps.ctbs()?)? != count {
-                return Err(BAD);
-            }
-        }
-        if aud.is_some_and(|kind| match kind {
-            0 => observed_types & !4 != 0,
-            1 => observed_types & !6 != 0,
-            _ => false,
-        }) {
-            return Err(BAD);
-        }
-        let random_access = match picture.nal.kind {
-            16..=18 => RandomAccess::Bla,
-            19 | 20 => RandomAccess::Idr,
-            21 => RandomAccess::Cra,
-            _ => RandomAccess::None,
-        };
-        Ok(AccessUnit {
-            slice_count: slices,
-            is_sync: random_access != RandomAccess::None,
-            random_access,
-            leading_picture: matches!(picture.nal.kind, 6..=9),
-        })
+        access::parse(self, data, width, codec)
     }
     pub fn slice_header_bytes(&self, nal: &[u8]) -> Result<usize, ConversionError> {
         Ok(slice::parse(nal, &self.sps, &self.pps)?.clear_bytes)
@@ -422,6 +241,52 @@ impl Configuration {
         Ok(())
     }
 }
+fn configuration_arrays(data: &[u8]) -> Result<Vec<Array>, ConversionError> {
+    let mut at = 23;
+    let mut arrays = Vec::new();
+    let mut total = 0;
+    for _ in 0..data[22] {
+        let array = *data.get(at).ok_or(BAD)?;
+        at += 1;
+        let kind = array & 63;
+        if array & 64 != 0
+            || !matches!(kind, 32..=34 | 39 | 40)
+            || arrays.iter().any(|a: &Array| a.kind == kind)
+        {
+            return Err(CONFIG);
+        }
+        let count = word(data, &mut at)?;
+        if count == 0 || (matches!(kind, 32..=34) && count != 1) {
+            return Err(CONFIG);
+        }
+        total += usize::from(count);
+        if total > MAX_UNITS {
+            return Err(CONFIG);
+        }
+        let mut units = Vec::new();
+        for _ in 0..count {
+            let size = usize::from(word(data, &mut at)?);
+            let end = at.checked_add(size).ok_or(BAD)?;
+            let nal = data.get(at..end).ok_or(BAD)?;
+            at = end;
+            if bits::header(nal)?.kind != kind {
+                return Err(BAD);
+            }
+            units.push(nal.to_vec());
+        }
+        arrays.push(Array {
+            kind,
+            complete: array & 128 != 0,
+            units,
+        });
+    }
+    if at != data.len() {
+        return Err(BAD);
+    }
+    arrays.sort_unstable_by_key(|array| array.kind);
+    Ok(arrays)
+}
+
 fn word(data: &[u8], at: &mut usize) -> Result<u16, ConversionError> {
     let end = at.checked_add(2).ok_or(BAD)?;
     let value = u16::from_be_bytes(data.get(*at..end).ok_or(BAD)?.try_into().map_err(|_| BAD)?);

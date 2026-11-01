@@ -27,7 +27,7 @@ impl Writer {
         self.ue(if value <= 0 {
             value.unsigned_abs() * 2
         } else {
-            value as u32 * 2 - 1
+            value.cast_unsigned() * 2 - 1
         });
     }
     fn align(&mut self) {
@@ -75,6 +75,10 @@ fn parameters(depth: u8) -> [Vec<u8>; 3] {
     parameters_with(depth, Features::default())
 }
 #[derive(Default, Clone, Copy)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "These independent syntax switches generate combinations for parser fixtures."
+)]
 struct Features {
     tiles: bool,
     dependent: bool,
@@ -250,7 +254,7 @@ pub(super) fn idr_slice(first: bool, address: u32, entry_point: bool) -> (Vec<u8
 fn packed(units: &[&[u8]], width: u8) -> Vec<u8> {
     let mut result = Vec::new();
     for unit in units {
-        let size = (unit.len() as u32).to_be_bytes();
+        let size = u32::try_from(unit.len()).unwrap().to_be_bytes();
         result.extend_from_slice(&size[4 - usize::from(width)..]);
         result.extend_from_slice(unit);
     }
@@ -533,7 +537,7 @@ fn sei_nal(kind: u8, payloads: &[(u8, Vec<u8>)]) -> Vec<u8> {
             bytes.push(255);
             length -= 255;
         }
-        bytes.push(length as u8);
+        bytes.push(u8::try_from(length).unwrap());
         bytes.extend_from_slice(payload);
     }
     bytes.push(0x80);
@@ -594,7 +598,7 @@ fn optional_configuration_sei_arrays_are_validated_and_part_of_the_identity() {
     base[22] += 1;
     base.push(39);
     base.extend(1_u16.to_be_bytes());
-    base.extend((nal.len() as u16).to_be_bytes());
+    base.extend(u16::try_from(nal.len()).unwrap().to_be_bytes());
     base.extend(&nal);
     let (with_sei, _) = Configuration::from_hvcc(&base).unwrap();
     assert!(!configuration.semantic_eq(&with_sei));

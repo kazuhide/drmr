@@ -26,6 +26,18 @@ impl<'a> Bits<'a> {
         }
         Ok(value)
     }
+    pub fn u8(&mut self, width: u32) -> Result<u8, ConversionError> {
+        u8::try_from(self.u(width)?).map_err(|_| BAD)
+    }
+    pub fn u16(&mut self, width: u32) -> Result<u16, ConversionError> {
+        u16::try_from(self.u(width)?).map_err(|_| BAD)
+    }
+    pub fn ue8(&mut self, maximum: u32) -> Result<u8, ConversionError> {
+        u8::try_from(self.ue(maximum)?).map_err(|_| BAD)
+    }
+    pub fn ue16(&mut self, maximum: u32) -> Result<u16, ConversionError> {
+        u16::try_from(self.ue(maximum)?).map_err(|_| BAD)
+    }
     pub fn flag(&mut self) -> Result<bool, ConversionError> {
         Ok(self.u(1)? != 0)
     }
@@ -90,7 +102,7 @@ pub(super) struct Header {
 pub(super) fn header(nal: &[u8]) -> Result<Header, ConversionError> {
     let head = nal.get(..2).ok_or(BAD)?;
     let kind = (head[0] >> 1) & 63;
-    if head[0] & 0x80 != 0 || head[1] & 7 == 0 {
+    if head[0] & 0x80 != 0 || head[1].trailing_zeros() >= 3 {
         return Err(BAD);
     }
     if head[0] & 1 != 0 || head[1] >> 3 != 0 {

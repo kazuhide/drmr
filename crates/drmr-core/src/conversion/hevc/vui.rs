@@ -1,6 +1,10 @@
 //! VUI/HRD syntax is bounded and preserves explicitly signaled colour identifiers.
 use super::{BAD, ConversionError, Metadata, bits::Bits};
 #[derive(Clone, Copy, Debug, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "HRD presence flags can coexist and directly determine the standard syntax."
+)]
 pub(super) struct Hrd {
     pub nal: bool,
     pub vcl: bool,
@@ -107,8 +111,8 @@ pub(super) fn parse(
                 ][index as usize - 1],
             ),
             255 => {
-                let width = b.u(16)? as u16;
-                let height = b.u(16)? as u16;
+                let width = b.u16(16)?;
+                let height = b.u16(16)?;
                 if width == 0 || height == 0 {
                     return Err(BAD);
                 }
@@ -126,13 +130,13 @@ pub(super) fn parse(
         }
         metadata.full_range = Some(b.flag()?);
         if b.flag()? {
-            metadata.colour_primaries = Some(b.u(8)? as u8);
-            metadata.transfer_characteristics = Some(b.u(8)? as u8);
-            metadata.matrix_coefficients = Some(b.u(8)? as u8);
+            metadata.colour_primaries = Some(b.u8(8)?);
+            metadata.transfer_characteristics = Some(b.u8(8)?);
+            metadata.matrix_coefficients = Some(b.u8(8)?);
         }
     }
     if b.flag()? {
-        metadata.chroma_location = Some((b.ue(5)? as u8, b.ue(5)? as u8));
+        metadata.chroma_location = Some((b.ue8(5)?, b.ue8(5)?));
     }
     b.flag()?;
     if b.flag()? {
@@ -175,7 +179,7 @@ pub(super) fn parse(
         b.flag()?;
         b.flag()?;
         b.flag()?;
-        spatial = Some(b.ue(4095)? as u16);
+        spatial = Some(b.ue16(4095)?);
         b.ue(16)?;
         b.ue(16)?;
         b.ue(15)?;

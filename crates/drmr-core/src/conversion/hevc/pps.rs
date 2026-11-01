@@ -6,6 +6,10 @@ use super::{
 };
 
 #[derive(Clone, Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "PPS syntax flags independently control slice parsing and are not exclusive states."
+)]
 pub(super) struct Pps {
     pub id: u32,
     pub dependent: bool,
