@@ -135,7 +135,10 @@ fn profile_shape(report: &Inspection) -> bool {
         && report
             .tracks
             .iter()
-            .filter(|t| t.kind == TrackKind::Video && t.codec.as_deref() == Some("avc1"))
+            .filter(|t| {
+                t.kind == TrackKind::Video
+                    && matches!(t.codec.as_deref(), Some("avc1" | "hvc1" | "hev1"))
+            })
             .count()
             == report.tracks.len() - 1
 }
@@ -146,10 +149,12 @@ fn samples(
 ) -> Result<(), ConversionError> {
     let stbl = child(child(child(track, *b"mdia")?, *b"minf")?, *b"stbl")?;
     let stsd = child(stbl, *b"stsd")?;
-    let expected = if actual.kind == TrackKind::Audio {
-        *b"mp4a"
-    } else {
-        *b"avc1"
+    let expected = match (actual.kind, actual.codec.as_deref()) {
+        (TrackKind::Audio, Some("mp4a")) => *b"mp4a",
+        (TrackKind::Video, Some("avc1")) => *b"avc1",
+        (TrackKind::Video, Some("hvc1")) => *b"hvc1",
+        (TrackKind::Video, Some("hev1")) => *b"hev1",
+        _ => return Err(UNSUPPORTED),
     };
     if stsd.children.len() != 1
         || integer(stsd.header.payload(data), 4)? != 1
@@ -597,10 +602,11 @@ impl Converter {
                     return Err(ConversionError("progressive-cenc-profile-not-supported"));
                 }
             }
-            let expected = if track.kind == TrackKind::Audio {
-                "aac"
-            } else {
-                "h264"
+            let expected = match (track.kind, track.codec.as_deref()) {
+                (TrackKind::Audio, Some("mp4a")) => "aac",
+                (TrackKind::Video, Some("avc1")) => "h264",
+                (TrackKind::Video, Some("hvc1" | "hev1")) => "hevc",
+                _ => return Err(UNSUPPORTED),
             };
             if profile["codec_name"] != expected {
                 return Err(UNSUPPORTED);
@@ -670,6 +676,27 @@ impl Converter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finite_progressive_shape_accepts_hevc_with_aac_but_keeps_other_codec_refusals() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb/cenc-iv8.mp4");
+        let mut report = crate::inspection::inspect(&path).unwrap();
+        let video = report
+            .tracks
+            .iter()
+            .position(|track| track.kind == TrackKind::Video)
+            .unwrap();
+        for codec in ["avc1", "hvc1", "hev1"] {
+            report.tracks[video].codec = Some(codec.into());
+            assert!(profile_shape(&report), "{codec}");
+        }
+        for codec in ["vp09", "av01", "dvh1", "dvhe"] {
+            report.tracks[video].codec = Some(codec.into());
+            assert!(!profile_shape(&report), "{codec}");
+        }
+    }
+
     fn box_bytes(kind: [u8; 4], payload: &[u8]) -> Vec<u8> {
         [
             &(u32::try_from(payload.len() + 8).unwrap()).to_be_bytes()[..],

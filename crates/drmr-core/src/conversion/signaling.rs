@@ -24,9 +24,9 @@ const CLEAR_METADATA_BOXES: &[[u8; 4]] = &[
     *b"moov", *b"udta", *b"meta", *b"mvhd", *b"trak", *b"tkhd", *b"edts", *b"elst", *b"mdia",
     *b"mdhd", *b"hdlr", *b"minf", *b"vmhd", *b"smhd", *b"dinf", *b"dref", *b"url ", *b"stbl",
     *b"stsd", *b"stts", *b"ctts", *b"stss", *b"stsc", *b"stsz", *b"stco", *b"co64", *b"avc1",
-    *b"avcC", *b"mp4a", *b"esds", *b"btrt", *b"pasp", *b"colr", *b"clap", *b"fiel", *b"mvex",
-    *b"trex", *b"mehd", *b"moof", *b"mfhd", *b"traf", *b"tfhd", *b"tfdt", *b"trun", *b"mfra",
-    *b"tfra", *b"mfro", *b"free",
+    *b"avcC", *b"hvc1", *b"hev1", *b"hvcC", *b"mp4a", *b"esds", *b"btrt", *b"pasp", *b"colr",
+    *b"clap", *b"fiel", *b"mvex", *b"trex", *b"mehd", *b"moof", *b"mfhd", *b"traf", *b"tfhd",
+    *b"tfdt", *b"trun", *b"mfra", *b"tfra", *b"mfro", *b"free",
 ];
 // These declarations require the complete native source qualification as well.
 // It checks their contents, locations, sample groups and encryption auxiliaries;
@@ -338,7 +338,7 @@ pub(super) fn clear_mp4(
         || report
             .tracks
             .iter()
-            .any(|t| !matches!(t.codec.as_deref(), Some("avc1" | "mp4a")))
+            .any(|t| !matches!(t.codec.as_deref(), Some("avc1" | "hvc1" | "hev1" | "mp4a")))
     {
         return Err(UNSUPPORTED);
     }
@@ -439,6 +439,97 @@ fn clear_metadata_tree(
     metadata_tree(bytes, stop, false)
 }
 
+fn metadata_child(node: &mp4::Mp4Box, kind: [u8; 4]) -> Result<&mp4::Mp4Box, ConversionError> {
+    let mut children = node.children.iter().filter(|child| child.kind() == kind);
+    let found = children.next().ok_or(UNSUPPORTED)?;
+    if children.next().is_some() {
+        return Err(UNSUPPORTED);
+    }
+    Ok(found)
+}
+
+fn video_metadata(node: &mp4::Mp4Box, bytes: &[u8]) -> Result<(), ConversionError> {
+    if node.header.payload(bytes).len() < 78 {
+        return Err(UNSUPPORTED);
+    }
+    let codec = if node.kind() == *b"encv" {
+        metadata_child(metadata_child(node, *b"sinf")?, *b"frma")?
+            .header
+            .payload(bytes)
+            .try_into()
+            .map_err(|_| UNSUPPORTED)?
+    } else {
+        node.kind()
+    };
+    let config_kind = match &codec {
+        b"avc1" | b"avc3" => *b"avcC",
+        b"hvc1" | b"hev1" => *b"hvcC",
+        _ => return Err(UNSUPPORTED),
+    };
+    let config = metadata_child(node, config_kind)?;
+    if node
+        .children
+        .iter()
+        .filter(|child| matches!(&child.kind(), b"avcC" | b"hvcC"))
+        .count()
+        != 1
+    {
+        return Err(UNSUPPORTED);
+    }
+    if config_kind == *b"hvcC" {
+        super::hevc::Configuration::from_hvcc(config.header.payload(bytes))
+            .and_then(|(config, _)| config.validate_entry(codec))
+            .map_err(|_| UNSUPPORTED)?;
+    }
+    Ok(())
+}
+
+/// HEVC declarations have authority only in the canonical track sample description.
+fn hevc_metadata_locations(
+    tree: &[mp4::Mp4Box],
+) -> Result<std::collections::BTreeSet<usize>, ConversionError> {
+    let mut allowed = std::collections::BTreeSet::new();
+    if !mp4::walk(tree)
+        .iter()
+        .any(|node| matches!(&node.kind(), b"hvc1" | b"hev1" | b"hvcC"))
+    {
+        return Ok(allowed);
+    }
+    for movie in tree.iter().filter(|node| node.kind() == *b"moov") {
+        for track in movie.children.iter().filter(|node| node.kind() == *b"trak") {
+            let mut table = track;
+            for kind in [*b"mdia", *b"minf", *b"stbl", *b"stsd"] {
+                let mut children = table.children.iter().filter(|node| node.kind() == kind);
+                let Some(child) = children.next() else {
+                    break;
+                };
+                if children.next().is_some() {
+                    return Err(UNSUPPORTED);
+                }
+                table = child;
+            }
+            if table.kind() != *b"stsd" {
+                continue;
+            }
+            for entry in &table.children {
+                if matches!(&entry.kind(), b"hvc1" | b"hev1") {
+                    allowed.insert(entry.header.offset);
+                }
+                if matches!(&entry.kind(), b"hvc1" | b"hev1" | b"encv") {
+                    allowed.extend(
+                        entry
+                            .children
+                            .iter()
+                            .filter(|node| node.kind() == *b"hvcC")
+                            .map(|node| node.header.offset),
+                    );
+                }
+            }
+        }
+    }
+    Ok(allowed)
+}
+
 fn metadata_tree(
     bytes: &[u8],
     stop: &crate::concurrency::Stop,
@@ -446,6 +537,7 @@ fn metadata_tree(
 ) -> Result<(), ConversionError> {
     let tree = mp4::parse_boxes_with_limit(bytes, METADATA_BOX_LIMIT).map_err(|_| UNSUPPORTED)?;
     super::native_media::metadata_controls(&tree).map_err(|_| UNSUPPORTED)?;
+    let hevc_locations = hevc_metadata_locations(&tree)?;
     let descriptive = if qualified {
         qualified_descriptive_metadata(&tree, bytes)?
     } else {
@@ -455,6 +547,11 @@ fn metadata_tree(
         cancelled(stop)?;
         let kind = node.kind();
         let payload = node.header.payload(bytes);
+        if matches!(&kind, b"hvc1" | b"hev1" | b"hvcC")
+            && !hevc_locations.contains(&node.header.offset)
+        {
+            return Err(UNSUPPORTED);
+        }
         if kind == *b"ilst" && payload.is_empty() {
             continue;
         }
@@ -483,17 +580,7 @@ fn metadata_tree(
                 return Err(UNSUPPORTED);
             }
             b"url " if payload != [0, 0, 0, 1] => return Err(UNSUPPORTED),
-            b"avc1" | b"encv"
-                if payload.len() < 78
-                    || node
-                        .children
-                        .iter()
-                        .filter(|n| n.kind() == *b"avcC")
-                        .count()
-                        != 1 =>
-            {
-                return Err(UNSUPPORTED);
-            }
+            b"avc1" | b"hvc1" | b"hev1" | b"encv" => video_metadata(node, bytes)?,
             b"mp4a" | b"enca"
                 if payload.len() < 28
                     || payload.get(8..10) != Some(&[0, 0])
@@ -688,14 +775,12 @@ impl super::Converter {
         profile: &serde_json::Value,
         kind: crate::inspection::TrackKind,
     ) -> Result<(), ConversionError> {
-        if self.output_signaling.is_some()
-            && profile["codec_name"]
-                != if kind == crate::inspection::TrackKind::Video {
-                    "h264"
-                } else {
-                    "aac"
-                }
-        {
+        let supported = if kind == crate::inspection::TrackKind::Video {
+            matches!(profile["codec_name"].as_str(), Some("h264" | "hevc"))
+        } else {
+            profile["codec_name"] == "aac"
+        };
+        if self.output_signaling.is_some() && !supported {
             return Err(UNSUPPORTED);
         }
         Ok(())
@@ -910,6 +995,112 @@ mod tests {
     }
 
     #[test]
+    fn signaling_accepts_hevc_video_while_preserving_other_codec_refusals() {
+        use super::super::Converter;
+        use crate::{
+            events::NoSink,
+            inspection::TrackKind,
+            toolrun::{Secrets, ToolRunner},
+        };
+        use std::sync::Arc;
+        let converter = Converter::new(
+            Arc::new(ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink))),
+            "must-not-start-packager",
+            "must-not-start-ffmpeg",
+        )
+        .with_output_signaling(OutputSignaling::playready(URL).unwrap());
+        for codec in ["h264", "hevc"] {
+            converter
+                .validate_signaling_codec(
+                    &serde_json::json!({"codec_name": codec}),
+                    TrackKind::Video,
+                )
+                .unwrap();
+        }
+        for codec in ["aac", "vp9", "av1", "unknown"] {
+            assert_eq!(
+                converter.validate_signaling_codec(
+                    &serde_json::json!({"codec_name": codec}),
+                    TrackKind::Video,
+                ),
+                Err(UNSUPPORTED)
+            );
+        }
+        assert_eq!(
+            converter.validate_signaling_codec(
+                &serde_json::json!({"codec_name": "hevc"}),
+                TrackKind::Audio,
+            ),
+            Err(UNSUPPORTED)
+        );
+    }
+
+    #[test]
+    fn hevc_metadata_census_binds_the_configuration_to_the_original_video_format() {
+        fn boxed(kind: [u8; 4], payload: &[u8]) -> Vec<u8> {
+            [
+                u32::try_from(payload.len() + 8)
+                    .unwrap()
+                    .to_be_bytes()
+                    .as_slice(),
+                kind.as_slice(),
+                payload,
+            ]
+            .concat()
+        }
+        fn canonical_movie(entry: &[u8]) -> Vec<u8> {
+            let mut bytes = boxed(*b"stsd", &[&[0, 0, 0, 0, 0, 0, 0, 1][..], entry].concat());
+            for kind in [*b"stbl", *b"minf", *b"mdia", *b"trak", *b"moov"] {
+                bytes = boxed(kind, &bytes);
+            }
+            bytes
+        }
+        let stop = crate::concurrency::Stop::new();
+        for name in ["hevc-main.mp4", "hevc-main10.mp4"] {
+            let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../drmr/tests/fixtures/bbb")
+                .join(name);
+            let movie = super::super::native_media::inspect(&path, &stop).unwrap();
+            let track = &movie.tracks[0];
+            let mut payload = vec![0; 78];
+            payload.extend(boxed(*b"hvcC", &track.decoder_config));
+            let bytes = boxed(track.codec, &payload);
+            clear_metadata_tree(&canonical_movie(&bytes), &stop).unwrap();
+            for misplaced in [
+                bytes.clone(),
+                boxed(*b"moov", &boxed(*b"udta", &bytes)),
+                boxed(
+                    *b"moov",
+                    &boxed(*b"udta", &boxed(*b"hvcC", &track.decoder_config)),
+                ),
+            ] {
+                assert_eq!(clear_metadata_tree(&misplaced, &stop), Err(UNSUPPORTED));
+            }
+            let mut conflicting = payload.clone();
+            conflicting.extend(boxed(*b"avcC", &[1, 2, 3, 4]));
+            assert_eq!(
+                clear_metadata_tree(&canonical_movie(&boxed(track.codec, &conflicting)), &stop),
+                Err(UNSUPPORTED)
+            );
+            let mut invalid = payload.clone();
+            invalid[78 + 8] = 0;
+            assert_eq!(
+                clear_metadata_tree(&canonical_movie(&boxed(track.codec, &invalid)), &stop),
+                Err(UNSUPPORTED)
+            );
+            payload.extend(boxed(*b"sinf", &boxed(*b"frma", &track.codec)));
+            let mut encrypted = boxed(*b"encv", &payload);
+            let nodes = mp4::parse_boxes(&encrypted).unwrap();
+            video_metadata(&nodes[0], &encrypted).unwrap();
+            let format =
+                metadata_child(metadata_child(&nodes[0], *b"sinf").unwrap(), *b"frma").unwrap();
+            let at = format.header.offset + format.header.header_size;
+            encrypted[at..at + 4].copy_from_slice(b"avc1");
+            assert_eq!(video_metadata(&nodes[0], &encrypted), Err(UNSUPPORTED));
+        }
+    }
+
+    #[test]
     fn metadata_census_refuses_hidden_or_unknown_protection_and_external_references() {
         fn boxed(kind: [u8; 4], payload: &[u8]) -> Vec<u8> {
             [
@@ -934,6 +1125,8 @@ mod tests {
             boxed(*b"moov", &boxed(*b"sgpd", &[0; 12])),
             boxed(*b"url ", b"\0\0\0\0https://example.invalid/data"),
             boxed(*b"avc1", &[0; 10]),
+            boxed(*b"hvc1", &[0; 10]),
+            boxed(*b"hev1", &[0; 10]),
             boxed(*b"stsd", &[0; 8]),
         ] {
             assert_eq!(

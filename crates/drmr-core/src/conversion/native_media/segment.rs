@@ -302,6 +302,11 @@ impl<'a> SegmentTransformer<'a> {
                 b"avc1" | b"avc3" => {
                     super::super::ts::avc::Configuration::from_avcc(&track.decoder_config)?;
                 }
+                b"hvc1" | b"hev1" => {
+                    super::super::hevc::Configuration::from_hvcc(&track.decoder_config)?
+                        .0
+                        .validate_entry(track.codec)?;
+                }
                 b"mp4a" => {
                     super::AacConfiguration::parse(&track.decoder_config)?;
                 }
