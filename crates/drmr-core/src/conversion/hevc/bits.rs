@@ -110,7 +110,7 @@ pub(super) fn header(nal: &[u8]) -> Result<Header, ConversionError> {
     }
     let temporal = (head[1] & 7) - 1;
     if (matches!(kind, 2..=5) && temporal == 0)
-        || (matches!(kind, 16..=21 | 32..=36) && temporal != 0)
+        || (matches!(kind, 16..=21 | 32 | 33 | 36 | 37) && temporal != 0)
         || matches!(kind, 10..=15 | 22..=31 | 41..=63)
     {
         return Err(BAD);

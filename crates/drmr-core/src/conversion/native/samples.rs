@@ -116,6 +116,47 @@ struct Hevc {
     width: u8,
     codec: [u8; 4],
     payload: Sha256,
+    max_temporal: u8,
+    hrd_operation_points: u8,
+    terminal: hevc::Terminal,
+}
+impl Hevc {
+    fn record(&mut self, info: &SampleInfo, bytes: &[u8]) -> Result<(), ConversionError> {
+        let unit = self
+            .configuration
+            .length_prefixed_access_unit(bytes, self.width, self.codec)?;
+        if info.is_sync != unit.is_sync {
+            return Err(ConversionError("native-hevc-sync-sample-mismatch"));
+        }
+        if self.terminal != hevc::Terminal::None && !unit.is_sync {
+            return Err(ConversionError("native-hevc-terminal-followed-by-non-irap"));
+        }
+        if self.terminal == hevc::Terminal::Bitstream {
+            self.max_temporal = 0;
+            self.hrd_operation_points = 0x7f;
+        }
+        self.max_temporal = self.max_temporal.max(unit.temporal);
+        self.hrd_operation_points &= unit.hrd_operation_points;
+        self.terminal = unit.terminal;
+        if self.terminal == hevc::Terminal::Bitstream {
+            self.validate_hrd()?;
+        }
+        self.payload.update(b"access-unit");
+        self.configuration
+            .units_with_width(bytes, self.width, self.codec, &mut self.payload)
+    }
+    fn validate_hrd(&self) -> Result<(), ConversionError> {
+        // D.3.1 selects the greatest VCL TemporalId in the complete bitstream,
+        // including later samples/resources, rather than the SPS maximum or first AU.
+        if self.hrd_operation_points & (1 << self.max_temporal) == 0 {
+            return Err(ConversionError("native-hevc-hrd-operation-point-mismatch"));
+        }
+        Ok(())
+    }
+    fn finish(self) -> Result<[u8; 32], ConversionError> {
+        self.validate_hrd()?;
+        Ok(self.payload.finalize())
+    }
 }
 
 pub(super) struct Samples {
@@ -222,11 +263,15 @@ impl Samples {
             return Err(BAD);
         }
         configuration.validate_entry(codec)?;
+        let hrd_operation_points = configuration.initial_hrd_operation_points();
         self.hevc = Some(Hevc {
             configuration,
             width,
             codec,
             payload: Sha256::new(),
+            max_temporal: 0,
+            hrd_operation_points,
+            terminal: hevc::Terminal::None,
         });
         Ok(self)
     }
@@ -301,19 +346,7 @@ impl Samples {
     }
     fn record_sample(&mut self, info: &SampleInfo, bytes: &[u8]) -> Result<(), ConversionError> {
         if let Some(hevc) = &mut self.hevc {
-            let unit = hevc
-                .configuration
-                .length_prefixed_access_unit(bytes, hevc.width, hevc.codec)?;
-            if info.is_sync != unit.is_sync {
-                return Err(ConversionError("native-hevc-sync-sample-mismatch"));
-            }
-            hevc.payload.update(b"access-unit");
-            hevc.configuration.units_with_width(
-                bytes,
-                hevc.width,
-                hevc.codec,
-                &mut hevc.payload,
-            )?;
+            hevc.record(info, bytes)?;
         }
         if let Some((config, width, hash)) = &mut self.canonical {
             if let Some(avc) = &self.avc {
@@ -413,7 +446,7 @@ impl Samples {
             return Err(BAD);
         }
         let canonical_payload = match self.hevc {
-            Some(hevc) => Some(hevc.payload.finalize()),
+            Some(hevc) => Some(hevc.finish()?),
             None => self.canonical.map(|(_, _, hash)| hash.finalize()),
         };
         Ok(SampleEvidence {

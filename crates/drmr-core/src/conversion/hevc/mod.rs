@@ -53,6 +53,7 @@ pub(in crate::conversion) struct Configuration {
     vps: Vps,
     sps: Sps,
     pps: Pps,
+    hrd_operation_points: u8,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::conversion) enum RandomAccess {
@@ -62,11 +63,22 @@ pub(in crate::conversion) enum RandomAccess {
     Cra,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::conversion) enum Terminal {
+    None,
+    Sequence,
+    Bitstream,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::conversion) struct AccessUnit {
     pub slice_count: u32,
     pub is_sync: bool,
     pub random_access: RandomAccess,
     pub leading_picture: bool,
+    /// The common `TemporalId` of the AU's VCL NALs, excluding non-VCL headers.
+    pub temporal: u8,
+    /// Structurally possible HRD operation points; the complete scan must select one.
+    pub hrd_operation_points: u8,
+    pub terminal: Terminal,
 }
 impl Configuration {
     pub fn from_hvcc(data: &[u8]) -> Result<(Self, u8), ConversionError> {
@@ -119,12 +131,16 @@ impl Configuration {
         if (data[15] & 3 == 2 && !pps.tiles) || (data[15] & 3 == 3 && !pps.wpp) {
             return Err(CONFIG);
         }
+        let mut hrd_operation_points = 0x7f;
         for array in &arrays {
             if matches!(array.kind, 39 | 40) {
                 for nal in &array.units {
-                    sei::parse(nal, &sps, vps.id)?;
+                    hrd_operation_points &= sei::parse(nal, &sps, vps.id)?.hrd_operation_points;
                 }
             }
+        }
+        if hrd_operation_points == 0 {
+            return Err(BAD);
         }
         Ok((
             Self {
@@ -133,6 +149,7 @@ impl Configuration {
                 vps,
                 sps,
                 pps,
+                hrd_operation_points,
             },
             width,
         ))
@@ -154,6 +171,9 @@ impl Configuration {
     }
     pub fn metadata(&self) -> &Metadata {
         &self.sps.metadata
+    }
+    pub fn initial_hrd_operation_points(&self) -> u8 {
+        self.hrd_operation_points
     }
     pub fn codec_string(&self, codec: [u8; 4]) -> Result<String, ConversionError> {
         self.validate_entry(codec)?;
@@ -229,7 +249,7 @@ impl Configuration {
         let mut count = 0_u64;
         for nal in units(data, width)? {
             let kind = bits::header(nal)?.kind;
-            // Only identical parameter-set repetitions and validated AUD are framing.
+            // Only equal parameter payloads with validated headers and validated AUD are framing.
             if matches!(kind, 32..=35) {
                 continue;
             }

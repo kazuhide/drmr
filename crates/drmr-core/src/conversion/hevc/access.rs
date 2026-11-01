@@ -1,6 +1,7 @@
 //! Access-unit ordering, picture identity and original slice entry-point membership.
 use super::{
-    AccessUnit, BAD, CONFIG, Configuration, ConversionError, RandomAccess, bits, sei, slice,
+    AccessUnit, BAD, CONFIG, Configuration, ConversionError, RandomAccess, Terminal, bits, sei,
+    slice,
 };
 
 #[derive(Default)]
@@ -76,7 +77,42 @@ impl PictureEvidence {
             is_sync: random_access != RandomAccess::None,
             random_access,
             leading_picture: matches!(picture.nal.kind, 6..=9),
+            temporal: picture.nal.temporal,
+            hrd_operation_points: 0x7f,
+            terminal: Terminal::None,
         })
+    }
+}
+
+struct SeiEvidence {
+    timing: bool,
+    recovery: Option<(i32, bool, bool)>,
+    associated_temporal: Option<u8>,
+    hrd_operation_points: u8,
+}
+impl SeiEvidence {
+    fn record(&mut self, observed: &sei::Evidence, temporal: u8) -> Result<(), ConversionError> {
+        if observed.picture_timing && std::mem::replace(&mut self.timing, true) {
+            return Err(BAD);
+        }
+        if let Some(point) = observed.recovery
+            && self.recovery.replace(point).is_some()
+        {
+            return Err(BAD);
+        }
+        if observed.associated_picture
+            && self
+                .associated_temporal
+                .replace(temporal)
+                .is_some_and(|old| old != temporal)
+        {
+            return Err(BAD);
+        }
+        self.hrd_operation_points &= observed.hrd_operation_points;
+        if self.hrd_operation_points == 0 {
+            return Err(BAD);
+        }
+        Ok(())
     }
 }
 
@@ -91,8 +127,13 @@ pub(super) fn parse(
     let mut evidence = PictureEvidence::default();
     let mut suffix = false;
     let mut ended = false;
-    let mut timing = false;
-    let mut recovery = None;
+    let mut terminal_kind = Terminal::None;
+    let mut sei = SeiEvidence {
+        timing: false,
+        recovery: None,
+        associated_temporal: None,
+        hrd_operation_points: 0x7f,
+    };
     let mut aud = None;
     for (index, nal) in units.iter().enumerate() {
         let head = bits::header(nal)?;
@@ -114,47 +155,68 @@ pub(super) fn parse(
                 aud = Some(kind);
             }
             39 if evidence.picture.is_none() && !ended => {
-                let observed = sei::parse(nal, &config.sps, config.vps.id)?;
-                if observed.picture_timing {
-                    if timing {
-                        return Err(BAD);
-                    }
-                    timing = true;
-                }
-                if let Some(point) = observed.recovery
-                    && recovery.replace(point).is_some()
-                {
-                    return Err(BAD);
-                }
+                sei.record(&sei::parse(nal, &config.sps, config.vps.id)?, head.temporal)?;
             }
             0..=9 | 16..=21 if !suffix && !ended => evidence.record(config, nal)?,
             40 if evidence.picture.is_some() && !ended => {
-                sei::parse(nal, &config.sps, config.vps.id)?;
+                sei.record(&sei::parse(nal, &config.sps, config.vps.id)?, head.temporal)?;
                 suffix = true;
             }
             36 if evidence.picture.is_some() && !ended => {
                 terminal(nal)?;
                 ended = true;
+                terminal_kind = Terminal::Sequence;
             }
             37 if evidence.picture.is_some() && index + 1 == units.len() => {
                 terminal(nal)?;
                 ended = true;
+                terminal_kind = Terminal::Bitstream;
             }
-            38 if !ended => {
+            38 if evidence.picture.is_some() && !ended => {
                 let rbsp = bits::rbsp(nal)?;
                 let (&last, fill) = rbsp.split_last().ok_or(BAD)?;
                 if last != 0x80 || fill.iter().any(|b| *b != 255) {
                     return Err(BAD);
                 }
+                suffix = true;
             }
             _ => return Err(ConversionError("native-hevc-nal-order-not-supported")),
         }
     }
-    evidence.finish(config, aud)
+    let mut unit = evidence.finish(config, aud)?;
+    temporal_rules(&units, unit.temporal, sei.associated_temporal)?;
+    unit.hrd_operation_points = sei.hrd_operation_points;
+    unit.terminal = terminal_kind;
+    Ok(unit)
 }
 fn terminal(nal: &[u8]) -> Result<(), ConversionError> {
-    let rbsp = bits::rbsp(nal)?;
-    bits::Bits::new(&rbsp).trailing()
+    // end_of_seq_rbsp and end_of_bitstream_rbsp are empty, without trailing bits.
+    if nal.len() != 2 {
+        return Err(BAD);
+    }
+    Ok(())
+}
+fn temporal_rules(
+    units: &[&[u8]],
+    temporal: u8,
+    associated: Option<u8>,
+) -> Result<(), ConversionError> {
+    if associated.is_some_and(|value| value != temporal) {
+        return Err(BAD);
+    }
+    for nal in units {
+        let head = bits::header(nal)?;
+        let valid = match head.kind {
+            32 | 33 => temporal == 0,
+            35 | 38 => head.temporal == temporal,
+            34 | 39 | 40 => head.temporal >= temporal,
+            _ => true,
+        };
+        if !valid {
+            return Err(BAD);
+        }
+    }
+    Ok(())
 }
 fn parameter(
     config: &Configuration,
@@ -172,7 +234,9 @@ fn parameter(
         .iter()
         .find(|a| a.kind == kind)
         .ok_or(CONFIG)?;
-    if original.units[0].as_slice() != nal {
+    // The parameter payload must be identical. A repeated PPS may have a different
+    // TemporalId when its header satisfies the containing AU's temporal constraints.
+    if original.units[0].get(2..) != nal.get(2..) {
         return Err(ConversionError(
             "native-hevc-parameter-set-change-not-supported",
         ));

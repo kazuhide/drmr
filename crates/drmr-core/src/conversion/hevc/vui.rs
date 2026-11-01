@@ -15,7 +15,7 @@ pub(super) struct Hrd {
     pub output: u32,
     pub du_increment: u32,
     pub du_output: u32,
-    pub cpb_count: u32,
+    pub cpb_counts: [u8; 7],
 }
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct Timing {
@@ -27,6 +27,9 @@ pub(super) fn hrd(
     max_sub: u8,
     common: Option<Hrd>,
 ) -> Result<Hrd, ConversionError> {
+    if max_sub > 6 {
+        return Err(BAD);
+    }
     let mut value = if let Some(common) = common {
         common
     } else {
@@ -64,26 +67,41 @@ pub(super) fn hrd(
             b.flag()?
         };
         let cpb = if low_delay { 0 } else { b.ue(31)? };
-        // Buffering-period SEI initial delays use CpbCnt from temporal sublayer 0.
-        // Higher sublayers are still parsed completely with their own CPB counts.
-        if layer == 0 {
-            value.cpb_count = cpb + 1;
-        }
+        value.cpb_counts[usize::from(layer)] = u8::try_from(cpb + 1).map_err(|_| BAD)?;
         for present in [value.nal, value.vcl] {
             if present {
-                for _ in 0..=cpb {
-                    b.ue(u32::MAX - 1)?;
-                    b.ue(u32::MAX - 1)?;
-                    if value.sub_pic {
-                        b.ue(u32::MAX - 1)?;
-                        b.ue(u32::MAX - 1)?;
-                    }
-                    b.flag()?;
-                }
+                sublayer(b, cpb, value.sub_pic)?;
             }
         }
     }
     Ok(value)
+}
+
+fn sublayer(b: &mut Bits<'_>, cpb: u32, sub_pic: bool) -> Result<(), ConversionError> {
+    let mut prior = None;
+    for _ in 0..=cpb {
+        let rate = b.ue(u32::MAX - 1)?;
+        let size = b.ue(u32::MAX - 1)?;
+        let du = if sub_pic {
+            Some((b.ue(u32::MAX - 1)?, b.ue(u32::MAX - 1)?))
+        } else {
+            None
+        };
+        if prior.is_some_and(|(old_rate, old_size, old_du)| {
+            rate <= old_rate
+                || size > old_size
+                || du
+                    .zip(old_du)
+                    .is_some_and(|((size, rate), (old_size, old_rate))| {
+                        size > old_size || rate <= old_rate
+                    })
+        }) {
+            return Err(BAD);
+        }
+        b.flag()?;
+        prior = Some((rate, size, du));
+    }
+    Ok(())
 }
 pub(super) fn parse(
     b: &mut Bits<'_>,

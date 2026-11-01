@@ -120,13 +120,66 @@ fn vui_hrd(b: &mut Writer, max_sub: u8) {
         b.bit(true);
         b.ue(0);
         b.ue(u32::from(layer));
-        for _ in 0..=layer {
-            b.ue(0);
+        for index in 0..=layer {
+            b.ue(u32::from(index));
             b.ue(0);
             b.bit(false);
         }
     }
     b.bit(false); // bitstream_restriction_flag.
+}
+
+fn hrd_alternatives(sub_pic: bool, second: [u32; 4]) -> Vec<u8> {
+    let mut b = Writer::default();
+    b.bit(true);
+    b.bit(false);
+    b.bit(sub_pic);
+    if sub_pic {
+        b.u(0, 8);
+        b.u(3, 5);
+        b.bit(false);
+        b.u(3, 5);
+    }
+    b.u(0, 8);
+    if sub_pic {
+        b.u(0, 4);
+    }
+    for _ in 0..3 {
+        b.u(3, 5);
+    }
+    b.bit(true);
+    b.ue(0);
+    b.ue(1);
+    for [rate, size, du_size, du_rate] in [[0, 2, 2, 0], second] {
+        b.ue(rate);
+        b.ue(size);
+        if sub_pic {
+            b.ue(du_size);
+            b.ue(du_rate);
+        }
+        b.bit(false);
+    }
+    b.align();
+    b.bytes()
+}
+
+#[test]
+fn hevc_hrd_alternative_cpb_rates_and_sizes_are_checked() {
+    for (sub_pic, second, valid) in [
+        (false, [1, 1, 1, 1], true),
+        (true, [1, 1, 1, 1], true),
+        (false, [0, 1, 1, 1], false),
+        (false, [1, 3, 1, 1], false),
+        (true, [1, 1, 3, 1], false),
+        (true, [1, 1, 1, 0], false),
+    ] {
+        let bytes = hrd_alternatives(sub_pic, second);
+        assert_eq!(
+            vui::hrd(&mut bits::Bits::new(&bytes), 0, None).is_ok(),
+            valid
+        );
+        assert!(vui::hrd(&mut bits::Bits::new(&bytes), 7, None).is_err());
+    }
 }
 fn parameters_with(depth: u8, features: Features) -> [Vec<u8>; 3] {
     let mut v = Writer::default();
@@ -261,6 +314,231 @@ impl Configuration {
             },
         )
     }
+
+    pub(in crate::conversion) fn test_hrd_stream(
+        temporal: u8,
+        cpb_count: u8,
+        configuration_sei: bool,
+    ) -> (Vec<u8>, Vec<Vec<u8>>) {
+        let features = Features {
+            max_sub: 1,
+            hrd: true,
+            ..Features::default()
+        };
+        let mut config = hvcc_with(8, features);
+        let prefix = buffering_period(cpb_count);
+        let (idr, _) = idr_slice(true, 0, true);
+        let mut samples = if configuration_sei {
+            config[22] += 1;
+            config.push(39);
+            config.extend(1_u16.to_be_bytes());
+            config.extend(u16::try_from(prefix.len()).unwrap().to_be_bytes());
+            config.extend(&prefix);
+            vec![packed(&[&idr], 4)]
+        } else {
+            vec![packed(&[&prefix, &idr], 4)]
+        };
+        if temporal != 0 {
+            let mut next = inter_slice(1, features);
+            next[1] = temporal + 1;
+            samples.push(packed(&[&next], 4));
+        }
+        (config, samples)
+    }
+}
+
+fn buffering_period(cpb_count: u8) -> Vec<u8> {
+    let mut period = Writer::default();
+    period.ue(0);
+    period.bit(false);
+    period.bit(false);
+    period.u(0, 4);
+    for _ in 0..cpb_count {
+        period.u(1, 4);
+        period.u(2, 4);
+    }
+    period.align();
+    sei_nal(39, &[(0, period.bytes())])
+}
+
+#[test]
+fn hevc_r2_end_of_bitstream_requires_zero_temporal_in_header_and_access_unit() {
+    let (config, width) = Configuration::from_hvcc(&hvcc(8)).unwrap();
+    let (slice, _) = idr_slice(true, 0, true);
+    let eob = [37 << 1, 2, 0x80];
+    assert!(bits::header(&eob).is_err());
+    assert!(
+        config
+            .length_prefixed_access_unit(&packed(&[&slice, &eob], width), width, *b"hvc1")
+            .is_err()
+    );
+    assert_eq!(bits::header(&[37 << 1, 1]).unwrap().temporal, 0);
+}
+
+#[test]
+fn hevc_r2_terminal_payload_is_empty_without_rbsp_trailing_bits() {
+    let (config, width) = Configuration::from_hvcc(&hvcc(8)).unwrap();
+    let (slice, _) = idr_slice(true, 0, true);
+    for kind in [36, 37] {
+        let terminal = [kind << 1, 1];
+        assert!(
+            config
+                .length_prefixed_access_unit(&packed(&[&slice, &terminal], width), width, *b"hvc1")
+                .is_ok(),
+            "NAL type {kind}"
+        );
+        for extra in [0, 0x80, 0xff] {
+            let terminal = [kind << 1, 1, extra];
+            assert!(
+                config
+                    .length_prefixed_access_unit(
+                        &packed(&[&slice, &terminal], width),
+                        width,
+                        *b"hvc1"
+                    )
+                    .is_err()
+            );
+        }
+    }
+    let eos = [36 << 1, 1];
+    let eob = [37 << 1, 1];
+    let sample = packed(&[&slice, &eos, &eob], width);
+    assert!(
+        config
+            .length_prefixed_access_unit(&sample, width, *b"hvc1")
+            .is_ok()
+    );
+    let mut with_terminal = Sha256::new();
+    config
+        .units_with_width(&sample, width, *b"hvc1", &mut with_terminal)
+        .unwrap();
+    let mut without_terminal = Sha256::new();
+    config
+        .units_with_width(
+            &packed(&[&slice], width),
+            width,
+            *b"hvc1",
+            &mut without_terminal,
+        )
+        .unwrap();
+    assert_ne!(with_terminal.finalize(), without_terminal.finalize());
+}
+
+#[test]
+fn hevc_filler_must_follow_all_picture_slices() {
+    let (config, width) = Configuration::from_hvcc(&hvcc(8)).unwrap();
+    let (first, _) = idr_slice(true, 0, false);
+    let (last, _) = idr_slice(false, 2, false);
+    let filler = escaped(38, &[0xff, 0x80]);
+    assert!(
+        config
+            .length_prefixed_access_unit(&packed(&[&first, &last, &filler], width), width, *b"hvc1")
+            .is_ok()
+    );
+    assert!(
+        config
+            .length_prefixed_access_unit(&packed(&[&first, &filler, &last], width), width, *b"hvc1")
+            .is_err()
+    );
+}
+
+#[test]
+fn hevc_r2_non_vcl_temporal_follows_the_containing_access_unit() {
+    let features = Features {
+        max_sub: 2,
+        ..Features::default()
+    };
+    let (config, width) = Configuration::from_hvcc(&hvcc_with(8, features)).unwrap();
+    let mut slice = inter_slice(1, features);
+    slice[1] = 2;
+    let mut aud = escaped(35, &[0x30]);
+    aud[1] = 2;
+    let mut filler = escaped(38, &[0xff, 0x80]);
+    filler[1] = 2;
+    let params = parameters_with(8, features);
+    let mut pps = params[2].clone();
+    let mut sei = sei_nal(39, &[(5, vec![1; 16])]);
+    for temporal in [1, 2] {
+        pps[1] = temporal + 1;
+        sei[1] = temporal + 1;
+        let sample = packed(&[&aud, &pps, &sei, &slice, &filler], width);
+        let unit = config
+            .length_prefixed_access_unit(&sample, width, *b"hev1")
+            .unwrap();
+        assert_eq!(unit.temporal, 1);
+    }
+    for temporal in [0, 2] {
+        aud[1] = temporal + 1;
+        assert!(
+            config
+                .length_prefixed_access_unit(&packed(&[&aud, &slice], width), width, *b"hev1")
+                .is_err()
+        );
+        filler[1] = temporal + 1;
+        assert!(
+            config
+                .length_prefixed_access_unit(&packed(&[&slice, &filler], width), width, *b"hev1")
+                .is_err()
+        );
+    }
+    pps[1] = 1;
+    sei[1] = 1;
+    filler[1] = 2;
+    for sample in [
+        packed(&[&pps, &slice], width),
+        packed(&[&sei, &slice], width),
+        packed(&[&params[0], &slice], width),
+        packed(&[&params[1], &slice], width),
+        packed(&[&filler, &slice], width),
+    ] {
+        assert!(
+            config
+                .length_prefixed_access_unit(&sample, width, *b"hev1")
+                .is_err()
+        );
+    }
+    for (kind, payload) in [
+        (3, vec![255]),
+        (6, vec![0xd0]),
+        (137, vec![0; 24]),
+        (144, vec![0; 4]),
+        (147, vec![18]),
+    ] {
+        let mut associated = sei_nal(39, &[(kind, payload)]);
+        associated[1] = 3;
+        assert!(
+            config
+                .length_prefixed_access_unit(
+                    &packed(&[&associated, &slice], width),
+                    width,
+                    *b"hev1"
+                )
+                .is_err()
+        );
+        associated[1] = 2;
+        assert!(
+            config
+                .length_prefixed_access_unit(
+                    &packed(&[&associated, &slice], width),
+                    width,
+                    *b"hev1"
+                )
+                .is_ok()
+        );
+    }
+    let mut hash = sei_nal(40, &[(132, vec![0; 49])]);
+    hash[1] = 3;
+    assert!(
+        config
+            .length_prefixed_access_unit(&packed(&[&slice, &hash], width), width, *b"hev1")
+            .is_err()
+    );
+    hash[1] = 2;
+    assert!(
+        config
+            .length_prefixed_access_unit(&packed(&[&slice, &hash], width), width, *b"hev1")
+            .is_ok()
+    );
 }
 
 #[test]
@@ -290,7 +568,7 @@ fn hevc_review_tsa_and_stsa_require_nonzero_temporal_id_in_headers_and_access_un
 }
 
 #[test]
-fn hevc_review_buffering_period_uses_layer_zero_cpb_count_and_checks_every_sublayer() {
+fn buffering_period_candidate_parsing_checks_every_sublayer() {
     let features = Features {
         max_sub: 1,
         hrd: true,
@@ -312,7 +590,39 @@ fn hevc_review_buffering_period_uses_layer_zero_cpb_count_and_checks_every_subla
             .length_prefixed_access_unit(&packed(&[&prefix, &slice], width), width, *b"hvc1")
             .is_ok()
     );
-    assert_eq!(configuration.sps.timing.hrd.unwrap().cpb_count, 1);
+    assert_eq!(
+        configuration.sps.timing.hrd.unwrap().cpb_counts[..2],
+        [1, 2]
+    );
+
+    let features = Features {
+        max_sub: 6,
+        hrd: true,
+        ..Features::default()
+    };
+    let (all_layers, width) = Configuration::from_hvcc(&hvcc_with(8, features)).unwrap();
+    assert_eq!(
+        all_layers.sps.timing.hrd.unwrap().cpb_counts,
+        [1, 2, 3, 4, 5, 6, 7]
+    );
+    for count in 1..=7 {
+        let prefix = buffering_period(count);
+        let unit = all_layers
+            .length_prefixed_access_unit(&packed(&[&prefix, &slice], width), width, *b"hvc1")
+            .unwrap();
+        assert_eq!(unit.hrd_operation_points, 1 << (count - 1));
+    }
+    let first = buffering_period(1);
+    let second = buffering_period(2);
+    assert!(
+        all_layers
+            .length_prefixed_access_unit(
+                &packed(&[&first, &second, &slice], width),
+                width,
+                *b"hvc1"
+            )
+            .is_err()
+    );
 
     let mut hrd = Writer::default();
     vui_hrd(&mut hrd, 1);
@@ -763,7 +1073,7 @@ fn malformed_nal_headers_lengths_rbsp_and_multiple_pictures_fail_closed() {
                 .is_err()
         );
     }
-    let eos = escaped(36, &[128]);
+    let eos = [36 << 1, 1];
     assert!(
         configuration
             .length_prefixed_access_unit(&packed(&[&slice, &eos, &eos], width), width, *b"hvc1")

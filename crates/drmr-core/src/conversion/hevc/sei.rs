@@ -4,10 +4,21 @@ use super::{
     bits::{self, Bits},
     parameters::Sps,
 };
-#[derive(Default)]
 pub(super) struct Evidence {
     pub picture_timing: bool,
     pub recovery: Option<(i32, bool, bool)>,
+    pub associated_picture: bool,
+    pub hrd_operation_points: u8,
+}
+impl Default for Evidence {
+    fn default() -> Self {
+        Self {
+            picture_timing: false,
+            recovery: None,
+            associated_picture: false,
+            hrd_operation_points: 0x7f,
+        }
+    }
 }
 fn finish(b: &mut Bits<'_>) -> Result<(), ConversionError> {
     if b.remaining() == 0 {
@@ -66,8 +77,15 @@ fn parse_payload(
     result: &mut Evidence,
 ) -> Result<(), ConversionError> {
     let b = &mut Bits::new(payload);
+    // These supported VclAssociatedSeiList payloads require the containing AU's TemporalId.
+    result.associated_picture |= matches!(payload_type, 3 | 6 | 132 | 137 | 144 | 147);
     match payload_type {
-        0 => buffering_period(b, sps)?,
+        0 => {
+            result.hrd_operation_points &= buffering_period(payload, sps)?;
+            if result.hrd_operation_points == 0 {
+                return Err(BAD);
+            }
+        }
         1 => picture_timing(b, sps, result)?,
         3 => {
             if payload.is_empty() || payload.iter().any(|byte| *byte != 255) {
@@ -135,7 +153,24 @@ fn parse_payload(
     Ok(())
 }
 
-fn buffering_period(b: &mut Bits<'_>, sps: &Sps) -> Result<(), ConversionError> {
+fn buffering_period(payload: &[u8], sps: &Sps) -> Result<u8, ConversionError> {
+    let hrd = sps.timing.hrd.filter(|h| h.nal || h.vcl).ok_or(BAD)?;
+    let mut candidates = 0;
+    // Non-nested BP applies to the whole bitstream's actual highest VCL temporal layer.
+    // Until the complete scan establishes that layer, preserve every structurally valid OP.
+    for layer in 0..=sps.max_sub {
+        let count = hrd.cpb_counts[usize::from(layer)];
+        if buffering_period_at(&mut Bits::new(payload), sps, count).is_ok() {
+            candidates |= 1 << layer;
+        }
+    }
+    if candidates == 0 {
+        return Err(BAD);
+    }
+    Ok(candidates)
+}
+
+fn buffering_period_at(b: &mut Bits<'_>, sps: &Sps, cpb_count: u8) -> Result<(), ConversionError> {
     if b.ue(15)? != sps.id {
         return Err(BAD);
     }
@@ -149,7 +184,7 @@ fn buffering_period(b: &mut Bits<'_>, sps: &Sps) -> Result<(), ConversionError> 
     b.u(h.removal)?;
     for present in [h.nal, h.vcl] {
         if present {
-            for _ in 0..h.cpb_count {
+            for _ in 0..cpb_count {
                 b.u(h.initial)?;
                 b.u(h.initial)?;
                 if h.sub_pic || irap {
