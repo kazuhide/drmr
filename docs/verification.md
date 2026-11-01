@@ -118,8 +118,10 @@ modeled. IDR, BLA and CRA random-access pictures and leading pictures retain
 their distinct headers and must match the MP4 sync declarations.
 
 The `hvc1` entry keeps parameter sets in its configuration and refuses in-band
-parameter sets. `hev1` accepts only byte-identical repetitions of the declared
-sets before a picture. Canonical comparison removes only these validated
+parameter sets. `hev1` accepts only unchanged declared parameter payloads before
+a picture. Each NAL header's temporal identifier must separately satisfy its
+access-unit rules; a repeated PPS can have a valid different temporal header.
+Canonical comparison removes only these validated
 framing repetitions and length prefixes. It retains every other compressed
 byte, including supplemental enhancement information (SEI). Supported SEI
 includes timing, recovery, user data, active parameter sets, decoded-picture
@@ -142,6 +144,21 @@ A neutral `fiel` value of `[1, 0]` declares progressive frames. Its omission by
 a packager is equivalent only when both independently parsed HEVC configurations
 establish progressive pictures. Other HEVC field declarations are refused;
 other display controls remain part of the comparison.
+
+NAL temporal identifiers are checked against the picture and NAL type. End of
+sequence (EOS) and end of bitstream (EOB) contain only their two-byte NAL header,
+without a trailing payload. A picture following either terminal must be an
+intra random-access picture (IRAP). Filler follows the picture's complete slices.
+
+Hypothetical Reference Decoder (HRD) parameters describe decoder-buffer timing.
+All declared sublayer CPB counts are parsed; a coded picture buffer (CPB) holds
+compressed data before decoding. Buffering-period messages are checked against
+the actual highest video temporal layer across each complete bitstream,
+including ordered HLS/DASH resources. A bounded seven-layer candidate mask lets
+later pictures resolve a message seen earlier. The declared maximum alone does
+not choose a layer. EOB closes that proof and starts a new one when another
+bitstream follows; EOS retains the current proof. These checks interpret the
+headers and their applicable layer; they do not simulate decoder-buffer fullness.
 
 The current validation profile requires one stable VPS, SPS and PPS. It refuses
 multilayer/other profiles, unmodeled extensions or SEI, field/repeated pictures,
