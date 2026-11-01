@@ -1,252 +1,46 @@
-name: Windows native contracts
+name: Temporary Windows publication reproduction
 
 on:
-  pull_request:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
-concurrency:
-  group: windows-native-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  scope:
-    uses: ./.github/workflows/ci-scope.yml
-  native:
-    needs: scope
-    if: ${{ needs.scope.outputs.profile == 'full' }}
-    name: Windows / ${{ matrix.rust }} / private files and process trees
-    strategy:
-      fail-fast: false
-      matrix:
-        rust: [minimum, stable]
+  reproduce:
+    name: Research only / Windows minimum / publication
     runs-on: windows-2022
-    # Retain both complete ordinary-user regression profiles as required
-    # checks; their bounded parallel groups are independent of archive builds.
-    timeout-minutes: 75
+    timeout-minutes: 15
     env:
-      CARGO_TERM_COLOR: always
-      CARGO_PROFILE_TEST_OPT_LEVEL: "1"
-      CARGO_PROFILE_TEST_DEBUG_ASSERTIONS: "true"
-      CARGO_PROFILE_TEST_OVERFLOW_CHECKS: "true"
+      RUSTUP_TOOLCHAIN: '1.95'
+      CARGO_PROFILE_TEST_OPT_LEVEL: '1'
+      CARGO_PROFILE_TEST_DEBUG_ASSERTIONS: 'true'
+      CARGO_PROFILE_TEST_OVERFLOW_CHECKS: 'true'
     steps:
-      - name: Check out source
+      - name: Check out the isolated research source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-
-      - name: Install pinned Python for the real-media harness
+      - name: Install the pinned Python runtime
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.13.12'
-
-      - name: Check bounded native scheduling and verified download reuse
-        if: matrix.rust == 'stable'
-        run: |
-          ./.github/scripts/test-windows-native-parallel.ps1
-          ./.github/scripts/test-windows-media-cache.ps1
-          python -W error::ResourceWarning -m unittest discover -s tools/tests -p test_ci_test_plan.py -v
-          if ($LASTEXITCODE -ne 0) { throw 'The native test plan controls failed' }
-
-      - name: Check vendored source bytes before native compilation
-        run: python -W error::ResourceWarning -m unittest discover -s tools/tests -p test_verify_private_fs.py -v
-
-      - name: Check headless decoder guards and archive cleanup as an ordinary user
-        run: ./.github/scripts/test-windows-cli-archive-cleanup.ps1
-
-      - name: Install checksummed Windows media tools
+      - name: Install checksummed media tools
         uses: ./.github/actions/windows-media-tools
-
-      - name: Install the supported Rust toolchain
-        run: |
-          $rustChannel = '${{ matrix.rust }}'
-          if ($rustChannel -eq 'minimum') {
-            $rustChannel = (& python .github/scripts/minimum-rust.py).Trim()
-            if ($LASTEXITCODE -ne 0) { throw 'Could not read the minimum Rust version' }
-          }
-          & rustup toolchain install $rustChannel --profile minimal --component clippy,rustfmt --no-self-update
-          if ($LASTEXITCODE -ne 0) { throw 'Rust toolchain installation failed' }
-          "RUSTUP_TOOLCHAIN=$rustChannel" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          & rustup run $rustChannel cargo --version
-          if ($LASTEXITCODE -ne 0) { throw 'Cargo version check failed' }
-          & rustup run $rustChannel rustc --version
-          if ($LASTEXITCODE -ne 0) { throw 'Rust compiler version check failed' }
-
-      - name: Restore compiled Rust dependencies
+      - name: Install the failing configuration's compiler
+        run: rustup toolchain install 1.95 --profile minimal --no-self-update
+      - name: Reuse existing compiled dependencies
         uses: ./.github/actions/rust-cache
-
-      - name: Check product version and changelog consistency
-        run: python tools/check_release.py
-
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
-      - name: Check native platform warnings
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
-
-      - name: Run native manifest lint rules
-        run: |
-          cargo test -p drmr-manifest --locked -- --nocapture 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/manifest-lint-tests.log"
-          if ($LASTEXITCODE -ne 0) { throw 'Native manifest lint tests failed' }
-          python .github/scripts/check-rust-test-skips.py --scope workspace --log "$env:RUNNER_TEMP/manifest-lint-tests.log"
-          if ($LASTEXITCODE -ne 0) { throw 'Native manifest lint tests were incomplete' }
-
-      - name: Check elevated media execution is refused before payload creation
-        run: cargo test -p drmr-core --test native media_workspace_checks_default_ownership_before_generating_payloads --locked -- --nocapture
-
-      - name: Test native access controls, descendants and the common CLI as a regular user
+      - name: Compile one integration target and reproduce as the ordinary user
         run: ./.github/scripts/windows-native-tests.ps1
-
-      - name: Preserve native test results
-        if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v4
-        with:
-          name: windows-native-results-${{ matrix.rust }}
-          path: |
-            ${{ runner.temp }}/manifest-lint-tests.log
-            ${{ runner.temp }}/drmr-native-user/bbb-media-report.json
-            ${{ runner.temp }}/drmr-native-user/conversion-report.json
-            ${{ runner.temp }}/drmr-native-user/stdout.log
-            ${{ runner.temp }}/drmr-native-user/stderr.log
-            ${{ runner.temp }}/drmr-native-user/groups/progress.log
-            ${{ runner.temp }}/drmr-native-user/test-plan.json
-          if-no-files-found: warn
-
-  release:
-    needs: scope
-    if: ${{ needs.scope.outputs.profile == 'full' }}
-    name: Windows CLI release / ${{ matrix.rust }}
-    # Build and qualify concurrently with platform guards. Merge/publication
-    # still require the complete workflow, including both guard profiles.
-    strategy:
-      fail-fast: false
-      matrix:
-        rust: [minimum, stable]
-    runs-on: windows-2022
-    timeout-minutes: 45
-    env:
-      CARGO_TERM_COLOR: always
-    steps:
-      - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-
-      - name: Install pinned Python for the real-media harness
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: '3.13.12'
-
-      - name: Install checksummed Windows media tools
-        uses: ./.github/actions/windows-media-tools
-
-      - name: Install the supported Rust toolchain
-        run: |
-          $rustChannel = '${{ matrix.rust }}'
-          if ($rustChannel -eq 'minimum') {
-            $rustChannel = (& python .github/scripts/minimum-rust.py).Trim()
-            if ($LASTEXITCODE -ne 0) { throw 'Could not read the minimum Rust version' }
-          }
-          & rustup toolchain install $rustChannel --profile minimal --component clippy,rustfmt --no-self-update
-          if ($LASTEXITCODE -ne 0) { throw 'Rust toolchain installation failed' }
-          "RUSTUP_TOOLCHAIN=$rustChannel" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          & rustup run $rustChannel cargo --version
-          if ($LASTEXITCODE -ne 0) { throw 'Cargo version check failed' }
-          & rustup run $rustChannel rustc --version
-          if ($LASTEXITCODE -ne 0) { throw 'Rust compiler version check failed' }
-
-      - name: Restore compiled Rust dependencies
-        uses: ./.github/actions/rust-cache
-        with:
-          profile: release
-
-      - name: Build native CLI
-        run: cargo build --release --locked -p drmr
-
-      - name: Check native CLI help
-        run: .\target\release\drmr.exe --help
-
-      - name: Inspect native runtime dependencies
-        shell: pwsh
-        run: |
-          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          $installation = & $vswhere -latest -products '*' -property installationPath
-          $dumpbin = Get-ChildItem (Join-Path $installation 'VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe') | Sort-Object FullName -Descending | Select-Object -First 1
-          if (-not $dumpbin) { throw 'PE dependency inspection tool is unavailable' }
-          & $dumpbin.FullName /DEPENDENTS .\target\release\drmr.exe
-          if ($LASTEXITCODE -ne 0) { throw 'Native runtime dependency inspection failed' }
-
-      - name: Package native CLI and user documentation
-        if: matrix.rust == 'stable'
-        shell: pwsh
-        run: |
-          $identity = & python tools/check_release.py --cli .\target\release\drmr.exe
-          if ($LASTEXITCODE -ne 0) { throw 'Release product identity did not match' }
-          $version = ($identity | ConvertFrom-Json).version
-          $archive = Join-Path $env:RUNNER_TEMP "drmr-${version}-x86_64-pc-windows-msvc"
-          New-Item -ItemType Directory -Path $archive | Out-Null
-          Copy-Item .\target\release\drmr.exe, .\LICENSE, .\README.md, .\CHANGELOG.md $archive
-          New-Item -ItemType Directory -Path "$archive\docs" | Out-Null
-          Copy-Item .\docs\*.md "$archive\docs"
-          python tools/collect_notices.py --output (Join-Path $archive 'licenses')
-          if ($LASTEXITCODE -ne 0) { throw 'Dependency notice collection failed' }
-          python tools/verify_archive.py manifest --kind cli --target x86_64-pc-windows-msvc --directory $archive
-          if ($LASTEXITCODE -ne 0) { throw 'Build manifest creation failed' }
-          Compress-Archive -Path "$archive\*" -DestinationPath "$archive.zip"
-          python tools/verify_archive.py verify --kind cli --target x86_64-pc-windows-msvc --archive "$archive.zip" --report (Join-Path $env:RUNNER_TEMP 'cli-archive-verification.json')
-          if ($LASTEXITCODE -ne 0) { throw 'Completed archive verification failed' }
-          "CLI_ARCHIVE=$archive.zip" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "CLI_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
-      - name: Qualify the extracted CLI as a regular user
-        if: matrix.rust == 'stable'
-        shell: pwsh
-        run: ./.github/scripts/windows-cli-archive.ps1 -Archive $env:CLI_ARCHIVE -Version $env:CLI_VERSION -Report (Join-Path $env:RUNNER_TEMP 'cli-media-qualification.json')
-
-      - name: Upload native CLI archive
-        if: matrix.rust == 'stable'
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v4
-        with:
-          name: drmr-windows-x86_64
-          path: |
-            ${{ env.CLI_ARCHIVE }}
-            ${{ runner.temp }}/cli-archive-verification.json
-            ${{ runner.temp }}/cli-media-qualification.json
-          if-no-files-found: error
-
-  qualification:
-    name: Windows / required checks
-    if: ${{ always() }}
-    needs: [scope, native, release]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      actions: read
-    steps:
-      - name: Check out the complete source graph
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-          fetch-depth: 0
-      - name: Install the qualification Python runtime
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: '3.13.12'
-      - name: Require the classified route and actual native job results
-        env:
-          GH_TOKEN: ${{ github.token }}
-          NEEDS_JSON: ${{ toJSON(needs) }}
-        run: python3 tools/ci_contract.py gate --workflow windows.yml --report "$RUNNER_TEMP/ci-qualification.json"
-      - name: Preserve the qualification decision
+      - name: Retain research evidence only
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          name: required-qualification-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/ci-qualification.json
+          name: windows-publication-research
+          path: |
+            ${{ runner.temp }}/drmr-native-user/stdout.log
+            ${{ runner.temp }}/drmr-native-user/stderr.log
+            ${{ runner.temp }}/drmr-native-user/groups
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: 3

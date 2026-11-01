@@ -4,7 +4,7 @@ $ErrorActionPreference = 'Stop'
 # an ordinary user. Elevated tokens can assign Administrators as a new file's
 # owner, which is deliberately outside the media workspace security profile.
 # Select the same library, binary and integration test targets in one Cargo graph.
-$messages = & cargo test -p drmr-core -p drmr -p drmr-server -p drmr-test-support --tests --locked --no-run --message-format=json
+$messages = & cargo test -p drmr-core --test conversion_bundle_publication --locked --no-run --message-format=json
 if ($LASTEXITCODE -ne 0) { throw 'Native test compilation failed' }
 $executables = @()
 foreach ($line in $messages) {
@@ -13,7 +13,7 @@ foreach ($line in $messages) {
         $executables += $message.executable
     }
 }
-if ($executables.Count -lt 4) { throw 'Native test binaries are missing' }
+if ($executables.Count -ne 1) { throw 'Exactly one research test binary is required' }
 $executables = @($executables | Sort-Object -Unique)
 $cargo = (& rustup which cargo).Trim()
 if ($LASTEXITCODE -ne 0) { throw 'The selected native Cargo is unavailable' }
@@ -83,38 +83,53 @@ if ($LASTEXITCODE -ne 0) { throw 'The selected Cargo could not run as a regular 
 if ($LASTEXITCODE -ne 0) { throw 'The selected Rust compiler could not run as a regular user' }
 New-Item -ItemType Directory -Path $env:TEMP | Out-Null
 New-Item -ItemType Directory -Path $env:CARGO_HOME | Out-Null
-# Fail fast on tool contracts before starting the longer native media groups.
-& python -W error::ResourceWarning -m unittest discover -s tools/tests -v
-if ($LASTEXITCODE -ne 0) { throw 'Tool contract tests failed before native media execution' }
-$executables = Get-Content (Join-Path $PSScriptRoot 'executables.json') | ConvertFrom-Json
-# Inventory the actual compiled tests, execute critical regressions first and
-# exclude them from the remaining groups. The planner validates every filter.
-$plan = Join-Path $PSScriptRoot 'test-plan.json'
-& python .github/scripts/native-test-plan.py --windows --executables (Join-Path $PSScriptRoot 'executables.json') --output $plan
-if ($LASTEXITCODE -ne 0) { throw 'The complete native test plan could not be established' }
-$planned = @(Get-Content -LiteralPath $plan -Raw | ConvertFrom-Json)
+# Temporary bounded reproduction, not complete native or release qualification.
+$executables = @(Get-Content (Join-Path $PSScriptRoot 'executables.json') | ConvertFrom-Json)
+if ($executables.Count -ne 1) { throw 'The research binary is ambiguous' }
+$listing = @(& $executables[0] --list --format terse)
+if ($LASTEXITCODE -ne 0) { throw 'Could not list the research tests' }
+$names = @($listing | ForEach-Object {
+    if ($_ -notmatch '^([A-Za-z_][A-Za-z_0-9:]*): test$') { throw 'Invalid research test inventory' }
+    $Matches[1]
+})
+if ($names.Count -ne 5 -or @($names | Sort-Object -Unique).Count -ne 5 -or
+    $names -notcontains 'changed_media_at_final_publication_cannot_be_committed') {
+    throw 'The five-test research inventory does not match'
+}
 . (Join-Path (Get-Location).Path '.github/scripts/windows-native-parallel.ps1')
 $budget = Get-DrmrNativeTestBudget
-$groups = @($planned | ForEach-Object {
-    @{ executable = $_.executable; arguments = @($_.arguments) + @('--test-threads', [string]$budget.threads, '--nocapture'); expected_tests = @($_.tests).Count }
-})
-$priorityCount = @($planned | Where-Object { $_.priority }).Count
-$results = @(Invoke-DrmrNativeTestGroups -Groups $groups -Directory (Join-Path $PSScriptRoot 'groups') -Workers $budget.workers -PriorityCount $priorityCount)
-$failed = $false
-foreach ($result in @($results | Sort-Object index)) {
-    Write-Output ('Native group {0}/{1} output' -f ($result.index + 1), $groups.Count)
-    Get-Content -LiteralPath (Join-Path $result.directory 'stdout.log')
-    Get-Content -LiteralPath (Join-Path $result.directory 'stderr.log')
-    if ($result.exit_code -ne 0) { $failed = $true }
-}
-if ($failed -and $results.Count -eq $priorityCount) { throw 'An early native regression failed; expensive groups were not started' }
-if ($results.Count -ne $groups.Count) { throw 'A native test group result is missing' }
-foreach ($name in @('bbb-media-report.json', 'conversion-report.json')) {
-    $reports = @($results | ForEach-Object { Join-Path $_.directory $name } | Where-Object { Test-Path -LiteralPath $_ })
-    if ($reports.Count -ne 1) { throw 'A native media report is missing or ambiguous' }
-    [IO.File]::WriteAllText((Join-Path $PSScriptRoot $name), [IO.File]::ReadAllText($reports[0]), [Text.UTF8Encoding]::new($false))
-}
-if ($failed) { exit 1 }
+if ($budget.workers -lt 2 -or $budget.threads -lt 2) { throw 'The comparable four-thread research budget is unavailable' }
+$campaign = Join-Path $PSScriptRoot 'groups'
+New-Item -ItemType Directory -Path $campaign | Out-Null
+$progress = Join-Path $campaign 'progress.log'
+$utf8 = [Text.UTF8Encoding]::new($false)
+$completed = 0
+$cancel = [Threading.CancellationTokenSource]::new()
+$cancel.CancelAfter(180000)
+try {
+    for ($wave = 0; $wave -lt 10; $wave++) {
+        $cancel.Token.ThrowIfCancellationRequested()
+        $groups = @(0, 1 | ForEach-Object {
+            @{ executable = $executables[0]; arguments = @('--test-threads', '2', '--nocapture'); expected_tests = 5 }
+        })
+        foreach ($i in 1, 2) {
+            [IO.File]::AppendAllText($progress, "Native group $($completed + $i)/20 started`n", $utf8)
+        }
+        $clock = [Diagnostics.Stopwatch]::StartNew()
+        $results = @(Invoke-DrmrNativeTestGroups -Groups $groups -Directory (Join-Path $campaign ('wave-{0:D2}' -f $wave)) -Workers 2 -CancellationToken $cancel.Token)
+        if ($results.Count -ne 2) { throw 'A research process result is missing' }
+        foreach ($result in @($results | Sort-Object index)) {
+            Get-Content -LiteralPath (Join-Path $result.directory 'stdout.log')
+            Get-Content -LiteralPath (Join-Path $result.directory 'stderr.log')
+            [IO.File]::AppendAllText($progress, "Native group $($completed + $result.index + 1)/20 finished; exit $($result.exit_code); elapsed $([int]$clock.Elapsed.TotalSeconds)s`n", $utf8)
+        }
+        if (@($results | Where-Object exit_code -ne 0).Count -gt 0) { exit 1 }
+        $completed += 2
+        Write-Output "Research successful binary runs: $completed/20"
+    }
+} finally { $cancel.Dispose() }
+if ($completed -ne 20) { throw 'The bounded research campaign is incomplete' }
+Write-Output 'Research only: 20 five-test binary runs passed; complete native qualification was not performed.'
 exit 0
 '@ | Set-Content $script
 $stdout = Join-Path $directory 'stdout.log'
