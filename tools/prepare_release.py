@@ -7,7 +7,7 @@ executes downloaded binaries. It accepts only current-main push qualification
 for the exact clean local release tag. All five latest runs and attempts must
 succeed; the three CLI artifacts must contain matching archive and native-media
 proof. Release packets additionally require complete native round-trip reports
-for all targets. --native-inputs-only stages an explicitly unqualified packet
+for all targets and an exact-source finite codec fuzz report. --native-inputs-only stages an explicitly unqualified packet
 for those native jobs. Output is a new directory outside the source checkout.
 """
 import argparse
@@ -45,6 +45,7 @@ VERIFY = module("verify_archive")
 EVIDENCE = module("media_evidence")
 CODECS = module("codec_contract")
 ROUNDTRIP = module("roundtrip_contract")
+FUZZ = module("fuzz_contract")
 CI_CONTRACT = module("ci_contract")
 COMPRESSED_ERRORS = (EOFError, tarfile.TarError, zipfile.BadZipFile, zlib.error, NotImplementedError)
 ARCHIVE_ERRORS = (VERIFY.Failure, OSError, ValueError, TypeError, KeyError) + COMPRESSED_ERRORS
@@ -465,8 +466,10 @@ def release_notes(root, version):
     return notes + "\n"
 
 
-def prepare(root, tag, output, repository, client, roundtrip_reports=None, native_inputs_only=False):
+def prepare(root, tag, output, repository, client, roundtrip_reports=None, native_inputs_only=False, fuzz_report=None):
     require((roundtrip_reports is not None) != bool(native_inputs_only), "roundtrip-reports-required")
+    require(native_inputs_only or fuzz_report is not None, "fuzz-report-required")
+    require(not native_inputs_only or fuzz_report is None, "fuzz-report-not-applicable")
     require(isinstance(repository, str) and re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) is not None
             and all(part not in (".", "..") for part in repository.split("/")), "repository-invalid")
     root = Path(root).resolve()
@@ -479,6 +482,13 @@ def prepare(root, tag, output, repository, client, roundtrip_reports=None, nativ
     head = identity["commit"]
     tree = CHECK.run(["git", "rev-parse", "HEAD^{tree}"], cwd=root, code="source-command-failed").decode("ascii").strip()
     require(hexadecimal(head, 40) and hexadecimal(tree, 40), "source-identity-invalid")
+    fuzz = None
+    if not native_inputs_only:
+        try:
+            fuzz = FUZZ.validate(FUZZ.read_report(fuzz_report), head, tree, identity["version"],
+                                 FUZZ.identity(VERIFY.Source(root, head)))
+        except FUZZ.Failure as error:
+            raise Failure(str(error)) from None
     selected = qualification_runs(client, repository, head)
     temporary = OwnedDirectory(parent=output.parent)
     promoted = None
@@ -531,6 +541,9 @@ def prepare(root, tag, output, repository, client, roundtrip_reports=None, nativ
                     "publication_ready": not native_inputs_only, "repository": repository, "tag": tag,
                     "version": identity["version"], "source_head": head, "source_tree": tree,
                     "workflow_runs": [pin(selected[name]) for name in WORKFLOWS], "assets": inventory}
+        if fuzz is not None:
+            write_json(payload / "cli-codec-fuzz.json", fuzz)
+            manifest["fuzz_report"] = {"filename": "cli-codec-fuzz.json", "sha256": digest(payload / "cli-codec-fuzz.json")}
         write_json(payload / "release-manifest.json", manifest)
         with (payload / "release-notes.md").open("x", encoding="utf-8") as stream:
             stream.write(notes)
@@ -569,13 +582,15 @@ def main(argv=None):
     parser.add_argument("--output", type=Path, required=True, help="Create a new release packet outside the checkout")
     parser.add_argument("--root", type=Path, default=ROOT)
     parser.add_argument("--repository", default="kazuhide/drmr")
+    parser.add_argument("--fuzz-report", type=Path, help="Require exact-source finite codec fuzz evidence for final assembly")
     qualification = parser.add_mutually_exclusive_group(required=True)
     qualification.add_argument("--native-inputs-only", action="store_true", help="Stage CI archives for native round-trip jobs; not a release")
     qualification.add_argument("--roundtrip-reports", type=Path, help="Require complete native round-trip reports for all targets")
     try:
         args = parser.parse_args(argv)
         report = prepare(args.root, args.tag, args.output, args.repository, GitHub(),
-                         roundtrip_reports=args.roundtrip_reports, native_inputs_only=args.native_inputs_only)
+                         roundtrip_reports=args.roundtrip_reports, native_inputs_only=args.native_inputs_only,
+                         fuzz_report=args.fuzz_report)
     except CHECK.Failure as error:
         report = {"schema_version": 1, "success": False, "error": str(error), "publication_performed": False}
     except COMPRESSED_ERRORS:

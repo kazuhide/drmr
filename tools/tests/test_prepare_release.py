@@ -17,6 +17,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import roundtrip_reports
 import codec_reports
+import fuzz_reports
 
 SPEC = importlib.util.spec_from_file_location("prepare_release", Path(__file__).resolve().parents[1] / "prepare_release.py")
 PREPARE = importlib.util.module_from_spec(SPEC)
@@ -170,6 +171,8 @@ class ReleasePacket(unittest.TestCase):
         self.write("Cargo.lock", 'version = 4\n\n[[package]]\nname = "drmr"\nversion = "1.0.0"\n')
         self.write("crates/drmr-desktop/tauri.conf.json", '{"version":"1.0.0"}')
         self.write("CHANGELOG.md", '# Changelog\n\n## [Unreleased]\n\n## [1.0.0] - 2026-10-22\n\nCurated release notes.\n\n### Changes\n\n- Stable CLI.\n')
+        for name, data in fuzz_reports.files(PREPARE.CODECS).items():
+            self.write(name, data)
         self.git("init", "--quiet")
         self.git("add", ".")
         self.git("-c", "user.name=Release Test", "-c", "user.email=release-test@example.invalid", "commit", "--quiet", "-m", "Release fixture")
@@ -188,11 +191,15 @@ class ReleasePacket(unittest.TestCase):
     def prepare(self, qualified=False):
         return PREPARE.prepare(self.root, "v1.0.0", self.output, "example/drmr", self.client,
                                roundtrip_reports=self.home / "roundtrips" if qualified else None,
-                               native_inputs_only=not qualified)
+                               native_inputs_only=not qualified,
+                               fuzz_report=self.home / "fuzz.json" if qualified else None)
 
     def roundtrip_reports(self):
         directory = self.home / "roundtrips"
         directory.mkdir()
+        identity = PREPARE.FUZZ.identity(PREPARE.VERIFY.Source(self.root))
+        fuzz = fuzz_reports.complete(PREPARE.FUZZ, identity, self.head, self.tree, "1.0.0")
+        (self.home / "fuzz.json").write_text(json.dumps(fuzz), encoding="utf-8")
         for _, artifact, target, _ in PREPARE.TARGETS:
             archive = json.loads(dict(self.client.entries[artifact])["cli-archive-verification.json"])
             value = roundtrip_reports.complete(PREPARE.ROUNDTRIP, self.head, self.tree, target, "1.0.0",
@@ -243,12 +250,47 @@ class ReleasePacket(unittest.TestCase):
         self.assertTrue(result["publication_ready"])
         self.assertEqual(manifest["kind"], "verified-cli-release")
         self.assertTrue(manifest["publication_ready"])
-        self.assertEqual(len(list(self.output.iterdir())), 15)
+        self.assertEqual(len(list(self.output.iterdir())), 16)
         checksums = (self.output / "SHA256SUMS").read_text()
+        fuzz = manifest["fuzz_report"]
+        self.assertEqual(fuzz["filename"], "cli-codec-fuzz.json")
+        self.assertEqual(PREPARE.digest(self.output / fuzz["filename"]), fuzz["sha256"])
+        self.assertIn(fuzz["sha256"] + "  " + fuzz["filename"], checksums)
+        self.assertEqual(len(checksums.splitlines()), 14)
         for asset in manifest["assets"]:
             report = asset["roundtrip_report"]
             self.assertEqual(PREPARE.digest(self.output / report["filename"]), report["sha256"])
             self.assertIn(report["sha256"] + "  " + report["filename"], checksums)
+
+    def test_final_assembly_requires_fuzz_but_input_staging_does_not(self):
+        directory = self.roundtrip_reports()
+        with self.assertRaisesRegex(PREPARE.Failure, "^fuzz-report-required$"):
+            PREPARE.prepare(self.root, "v1.0.0", self.output, "example/drmr", self.client,
+                            roundtrip_reports=directory)
+        self.assertFalse(self.output.exists())
+        self.assertTrue(self.prepare()["success"])
+
+    def test_missing_stale_relaxed_or_raw_fuzz_reports_block_publication(self):
+        self.roundtrip_reports()
+        path = self.home / "fuzz.json"
+        original = path.read_bytes()
+        changes = [lambda r: r.update(source_head="f" * 40),
+                   lambda r: r["fuzz"].update(lock_sha256="f" * 64),
+                   lambda r: r["bounds"].update(seconds=1),
+                   lambda r: r["targets"][0].update(executions=0),
+                   lambda r: r.update(owned_workspace_cleanup="unconfirmed"),
+                   lambda r: r.update(raw_stderr="PRIVATE SENTINEL")]
+        for index, change in enumerate(changes):
+            value = json.loads(original)
+            change(value)
+            path.write_text(json.dumps(value))
+            with self.subTest(index=index), self.assertRaises(PREPARE.Failure):
+                self.prepare(qualified=True)
+            self.assertFalse(self.output.exists())
+            self.assertEqual(list(self.home.glob(".drmr-release-*")), [])
+        path.unlink()
+        with self.assertRaisesRegex(PREPARE.Failure, "fuzz-report-missing-or-invalid"):
+            self.prepare(qualified=True)
 
     def test_missing_stale_or_partial_roundtrip_reports_block_assembly(self):
         directory = self.roundtrip_reports()
