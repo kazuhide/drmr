@@ -582,6 +582,87 @@ fn same_sample(a: &SampleInfo, b: &SampleInfo) -> bool {
         && a.protection == b.protection
 }
 
+#[cfg(any(test, feature = "fuzzing"))]
+pub(in crate::conversion) mod fuzzing {
+    use super::*;
+    use crate::conversion::native_media::SampleProtection;
+
+    pub fn hevc(
+        configuration: hevc::Configuration,
+        width: u8,
+        codec: [u8; 4],
+        samples: &[(u8, &[u8])],
+    ) -> Result<usize, ConversionError> {
+        let count = u64::try_from(samples.len()).map_err(|_| BAD)?;
+        let evidence = Samples::new(1, count, None)?.with_hevc(configuration, width, codec)?;
+        run(evidence, samples)
+    }
+
+    pub fn vp9(
+        configuration: vp9::Configuration,
+        width: u32,
+        height: u32,
+        samples: &[(u8, &[u8])],
+    ) -> Result<usize, ConversionError> {
+        let count = u64::try_from(samples.len()).map_err(|_| BAD)?;
+        let evidence = Samples::new(1, count, None)?.with_vp9(configuration, width, height)?;
+        run(evidence, samples)
+    }
+
+    fn run(mut evidence: Samples, samples: &[(u8, &[u8])]) -> Result<usize, ConversionError> {
+        let mut failed = None;
+        for (ordinal, &(flags, bytes)) in samples.iter().enumerate() {
+            let clock = i64::try_from(ordinal).map_err(|_| BAD)?;
+            let size = u32::try_from(bytes.len()).map_err(|_| BAD)?;
+            // Synthetic, continuous clocks isolate codec state from container parsing.
+            let mut info = SampleInfo {
+                ordinal: u64::try_from(ordinal).map_err(|_| BAD)?,
+                dts: clock,
+                pts: clock,
+                duration: 1,
+                size,
+                range: 0..u64::from(size),
+                flags: 0,
+                is_sync: flags & 1 != 0,
+                roll_distance: None,
+                preroll_distance: None,
+                protection: SampleProtection::Clear,
+                chunk_offset: 0,
+                is_last_chunk: true,
+            };
+            let chunks: &[&[u8]] = if flags & 2 != 0 && bytes.len() > 1 {
+                let (first, last) = bytes.split_at(bytes.len() / 2);
+                &[first, last]
+            } else {
+                &[bytes]
+            };
+            for (index, chunk) in chunks.iter().enumerate() {
+                info.is_last_chunk = index + 1 == chunks.len();
+                let result = evidence.push(&info, chunk);
+                if failed.is_some() {
+                    assert!(result.is_err(), "sample failure must remain sticky");
+                } else if let Err(error) = result {
+                    failed = Some(error);
+                }
+                info.chunk_offset = info
+                    .chunk_offset
+                    .checked_add(u32::try_from(chunk.len()).map_err(|_| BAD)?)
+                    .ok_or(BAD)?;
+            }
+        }
+        let result = evidence.finish();
+        if let Some(error) = failed {
+            assert!(result.is_err(), "failed codec evidence must not finish");
+            return Err(error);
+        }
+        assert_eq!(
+            result?.count,
+            u64::try_from(samples.len()).map_err(|_| BAD)?
+        );
+        Ok(samples.len())
+    }
+}
+
 #[cfg(test)]
 mod borrowing_tests;
 

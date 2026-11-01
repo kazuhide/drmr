@@ -8,6 +8,8 @@ pub(super) mod durations;
 mod media;
 mod profile;
 mod samples;
+#[cfg(any(test, feature = "fuzzing"))]
+pub(in crate::conversion) use samples::fuzzing as fuzz_samples;
 mod segments;
 mod semantics;
 #[cfg(test)]

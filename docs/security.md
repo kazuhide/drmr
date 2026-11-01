@@ -74,6 +74,10 @@ recursive expansion and caching of increasingly large inspection reports.
 
 ## Input and diagnostic handling
 
+Configuration failures can identify known schema fields, array positions and
+expected formats without echoing configured values, map IDs or unknown field
+names. See [correcting a configuration error](configuration.md#correcting-a-configuration-error).
+
 For complete `analyze`, saved-plan creation, `convert`, and `verify`, supply an owner-only JSON file with `--keys-file` when keys are needed. `analyze --metadata-only` never needs or accepts a key file. Input decryption keys and output encryption keys have separate roles. The file must be a regular, singly linked file with the required owner-only permissions; symbolic links and insecure files are refused. See [key configuration](usage.md#separate-input-and-output-keys) and [Windows file protection](windows.md#protect-configuration-files).
 
 drmr has no public command-line option for entering a content-key value. Keep key values out of shell history and prepare the protected key file through your local secret-management process.

@@ -154,8 +154,9 @@ prove that a particular asset can be processed.
 
 Current source accepts qualified H.264, HEVC Main/Main10, VP9 and AAC in MP4/fMP4.
 VP9 uses clear or CENC samples; see the [codec conditions](docs/conversion-support.md).
-HEVC and VP9 are not included in the v1.0.3 archives. Transport stream conversion
-still requires the qualified H.264/AAC profiles.
+HEVC and VP9 conversion and verification are available from v1.1.0; the v1.0.3
+archives do not include them. Transport stream conversion still requires the
+qualified H.264/AAC profiles.
 
 The generic `convert` command accepts qualified local MP4, fragmented MP4 DASH/HLS, and MPEG transport stream HLS profiles, including encrypted input. Transport stream input can be clear, AES-128, or SAMPLE-AES with supplied keys and initialization vectors. See [conversion support](docs/conversion-support.md) for restrictions and tested routes.
 

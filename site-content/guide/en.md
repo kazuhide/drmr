@@ -1,7 +1,7 @@
 ---
 title: User guide
-updated: 2026-11-01
-version: 1.0.3
+updated: 2026-11-02
+version: 1.1.0
 ---
 
 # 1. Introduction
@@ -100,7 +100,7 @@ Common `plan`, `convert` and `verify` commands accept an output list for DASH wi
 
 MP4 and fMP4 HLS/DASH accept the implemented AVC (H.264), HEVC (H.265), VP9 and AAC profiles. Transport stream video still requires H.264. HEVC supports single-layer, progressive Main/Main10 with 4:2:0 chroma and matching 8-bit or 10-bit luma/chroma depths. It requires one stable set of video, sequence and picture decoding parameters (VPS/SPS/PPS). See [HEVC validation and limits](https://github.com/kazuhide/drmr/blob/main/docs/verification.md#hevc-in-mp4-and-fmp4) for the exact accepted syntax and refusal conditions.
 
-HEVC and VP9 support is included in current source, not the v1.0.3 release archives. Metadata-only identification of AV1, AC-3, E-AC-3, Opus or FLAC does not establish complete validation. Full operations refuse unimplemented codec profiles, even with `--decode`. Container and encryption tables do not qualify every codec those formats can carry.
+HEVC and VP9 conversion and verification for the qualified MP4/fMP4 profiles are available from v1.1.0. The v1.0.3 release archives do not include these codecs. Metadata-only identification of AV1, AC-3, E-AC-3, Opus or FLAC does not establish complete validation. Full operations refuse unimplemented codec profiles, even with `--decode`. Container and encryption tables do not qualify every codec those formats can carry.
 
 VP9 (`vp09`) supports clear/CENC MP4 and fMP4 HLS/DASH. Outer HLS AES-128 is separate; VP9/CBCS fails with `vp9-protection-scheme-not-supported`. See [VP9 validation and limits](https://github.com/kazuhide/drmr/blob/main/docs/verification.md#vp9-in-mp4-and-fmp4). Generic HLS can pass base checks while the Apple VOD profile rejects VP9 under section 1.1.
 
@@ -262,6 +262,8 @@ Use a schema-2 `keys.json` with `--outputs`, for one named output or several. In
 A KID (key identifier) selects a key; it is not the secret key. Keys and KIDs use 16 bytes written as 32 hexadecimal digits. An IV (initialization vector) sets the encryption starting state. Published metadata can contain KIDs and media IVs.
 
 Use an owner-only work directory. On macOS/Linux, protect a new file before entering secrets; for an existing private `keys.json`, use `chmod 600 keys.json`. Chapter 12 explains Windows ACLs. The CLI refuses unsafe files, symbolic links, multiple hard links, duplicate or unknown fields, unsupported schemas and oversized settings. Keep keys outside source/result directories and version control.
+
+Configuration errors can show known field positions and required formats without private values. See [correcting settings](https://github.com/kazuhide/drmr/blob/main/docs/configuration.md#correcting-a-configuration-error).
 
 ## Complete named-output key examples
 

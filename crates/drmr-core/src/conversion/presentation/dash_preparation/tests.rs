@@ -287,14 +287,23 @@ fn later_invalid_metadata_drains_started_work_and_leaves_cancellation_usable() {
     let input = input(&manifest, &keys, &hls);
     let (failed, observed) = mpsc::sync_channel(1);
     let observed = Mutex::new(observed);
+    let (started, entered) = mpsc::sync_channel(1);
+    let entered = Mutex::new(entered);
     let drained = AtomicBool::new(false);
     let result = collect(&scheduler, &tracks, &descriptions, |ordinal| {
         if ordinal == 0 {
+            started.send(()).unwrap();
             observed
                 .lock()
                 .unwrap()
                 .recv_timeout(Duration::from_secs(2))
                 .map_err(|_| ConversionError("second-dash-metadata-not-started"))?;
+        } else if ordinal == 1 {
+            entered
+                .lock()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(2))
+                .map_err(|_| ConversionError("first-dash-metadata-not-started"))?;
         }
         let prepared = prepare_track(
             ordinal,

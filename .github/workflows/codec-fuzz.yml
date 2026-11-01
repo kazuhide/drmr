@@ -1,0 +1,97 @@
+name: Finite codec fuzzing
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  schedule:
+    - cron: '41 4 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codec-fuzz-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  qualify:
+    name: Codec fuzz / finite Linux parser exploration
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      RUSTUP_TOOLCHAIN: nightly-2026-11-01
+      CARGO_BUILD_JOBS: 2
+      CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: 'true'
+      CARGO_PROFILE_RELEASE_OVERFLOW_CHECKS: 'true'
+      FUZZ_TARGET_DIR: ${{ github.workspace }}/target/fuzz
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Check out the exact caller source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install the helper runtime
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13.12'
+
+      - name: Install the pinned fuzz compiler
+        run: rustup toolchain install nightly-2026-11-01 --profile minimal --no-self-update
+
+      - name: Reuse isolated instrumented dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/registry/src
+            target/fuzz/x86_64-unknown-linux-gnu/release/build
+            target/fuzz/x86_64-unknown-linux-gnu/release/.fingerprint
+            target/fuzz/x86_64-unknown-linux-gnu/release/deps/*.rlib
+            target/fuzz/x86_64-unknown-linux-gnu/release/deps/*.rmeta
+            target/fuzz/x86_64-unknown-linux-gnu/release/deps/*.d
+          key: codec-fuzz-v1-linux-x64-nightly20261101-fuzz0132-address-${{ hashFiles('fuzz/Cargo.lock', 'fuzz/Cargo.toml', 'Cargo.toml', 'crates/**/Cargo.toml', 'vendor/**') }}-${{ hashFiles('fuzz/fuzz_targets/**', 'crates/**/src/**') }}
+          restore-keys: |
+            codec-fuzz-v1-linux-x64-nightly20261101-fuzz0132-address-${{ hashFiles('fuzz/Cargo.lock', 'fuzz/Cargo.toml', 'Cargo.toml', 'crates/**/Cargo.toml', 'vendor/**') }}-
+
+      - name: Install pinned development tools and fetch the locked graph
+        run: |
+          cargo install cargo-fuzz --version 0.13.2 --locked
+          cargo install cargo-audit --version 0.22.2 --locked
+          cargo fetch --manifest-path fuzz/Cargo.toml --locked
+
+      - name: Fetch the official RustSec advisory database
+        run: git clone --depth 1 https://github.com/RustSec/advisory-db.git "$RUNNER_TEMP/advisory-db"
+
+      - name: Build both address-sanitized targets once
+        env:
+          CARGO_NET_OFFLINE: 'true'
+        run: |
+          set -euo pipefail
+          python3 fuzz/seed_corpus.py --check
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          cargo metadata --manifest-path fuzz/Cargo.toml --locked --offline --format-version 1 > /dev/null
+          cargo fuzz build --fuzz-dir fuzz --target-dir "$FUZZ_TARGET_DIR" --sanitizer address --debug-assertions
+          cargo metadata --manifest-path fuzz/Cargo.toml --locked --offline --format-version 1 > /dev/null
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+      - name: Require complete finite exploration and source-bound evidence
+        env:
+          CARGO_NET_OFFLINE: 'true'
+        run: |
+          python3 tools/fuzz_qualification.py --source "$GITHUB_WORKSPACE" \
+            --binary-dir "$FUZZ_TARGET_DIR/x86_64-unknown-linux-gnu/release" \
+            --database "$RUNNER_TEMP/advisory-db" --cargo-audit "$HOME/.cargo/bin/cargo-audit" \
+            --report "$RUNNER_TEMP/cli-codec-fuzz.json"
+
+      - name: Retain only the allowlisted public fuzz report
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: codec-fuzz-report
+          path: ${{ runner.temp }}/cli-codec-fuzz.json
+          if-no-files-found: error
+          retention-days: 14

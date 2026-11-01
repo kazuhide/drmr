@@ -132,9 +132,14 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  fuzz:
+    name: Release codec fuzz evidence
+    needs: native-inputs
+    uses: ./.github/workflows/codec-fuzz.yml
+
   assemble:
     name: Assemble fully qualified release assets
-    needs: roundtrip
+    needs: [roundtrip, fuzz]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -169,10 +174,17 @@ jobs:
           path: ${{ runner.temp }}/roundtrip-reports
           merge-multiple: true
 
+      - name: Fetch the matching finite codec fuzz report
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: codec-fuzz-report
+          path: ${{ runner.temp }}/fuzz
+
       - name: Recheck current CI and require complete archive-bound round trips
         run: |
           python3 tools/prepare_release.py --tag "$RELEASE_TAG" --repository "$GITHUB_REPOSITORY" \
-            --roundtrip-reports "$RUNNER_TEMP/roundtrip-reports" --output "$RUNNER_TEMP/release-assets"
+            --roundtrip-reports "$RUNNER_TEMP/roundtrip-reports" \
+            --fuzz-report "$RUNNER_TEMP/fuzz/cli-codec-fuzz.json" --output "$RUNNER_TEMP/release-assets"
 
       - name: Retain the complete candidate for immutable publication
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6

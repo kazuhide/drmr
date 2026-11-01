@@ -101,7 +101,7 @@ bit depth, chroma arrangement or combination has been qualified.
 
 ## HEVC in MP4 and fMP4
 
-Current source supports single-layer, progressive HEVC (H.265) Main and Main10
+Version 1.1.0 adds single-layer, progressive HEVC (H.265) Main and Main10
 with 4:2:0 chroma and matching 8-bit or 10-bit luma/chroma depths. This applies
 to progressive MP4 and fMP4 in HLS or DASH, with clear, `cenc` or `cbcs` samples.
 It is not included in the v1.0.3 release archives. HEVC transport streams and
@@ -179,7 +179,7 @@ This evidence does not establish DRM license acquisition or device playback.
 
 ## VP9 in MP4 and fMP4
 
-Current source supports VP9 stored as `vp09` in MP4 and fragmented MP4 in HLS or
+Version 1.1.0 adds VP9 stored as `vp09` in MP4 and fragmented MP4 in HLS or
 DASH, with clear or `cenc` samples. It is not included in the v1.0.3 release
 archives. VP9 in transport streams is outside this conversion profile.
 

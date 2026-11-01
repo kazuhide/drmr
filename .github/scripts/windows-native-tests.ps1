@@ -83,6 +83,9 @@ if ($LASTEXITCODE -ne 0) { throw 'The selected Cargo could not run as a regular 
 if ($LASTEXITCODE -ne 0) { throw 'The selected Rust compiler could not run as a regular user' }
 New-Item -ItemType Directory -Path $env:TEMP | Out-Null
 New-Item -ItemType Directory -Path $env:CARGO_HOME | Out-Null
+# Fail fast on tool contracts before starting the longer native media groups.
+& python -W error::ResourceWarning -m unittest discover -s tools/tests -v
+if ($LASTEXITCODE -ne 0) { throw 'Tool contract tests failed before native media execution' }
 $executables = Get-Content (Join-Path $PSScriptRoot 'executables.json') | ConvertFrom-Json
 # Inventory the actual compiled tests, execute critical regressions first and
 # exclude them from the remaining groups. The planner validates every filter.
@@ -111,8 +114,6 @@ foreach ($name in @('bbb-media-report.json', 'conversion-report.json')) {
     if ($reports.Count -ne 1) { throw 'A native media report is missing or ambiguous' }
     [IO.File]::WriteAllText((Join-Path $PSScriptRoot $name), [IO.File]::ReadAllText($reports[0]), [Text.UTF8Encoding]::new($false))
 }
-& python -W error::ResourceWarning -m unittest discover -s tools/tests -v
-if ($LASTEXITCODE -ne 0) { $failed = $true }
 if ($failed) { exit 1 }
 exit 0
 '@ | Set-Content $script

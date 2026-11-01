@@ -1,0 +1,221 @@
+{
+  "schema_version": 1,
+  "seeds": [
+    {
+      "accepted": false,
+      "bytes": 1,
+      "path": "hevc/empty-configuration",
+      "samples": 0,
+      "sha256": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d"
+    },
+    {
+      "accepted": true,
+      "bytes": 2482,
+      "path": "hevc/hevc-main-config",
+      "samples": 0,
+      "sha256": "d15195fe9a37b088c217e70bd68bc107e288534ff7c305c2beab2147402fd02d"
+    },
+    {
+      "accepted": true,
+      "bytes": 21523,
+      "path": "hevc/hevc-main-sequence",
+      "samples": 16,
+      "sha256": "82f1073a544479da542bf1e09201f37189aec78b6d94d99ad29f8cf8ff5ff7f3"
+    },
+    {
+      "accepted": true,
+      "bytes": 2431,
+      "path": "hevc/hevc-main10-config",
+      "samples": 0,
+      "sha256": "95dd3e4ca434ee7a5191d6f5d593f9a142228a04c68741a7887de225e2e5bfed"
+    },
+    {
+      "accepted": true,
+      "bytes": 25113,
+      "path": "hevc/hevc-main10-sequence",
+      "samples": 16,
+      "sha256": "b9fae91e9ec49175a05b4ad39ba08248c2be0c1edc822fe9f26933d41b15ec1a"
+    },
+    {
+      "accepted": false,
+      "bytes": 3,
+      "path": "hevc/truncated-envelope",
+      "samples": 0,
+      "sha256": "16936d11fec03b650b80969a5865726bfb4cc002f91f436fc7ea45269a57f0b3"
+    },
+    {
+      "accepted": false,
+      "bytes": 1,
+      "path": "vp9/empty-configuration",
+      "samples": 0,
+      "sha256": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d"
+    },
+    {
+      "accepted": false,
+      "bytes": 3,
+      "path": "vp9/truncated-envelope",
+      "samples": 0,
+      "sha256": "16936d11fec03b650b80969a5865726bfb4cc002f91f436fc7ea45269a57f0b3"
+    },
+    {
+      "accepted": true,
+      "bytes": 13,
+      "path": "vp9/vp9-p0-8-config",
+      "samples": 0,
+      "sha256": "339f7ff3eea8a6c82524cc23a7afa59df531c64ade510c855b174eff22b55f24"
+    },
+    {
+      "accepted": true,
+      "bytes": 24748,
+      "path": "vp9/vp9-p0-8-sequence",
+      "samples": 16,
+      "sha256": "305387da143b601f5fa8cad970f45b7156c78f30533e9f713224c9e1ae506eab"
+    },
+    {
+      "accepted": true,
+      "bytes": 19147,
+      "path": "vp9/vp9-p0-8-superframe",
+      "samples": 1,
+      "sha256": "64f9d6c5adeff10962557d4aed88dd499b96803e1bed7a7d666beedd81971526"
+    },
+    {
+      "accepted": true,
+      "bytes": 13,
+      "path": "vp9/vp9-p1-8-config",
+      "samples": 0,
+      "sha256": "66e39fc1a260620be71bd5a38d40b2b9b696aaa2dcc32626d92eec3ba752a0c1"
+    },
+    {
+      "accepted": true,
+      "bytes": 28031,
+      "path": "vp9/vp9-p1-8-sequence",
+      "samples": 16,
+      "sha256": "132ad00e45ae1c4f8b36ea9d2f7aa38dead89ac0fca98903f8f36d64edbe852a"
+    },
+    {
+      "accepted": true,
+      "bytes": 21521,
+      "path": "vp9/vp9-p1-8-superframe",
+      "samples": 1,
+      "sha256": "fe1a72d39cc775f25478a348b140f8c3c27aff7783b893e904c7e9bfbc7aa61b"
+    },
+    {
+      "accepted": true,
+      "bytes": 13,
+      "path": "vp9/vp9-p2-10-config",
+      "samples": 0,
+      "sha256": "5b2f648b6996df9b2a70c343a69173076d9dce1de75d7a63fef28b84a00a8c56"
+    },
+    {
+      "accepted": true,
+      "bytes": 26795,
+      "path": "vp9/vp9-p2-10-sequence",
+      "samples": 16,
+      "sha256": "d2a7fdd872fbab95952eef06c63eeb9395ac862858de714f1e80ec873e83285b"
+    },
+    {
+      "accepted": true,
+      "bytes": 19933,
+      "path": "vp9/vp9-p2-10-superframe",
+      "samples": 1,
+      "sha256": "135646683d495dd29db4878b17d681c8f37c32ef993e9193ffebca965606a295"
+    },
+    {
+      "accepted": true,
+      "bytes": 13,
+      "path": "vp9/vp9-p2-12-config",
+      "samples": 0,
+      "sha256": "0e97b1b0d1c86d5280bfbaf5223334eb3a2c6134f9fbbad3d9f51e5c52f9b8e6"
+    },
+    {
+      "accepted": true,
+      "bytes": 25836,
+      "path": "vp9/vp9-p2-12-sequence",
+      "samples": 16,
+      "sha256": "e3f982f39e21bf698dfa9b43f05766df2fecf0ca12a035d4823b3db7af503fa2"
+    },
+    {
+      "accepted": true,
+      "bytes": 19419,
+      "path": "vp9/vp9-p2-12-superframe",
+      "samples": 1,
+      "sha256": "78c78e17178c568f7794fe6b7ca6daf645f824742637f0f8e2912643265d8db3"
+    },
+    {
+      "accepted": true,
+      "bytes": 13,
+      "path": "vp9/vp9-p3-10-config",
+      "samples": 0,
+      "sha256": "16daeece4a36b6b91b75ea7b375d8a9a5c3c016562cf9603513a9715419871b6"
+    },
+    {
+      "accepted": true,
+      "bytes": 28452,
+      "path": "vp9/vp9-p3-10-sequence",
+      "samples": 16,
+      "sha256": "829d64e04f7afcc1d43139bc48599f319f654c46109af6309fc01061c5f74261"
+    },
+    {
+      "accepted": true,
+      "bytes": 22570,
+      "path": "vp9/vp9-p3-10-superframe",
+      "samples": 1,
+      "sha256": "e79febbace6774fc108367b08656fc30fb9926366e0a9927b376ee5e57decb7f"
+    },
+    {
+      "accepted": true,
+      "bytes": 13,
+      "path": "vp9/vp9-p3-12-config",
+      "samples": 0,
+      "sha256": "2660112b8aa3fef3e19ed3a17f290ec3ef79f2d40628d71d17cb921525a6582b"
+    },
+    {
+      "accepted": true,
+      "bytes": 28958,
+      "path": "vp9/vp9-p3-12-sequence",
+      "samples": 16,
+      "sha256": "2cea5967072dde743b0365004c93ef0736352a2d24f43f938819b1e3b7dfe1e0"
+    },
+    {
+      "accepted": true,
+      "bytes": 21992,
+      "path": "vp9/vp9-p3-12-superframe",
+      "samples": 1,
+      "sha256": "e3c2c48f12f3e460322c295e5e5c3cffc676104037ab0180285514a0d8df8f8a"
+    }
+  ],
+  "source_fixtures": [
+    {
+      "path": "crates/drmr/tests/fixtures/bbb/hevc-main.mp4",
+      "sha256": "bb6264c4a9a6aaa74b5afc00e157eea8129a3d38f4d2263b0226c091ccbfbf3a"
+    },
+    {
+      "path": "crates/drmr/tests/fixtures/bbb/hevc-main10.mp4",
+      "sha256": "5cd4bf734245767211030e735f70f0bbcd03c5e070b138d1a99fe76f2234d3fb"
+    },
+    {
+      "path": "crates/drmr/tests/fixtures/bbb/vp9-p0-8.mp4",
+      "sha256": "d9bb653ddf7b7011b4739973f5d6bc17009057d4dac46d68c84e0b006bdc0314"
+    },
+    {
+      "path": "crates/drmr/tests/fixtures/bbb/vp9-p1-8.mp4",
+      "sha256": "cb49f95665a8e345a27e29d04c6ce0c16e5d61f75968981768c0720e1e7b3025"
+    },
+    {
+      "path": "crates/drmr/tests/fixtures/bbb/vp9-p2-10.mp4",
+      "sha256": "7e58323555be2e6e04eaf630da55ef7edc7b81a06fd5d13e96514b27d1cba44d"
+    },
+    {
+      "path": "crates/drmr/tests/fixtures/bbb/vp9-p2-12.mp4",
+      "sha256": "f021996104adc0d35370a8ad469a873d39b77bef4237aaad1038dac516128e21"
+    },
+    {
+      "path": "crates/drmr/tests/fixtures/bbb/vp9-p3-10.mp4",
+      "sha256": "abfd16dbd14f30acfce852e0e8f59776e9c47287725ce4b2fdd5027ed65544e4"
+    },
+    {
+      "path": "crates/drmr/tests/fixtures/bbb/vp9-p3-12.mp4",
+      "sha256": "96c93b12834b2997c17d39f5da73a89154d20c932bfaff322c2276b292457d02"
+    }
+  ]
+}

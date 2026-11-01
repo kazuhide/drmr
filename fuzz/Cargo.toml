@@ -1,0 +1,36 @@
+[package]
+name = "drmr-codec-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+license = "MIT"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+members = ["."]
+resolver = "3"
+
+[dependencies]
+libfuzzer-sys = "=0.4.13"
+drmr-core = { path = "../crates/drmr-core", features = ["fuzzing"] }
+
+# Keep the same core security backports in this independent development graph.
+[patch.crates-io]
+process-wrap = { path = "../vendor/process-wrap" }
+private-fs = { path = "../vendor/private-fs" }
+
+[[bin]]
+name = "hevc"
+path = "fuzz_targets/hevc.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "vp9"
+path = "fuzz_targets/vp9.rs"
+test = false
+doc = false
+bench = false
