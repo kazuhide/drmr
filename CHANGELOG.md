@@ -5,6 +5,8 @@ for installation, stable interfaces and versioning.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-02
+
 ### Added
 
 - Convert and independently verify qualified VP9 MP4/fMP4 clear and CENC media,
@@ -16,6 +18,23 @@ for installation, stable interfaces and versioning.
 - Add attributed Main/Main10 regression seeds, independent packet/decode oracles
   and tamper/refusal coverage. Document the accepted codec profiles separately
   from container, encryption and DRM-device claims.
+- Qualify extracted native CLI archives with eight codec smoke round trips and
+  38 refusal controls in ordinary CI, and 534 codec round trips plus those
+  controls for a release. Keep the existing H.264/AAC release conditions.
+
+### Changed
+
+- Remove durability synchronization for disposable private verification
+  snapshots while retaining complete source comparisons and bounded I/O.
+- Run important native regressions before long test groups and split Windows
+  transport-stream tests within the existing worker and memory limits. Optimize
+  test execution while retaining debug assertions and overflow checks.
+
+### Fixed
+
+- Infer short HLS segment cadence from interior segments and retain exact DASH
+  manifest timescales for fractional packaging requests without changing media
+  clocks, including the qualified Main10 profiles.
 
 ## [1.0.3] - 2026-10-31
 

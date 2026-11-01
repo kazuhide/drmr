@@ -1,7 +1,7 @@
 ---
 title: ユーザーガイド
-updated: 2026-11-01
-version: 1.0.3
+updated: 2026-11-02
+version: 1.1.0
 ---
 
 # 1. はじめに
@@ -108,7 +108,7 @@ Widevine、PlayReady、FairPlay は、鍵の取得や利用条件、プレーヤ
 
 MP4 と fMP4 を使う HLS/DASH では、対応条件を満たす AVC（H.264）・HEVC（H.265）・VP9・AAC の入力を解析・変換・検証できます。MPEG-TS の映像は H.264 が対象です。HEVC は Main/Main10 のプログレッシブ映像に対応します。色差形式は 4:2:0、輝度と色差のビット深度は Main がともに 8 bit、Main10 がともに 10 bit です。復号に必要な設定情報（VPS・SPS・PPS）が各1組あり、途中で設定が変わらない入力を扱います。受け入れる構文と拒否する条件は [HEVC の検証と制限（英語）](https://github.com/kazuhide/drmr/blob/main/docs/verification.md#hevc-in-mp4-and-fmp4)に記載しています。
 
-HEVC と VP9 の対応は現在のソースに含まれ、v1.0.3 の配布アーカイブには含まれません。AV1・AC-3・E-AC-3・Opus・FLAC の設定をメタデータとして識別できても、全体の検証に対応したことにはなりません。未実装のコーデック条件は `native-codec-profile-not-supported` で拒否し、`--decode` を指定しても迂回できません。コンテナ・暗号方式の対応表はその形式に格納できる全コーデックの動作確認を意味しません。
+v1.1.0 以降では、MP4・fMP4 の HEVC と VP9 を変換・検証できます。v1.0.3 の配布アーカイブには含まれません。AV1・AC-3・E-AC-3・Opus・FLAC の設定をメタデータとして識別できても、全体の検証に対応したことにはなりません。未実装のコーデック条件は `native-codec-profile-not-supported` で拒否し、`--decode` を指定しても迂回できません。コンテナ・暗号方式の対応表はその形式に格納できる全コーデックの動作確認を意味しません。
 
 VP9（`vp09`）は MP4・fMP4 HLS/DASH の clear・cenc に対応します。HLS の AES-128 は外側の暗号化として扱います。VP9 の cbcs は `vp9-protection-scheme-not-supported` で拒否します。対応条件は [VP9 の検証と制限（英語）](https://github.com/kazuhide/drmr/blob/main/docs/verification.md#vp9-in-mp4-and-fmp4)に記載しています。一般 HLS の検査と Apple 向けの検査は別で、Apple VOD 基準では VP9 は対象外です。
 

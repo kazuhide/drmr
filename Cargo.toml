@@ -4,7 +4,7 @@ exclude = ["vendor/process-wrap", "vendor/glib", "vendor/private-fs"]
 members = ["crates/drmr-core", "crates/drmr", "crates/drmr-server", "crates/drmr-test-support", "crates/drmr-desktop", "crates/drmr-manifest"]
 
 [workspace.package]
-version = "1.0.3"
+version = "1.1.0"
 edition = "2024"
 rust-version = "1.95"
 publish = false
