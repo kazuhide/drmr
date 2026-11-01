@@ -656,7 +656,7 @@ measurements exclude downloading. Both optimized builds used Rust 1.99.0 on an
 Apple M5 with ten logical CPUs and 32 GiB of memory. The source bytes remained
 unchanged. Filesystem caches were uncontrolled, and other host work continued;
 the project's archive preflight had finished before the full-input analysis
-comparison. The [numeric report](benchmarks/temporary-snapshots-2026-11-01.json)
+comparison. The [numeric report](https://github.com/kazuhide/drmr/blob/main/docs/benchmarks/temporary-snapshots-2026-11-01.json)
 records source and binary hashes, individual observations, host-load summaries,
 and measurement limits.
 

@@ -27,6 +27,23 @@ SPEC.loader.exec_module(module)
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_expected_refusal_is_exactly_exit_one_and_keeps_secret_checks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runner = module.Runner(root)
+            raw = runner.run([sys.executable, "-c", "import sys; print('refused'); sys.exit(1)"],
+                             "expected-refusal", expected_exit=1)
+            self.assertEqual(raw.strip(), b"refused")
+            self.assertEqual(runner.stages[-1]["exit_code"], 1)
+            for status in (0, 2):
+                with self.subTest(status=status), self.assertRaisesRegex(module.Refusal, "^command-failed$"):
+                    runner.run([sys.executable, "-c", "import sys; sys.exit(" + str(status) + ")"],
+                               "expected-refusal", expected_exit=1)
+            runner.secrets = (b"private-marker",)
+            with self.assertRaisesRegex(module.Refusal, "^secret-displayed$"):
+                runner.run([sys.executable, "-c", "import sys; print('private-marker'); sys.exit(1)"],
+                           "expected-refusal", expected_exit=1)
+
     def test_current_plan_requires_saved_decoding_and_resolved_stitch_boundaries(self):
         current = {"schema_version": 5, "required_depth": "decoded", "processing": {
             "requested": "auto", "resolved": "stitch", "boundaries": "resegment", "segment_duration_ms": 2000}}

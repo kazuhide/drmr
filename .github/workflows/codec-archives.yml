@@ -1,0 +1,122 @@
+name: Codec archive validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact checked source commit of all three CI archives
+        required: true
+        type: string
+      ci_run_id:
+        description: CI run containing the matching Linux and macOS archives
+        required: true
+        type: string
+      windows_run_id:
+        description: Windows native contracts run containing the matching archive
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: codec-archives-${{ inputs.source_sha }}
+  cancel-in-progress: false
+
+jobs:
+  codecs:
+    name: Full codec matrix / ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            artifact: drmr-Linux-X64
+          - os: macos-15
+            target: aarch64-apple-darwin
+            artifact: drmr-macOS-ARM64
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            artifact: drmr-windows-x86_64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env:
+      CODEC_SOURCE: ${{ inputs.source_sha }}
+      CODEC_TARGET: ${{ matrix.target }}
+    steps:
+      - name: Check out the exact archive source without building it
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+
+      - name: Install the qualification Python runtime
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13.12'
+
+      - name: Require an exact source commit and resolve the archive name
+        shell: python
+        run: |
+          import os, pathlib, re, subprocess, tomllib
+          source = os.environ['CODEC_SOURCE']
+          assert re.fullmatch(r'[0-9a-f]{40}', source), 'An exact source commit is required'
+          assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == source
+          version = tomllib.loads(pathlib.Path('Cargo.toml').read_text())['workspace']['package']['version']
+          assert re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9.-]+)?', version)
+          suffix = '.zip' if os.name == 'nt' else '.tar.gz'
+          directory = pathlib.Path(os.environ['RUNNER_TEMP']) / 'codec-archive-input'
+          archive = directory / ('drmr-' + version + '-' + os.environ['CODEC_TARGET'] + suffix)
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as output:
+              output.write('CLI_VERSION=' + version + '\nCLI_ARCHIVE=' + str(archive) + '\nCODEC_INPUT=' + str(directory) + '\n')
+
+      - name: Fetch the existing native archive without recompilation
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ env.CODEC_INPUT }}
+          run-id: ${{ runner.os == 'Windows' && inputs.windows_run_id || inputs.ci_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Fetch locked license metadata inputs without building
+        shell: bash
+        run: |
+          set -euo pipefail
+          channel="$(python .github/scripts/minimum-rust.py)"
+          rustup toolchain install "$channel" --profile minimal --no-self-update
+          printf 'RUSTUP_TOOLCHAIN=%s\n' "$channel" >> "$GITHUB_ENV"
+          rustup run "$channel" cargo fetch --locked
+
+      - name: Install pinned packaging tools
+        if: runner.os != 'Windows'
+        uses: ./.github/actions/media-tools
+
+      - name: Install pinned Windows packaging tools
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/windows-media-tools
+
+      - name: Check every codec round trip from the extracted native CLI
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          python3 tools/codec_qualification.py --archive "$CLI_ARCHIVE" --target "$CODEC_TARGET" \
+            --expected-version "$CLI_VERSION" --source "$GITHUB_WORKSPACE" --scope full --jobs 4 \
+            --report "$RUNNER_TEMP/codec-qualification-$CODEC_TARGET.json"
+
+      - name: Check every codec round trip as an ordinary Windows user
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./.github/scripts/windows-cli-archive.ps1 -Archive $env:CLI_ARCHIVE -Version $env:CLI_VERSION `
+            -Report (Join-Path $env:RUNNER_TEMP "codec-qualification-$env:CODEC_TARGET.json") -CodecOnly
+
+      - name: Retain the complete archive-bound codec report
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: codec-full-${{ matrix.target }}
+          path: ${{ runner.temp }}/codec-qualification-${{ matrix.target }}.json
+          if-no-files-found: error
+          retention-days: 14

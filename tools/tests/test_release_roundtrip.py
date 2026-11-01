@@ -39,6 +39,12 @@ class ReleaseMatrix(unittest.TestCase):
         self.assertFalse(value["license_playback_verified"])
         self.assertLess(len(json.dumps(value, indent=2)), ROUNDTRIP.PREPARE.MAX_ROUNDTRIP_REPORT)
 
+    def test_h264_aac_matrix_alone_cannot_qualify_a_codec_aware_release(self):
+        value = roundtrip_reports.complete(CONTRACT)
+        value.pop("codecs", None)
+        with self.assertRaises(CONTRACT.Failure):
+            self.validate(value)
+
     def test_tuple_writer_and_list_case_profiles_keep_the_same_actual_providers(self):
         for profile in CONTRACT.OUTPUTS:
             expected = roundtrip_reports.providers(profile)
@@ -269,6 +275,55 @@ class ReleaseMatrix(unittest.TestCase):
         self.assertEqual(result["status"], "not-checked")
         self.assertEqual(result["failure_code"], "source-fixture-unavailable")
         executor.convert.assert_not_called()
+
+    def test_cancelled_first_cohort_cannot_start_codec_qualification(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive = root / "candidate.archive"
+            archive.write_bytes(b"archive")
+            archive_hash = CONTRACT.sha(b"archive")
+            binary_hash = CONTRACT.sha(b"binary")
+            source = Mock(head="a" * 40, tree="b" * 40)
+            report = {"archive_sha256": archive_hash, "binaries": {"drmr": {"sha256": binary_hash}}}
+            executor = Mock(cancel=threading.Event())
+            codecs = Mock(ERRORS=(RuntimeError,))
+            codecs.qualify.return_value = {"success": False}
+            workspace_factory = ROUNDTRIP.SUPPORT.Workspace
+
+            def extract(_archive, _target, _digest, output):
+                output.write_bytes(b"binary")
+                return output
+
+            def work(case, _executor, _profiles, _root):
+                executor.cancel.wait(1)
+                return {**case, "status": "not-checked"}
+
+            error = None
+            with patch.object(ROUNDTRIP.SUPPORT, "require_native"), \
+                    patch.object(ROUNDTRIP.SUPPORT.VERIFY, "command", return_value=b""), \
+                    patch.object(ROUNDTRIP.SUPPORT.VERIFY, "Source", return_value=source), \
+                    patch.object(ROUNDTRIP, "packet", return_value=("1.0.3", archive, report)), \
+                    patch.object(ROUNDTRIP.SUPPORT, "require_version"), \
+                    patch.object(ROUNDTRIP.SUPPORT, "Workspace", side_effect=lambda: workspace_factory(parent=root)), \
+                    patch.object(ROUNDTRIP.SUPPORT, "extract_cli", side_effect=extract), \
+                    patch.object(ROUNDTRIP.SUPPORT, "Runner", return_value=Mock(run=Mock(return_value=b"drmr 1.0.3\n"))), \
+                    patch.object(ROUNDTRIP.FIXTURES, "source_seeds", return_value={}), \
+                    patch.object(ROUNDTRIP, "Executor", return_value=executor), \
+                    patch.object(ROUNDTRIP, "fixture_profiles", return_value=({}, [])), \
+                    patch.object(CONTRACT, "cases", return_value=CONTRACT.cases()[:1]), \
+                    patch.object(ROUNDTRIP, "execute_case", side_effect=work), \
+                    patch.object(ROUNDTRIP.concurrent.futures, "as_completed", side_effect=KeyboardInterrupt), \
+                    patch.object(CONTRACT, "module", return_value=codecs) as load_codec:
+                try:
+                    ROUNDTRIP.qualify(root, "aarch64-apple-darwin", root, 1)
+                except CONTRACT.Failure as caught:
+                    error = caught
+                self.assertTrue(executor.cancel.is_set())
+                load_codec.assert_not_called()
+                codecs.qualify.assert_not_called()
+            self.assertIsInstance(error, CONTRACT.Failure)
+            self.assertEqual(str(error), "roundtrip-cancelled")
+            self.assertEqual(set(root.iterdir()), {archive})
 
     def test_existing_report_is_preserved_and_private_argument_is_not_logged(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -6,6 +6,40 @@ use crate::{
 
 const INVALID: ConversionError = ConversionError("hls-video-cadence-not-supported");
 
+/// Boundary fragments can include leading or trailing presentation offsets.
+/// Keep only their values and the maximum interior cadence, in constant space.
+#[derive(Default)]
+pub(in crate::conversion) struct FragmentCadence {
+    count: u8,
+    first: Option<u32>,
+    last: Option<u32>,
+    interior: Option<u32>,
+}
+
+impl FragmentCadence {
+    pub fn push(&mut self, value: Option<u32>) {
+        if self.count == 0 {
+            self.first = value;
+        } else if self.count >= 2
+            && let Some(previous) = self.last
+        {
+            self.interior = Some(self.interior.map_or(previous, |old| old.max(previous)));
+        }
+        self.last = value;
+        self.count = self.count.saturating_add(1).min(3);
+    }
+
+    pub fn request_ms(&self) -> Option<u32> {
+        if self.count >= 3 {
+            self.interior
+        } else {
+            // A short asset has no established interior grid. The smaller
+            // observed interval avoids asking just after its access point.
+            self.first.into_iter().chain(self.last).min()
+        }
+    }
+}
+
 pub(in crate::conversion) fn milliseconds(
     ticks: u64,
     scale: u64,
@@ -54,5 +88,28 @@ mod tests {
         }
         assert!(milliseconds(1, 0).is_err());
         assert!(milliseconds(0, 90_000).is_err());
+    }
+
+    #[test]
+    fn boundary_fragments_do_not_replace_regular_or_nonuniform_interior_cadence() {
+        for (values, expected) in [
+            (vec![1916, 2000, 2000, 2000, 2083], 2000),
+            (vec![7000, 2000, 4000, 3000, 9000], 4000),
+            (vec![1916, 2083], 1916),
+            (vec![2083, 1916], 1916),
+            (vec![2083], 2083),
+        ] {
+            let mut cadence = FragmentCadence::default();
+            for value in values {
+                cadence.push(Some(value));
+            }
+            assert_eq!(cadence.request_ms(), Some(expected));
+        }
+        assert_eq!(FragmentCadence::default().request_ms(), None);
+        let mut cadence = FragmentCadence::default();
+        for value in [Some(5000), None, Some(6000)] {
+            cadence.push(value);
+        }
+        assert_eq!(cadence.request_ms(), None);
     }
 }

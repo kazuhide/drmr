@@ -53,6 +53,7 @@ MEDIA_LIMITS = (
     "One native packaged CLI, one ten-second video-only Clear DASH to CBCS DASH saved-plan route "
     "and one generated ten-second 44.1 kHz stereo AAC Clear HLS/TS to CBCS DASH saved-plan route. "
     "One local Clear DASH metadata-only analysis with the original preserved. "
+    "Eight native-only HEVC/VP9 saved-plan roundtrips and 38 refusal controls with unavailable decoders. "
     "Full original video comparison, complete generated audio frame/clock evidence and CLI media comparisons, "
     "and native manifest linting; no independent external audio PCM comparison, DRM license/device playback, "
     "GUI, installer, signature, or build-origin certification.")
@@ -62,7 +63,8 @@ CLI_FAILURE_CODES = frozenset((
     "media-tool-failed", "media-tool-unavailable-or-timeout", "temporary-workspace-unavailable",
     "temporary-file-unavailable", "key-file-invalid", "native-manifest-lint-failed", "resource-budget",
     "execution-plan-invalid", "execution-plan-source-changed", "invalid-input-media",
-    "round-trip-verification-failed", "source-normalization-verification-failed"))
+    "round-trip-verification-failed", "source-normalization-verification-failed",
+    "dash-nominal-timescale-not-representable", "hls-output-target-duration-mismatch"))
 
 
 class Refusal(RuntimeError):
@@ -339,7 +341,8 @@ class Runner:
         temporary.mkdir(mode=0o700)
         self.environment.update(TMPDIR=str(temporary), TMP=str(temporary), TEMP=str(temporary))
 
-    def run(self, arguments, stage, timeout=300):
+    def run(self, arguments, stage, timeout=300, expected_exit=0):
+        require(type(expected_exit) is int and expected_exit in (0, 1, 2), "command-status-invalid")
         started = time.monotonic()
         deadline = started + timeout
         with tempfile.TemporaryFile(dir=self.workspace) as stdout, tempfile.TemporaryFile(dir=self.workspace) as stderr:
@@ -367,7 +370,7 @@ class Runner:
                 diagnostic = stderr.read(MAX_OUTPUT + 1)
                 require(not any(value and (value.lower() in raw.lower() or value.lower() in diagnostic.lower())
                                 for value in self.secrets), "secret-displayed")
-                if status != 0:
+                if status != expected_exit:
                     evidence = {"exit_code": status, "stdout_sha256": hashlib.sha256(raw).hexdigest(),
                                 "stderr_sha256": hashlib.sha256(diagnostic).hexdigest()}
                     try:
@@ -388,7 +391,7 @@ class Runner:
                     error.stage = stage
                 raise
         self.stages.append({"stage": stage, "elapsed_milliseconds": round((time.monotonic() - started) * 1000),
-                            "exit_code": 0})
+                            "exit_code": status})
         return raw
 
     def json(self, arguments, stage, timeout=300):
@@ -804,6 +807,16 @@ def audio_media(cli, runner, source):
             "output_graph": graph_identity(output)}
 
 
+def codec_media(cli, source, binding, root):
+    specification = importlib.util.spec_from_file_location("codec_qualification", ROOT / "tools/codec_qualification.py")
+    codecs = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(codecs)
+    try:
+        return codecs.qualify(cli, source, binding, root)
+    except codecs.ERRORS + (codecs.SUPPORT.VERIFY.Failure,):
+        raise Refusal("codec-qualification-failed") from None
+
+
 def qualify(archive_path, target, version, source_path):
     require_native(target)
     source = VERIFY.Source(source_path)
@@ -827,16 +840,19 @@ def qualify(archive_path, target, version, source_path):
         proof = media(cli, runner, source)
         audio = audio_media(cli, runner, source)
         metadata = metadata_analysis(cli, runner, workspace.path / "dash/manifest.mpd")
+        codec_proof = codec_media(cli, source, {"source_head": source.head, "source_tree": source.tree,
+                        "target": target, "version": version, "archive_sha256": archive_proof["archive_sha256"],
+                        "binary_sha256": archive_proof["binaries"]["drmr"]["sha256"]}, workspace.path / "codecs")
         require(VERIFY.file_digest(snapshot) == archive_proof["archive_sha256"]
                 and VERIFY.file_digest(cli) == archive_proof["binaries"]["drmr"]["sha256"], "qualified-artifact-changed")
-        return {"schema_version": 1, "success": True, "kind": "native-cli-archive-media",
+        return {"schema_version": 2, "success": codec_proof["success"], "kind": "native-cli-archive-media",
                 "source_head": source.head, "source_tree": source.tree, "target": target,
                 "version": version, "binary_reported_version": version,
                 "archive_sha256": archive_proof["archive_sha256"],
                 "binary_sha256": archive_proof["binaries"]["drmr"]["sha256"],
                 "archive_files": archive_proof["files"], "dependency_packages": archive_proof["packages"],
                 "native_ordinary_user": True, "doctor": tools, "media": proof, "aac_44100": audio,
-                "metadata_analysis": metadata,
+                "metadata_analysis": metadata, "codecs": codec_proof,
                 "stages": runner.stages,
                 "owned_workspace_cleanup": "confirmed",
                 "limits": MEDIA_LIMITS}
