@@ -32,7 +32,7 @@ FAILURE_CODES = frozenset((
     "arguments-invalid", "fuzz-report-invalid", "fuzz-report-schema-invalid", "fuzz-seed-manifest-invalid",
     "fuzz-vendor-identity-invalid", "fuzz-report-missing-or-invalid", "fuzz-report-binding-invalid",
     "fuzz-source-identity-invalid", "fuzz-execution-settings-invalid", "fuzz-audit-invalid", "fuzz-targets-incomplete",
-    "fuzz-target-evidence-invalid", "fuzz-cancelled", "fuzz-source-changed", "fuzz-statistics-invalid", "fuzz-binary-changed",
+    "fuzz-target-evidence-invalid", "fuzz-cancelled", "fuzz-source-changed", "fuzz-statistics-invalid", "fuzz-binary-changed", "fuzz-binary-invalid",
     "fuzz-toolchain-mismatch", "fuzz-auditor-mismatch", "fuzz-metadata-invalid", "fuzz-audit-database-invalid",
     "fuzz-dependency-advisory", "fuzz-audit-database-changed", "fuzz-seed-identity-invalid", "fuzz-report-destination-invalid",
     "fuzz-qualification-failed", "fuzz-timeout", "fuzz-cleanup-unconfirmed", "fuzz-report-write-failed"))

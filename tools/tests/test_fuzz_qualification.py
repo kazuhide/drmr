@@ -120,6 +120,87 @@ class FuzzExecution(unittest.TestCase):
             with patch.object(FUZZ.time, "monotonic", side_effect=[0, 61.36]), self.assertRaises(FUZZ.CONTRACT.Failure):
                 FUZZ.run_target(runner, binary, "hevc", root)
 
+    def test_realistic_instrumented_binary_size_is_admitted_without_buffering_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = root / "hevc"
+            # Address-sanitized debug executables exceed the old 64 MiB media
+            # read limit. A sparse file exercises that actual admission size.
+            with binary.open("wb") as stream:
+                stream.truncate(69601664)
+            runner = Mock(workspace=root)
+            runner.run.return_value = transcript()
+            with patch.object(FUZZ.time, "monotonic", side_effect=[0, 61.36]):
+                record = FUZZ.run_target(runner, binary, "hevc", root)
+            self.assertEqual(record["binary_sha256"], FUZZ.CONTRACT.VERIFY.file_digest(binary))
+
+    def test_executable_digest_has_a_fixed_cap_and_only_reads_small_chunks(self):
+        self.assertEqual(FUZZ.MAX_BINARY_BYTES, 256 * 1024 * 1024)
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory) / "hevc"
+            with binary.open("wb") as stream:
+                stream.truncate(FUZZ.MAX_BINARY_BYTES)
+            read_sizes = []
+            original_fdopen = os.fdopen
+            class CheckedReader:
+                def __init__(self, *args, **kwargs):
+                    self.stream = original_fdopen(*args, **kwargs)
+                def __enter__(self):
+                    return self
+                def __exit__(self, *_):
+                    self.stream.close()
+                def fileno(self):
+                    return self.stream.fileno()
+                def read(self, size):
+                    read_sizes.append(size)
+                    if not 0 < size <= 65536:
+                        raise AssertionError("Executable reads must remain bounded")
+                    return self.stream.read(size)
+            with patch.object(FUZZ.os, "fdopen", side_effect=CheckedReader):
+                digest = FUZZ.binary_digest(binary)
+            self.assertEqual(digest, FUZZ.CONTRACT.VERIFY.file_digest(binary))
+            self.assertEqual(max(read_sizes), 65536)
+            with binary.open("r+b") as stream:
+                stream.truncate(FUZZ.MAX_BINARY_BYTES + 1)
+            with patch.object(FUZZ.hashlib, "sha256") as hasher, self.assertRaisesRegex(FUZZ.CONTRACT.Failure, "^fuzz-binary-invalid$"):
+                FUZZ.binary_digest(binary)
+            hasher.assert_not_called()
+
+    def test_executable_digest_rejects_changes_and_nonregular_inputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory) / "hevc"
+            binary.write_bytes(b"original")
+            original_fdopen = os.fdopen
+            class ChangedReader:
+                def __init__(self, *args, **kwargs):
+                    self.stream = original_fdopen(*args, **kwargs)
+                def __enter__(self):
+                    return self
+                def __exit__(self, *_):
+                    self.stream.close()
+                def fileno(self):
+                    return self.stream.fileno()
+                def read(self, size):
+                    with binary.open("ab") as output:
+                        output.write(b"changed")
+                    return self.stream.read(size)
+            with patch.object(FUZZ.os, "fdopen", side_effect=ChangedReader), self.assertRaises(FUZZ.CONTRACT.Failure):
+                FUZZ.binary_digest(binary)
+            for candidate in (Path(directory), Path(directory) / "absent"):
+                with self.subTest(candidate=candidate.name), self.assertRaises(FUZZ.CONTRACT.Failure):
+                    FUZZ.binary_digest(candidate)
+            binary.write_bytes(b"")
+            with self.assertRaises(FUZZ.CONTRACT.Failure):
+                FUZZ.binary_digest(binary)
+            if os.name == "posix":
+                link = Path(directory) / "link"
+                link.symlink_to(binary)
+                fifo = Path(directory) / "fifo"
+                os.mkfifo(fifo)
+                for candidate in (link, fifo):
+                    with self.subTest(kind=candidate.name), self.assertRaises(FUZZ.CONTRACT.Failure):
+                        FUZZ.binary_digest(candidate)
+
     def test_metadata_admits_only_the_locked_core_feature_and_same_vendor_paths(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
@@ -167,12 +248,14 @@ class FuzzExecution(unittest.TestCase):
             root = Path(directory)
             source = Mock(path=root)
             source.read.side_effect = lambda name: b"original lock" if name.endswith("Cargo.lock") else b"{}"
-            for finding in ([], [{"advisory": "unresolved"}]):
+            for index, finding in enumerate(([], [{"advisory": "unresolved"}])):
                 auditor = Mock()
                 auditor.normalized_private_fs_lock.return_value = b"registry identity lock"
                 auditor.scoped_findings.return_value = finding
-                runner = Mock(workspace=root, cancel_event=threading.Event())
-                runner.run.side_effect = [b"https://github.com/RustSec/advisory-db.git\n", b"a" * 40 + b"\n", b"", b"a" * 40 + b"\n", b""]
+                private = root / str(index)
+                private.mkdir()
+                runner = Mock(workspace=private, cancel_event=threading.Event())
+                runner.run.side_effect = [b"https://github.com/RustSec/advisory-db.git\n", b"a" * 40 + b"\n", b"", b"{}", b"{}", b"a" * 40 + b"\n", b""]
                 with patch.object(FUZZ.CONTRACT, "module", return_value=auditor):
                     if finding:
                         with self.assertRaises(FUZZ.CONTRACT.Failure):
@@ -180,9 +263,99 @@ class FuzzExecution(unittest.TestCase):
                     else:
                         result = FUZZ.audit(runner, source, {"lock_sha256": "b" * 64}, [], root, root)
                         self.assertEqual(result["findings"], 0)
-                        self.assertEqual(auditor.audit_input.call_count, 2)
-                        self.assertEqual([call.args[3] for call in auditor.audit_input.call_args_list], [b"original lock", b"registry identity lock"])
+                        auditor.audit_input.assert_not_called()
+                        calls = [call for call in runner.run.call_args_list if call.args[1] in ("fuzz-audit-actual", "fuzz-audit-registry")]
+                        self.assertEqual(len(calls), 2)
+                        self.assertTrue(all(call.kwargs["accepted_exits"] == (0, 1) for call in calls))
+                        self.assertEqual((private / "actual-Cargo.lock").read_bytes(), b"original lock")
+                        self.assertEqual((private / "registry-Cargo.lock").read_bytes(), b"registry identity lock")
                         auditor.verify_private_fs.assert_called_once_with(root)
+
+    def test_runner_preserves_single_expected_exits_and_accepts_only_explicit_typed_statuses(self):
+        workspace = FUZZ.SUPPORT.Workspace()
+        self.addCleanup(workspace.close)
+        runner = FUZZ.SUPPORT.Runner(workspace.path)
+        for code in (0, 1, 2):
+            value = runner.run([sys.executable, "-c", f"import sys; print('ok'); sys.exit({code})"], "single", expected_exit=code)
+            self.assertEqual(value.strip(), b"ok")
+            self.assertEqual(runner.stages[-1]["exit_code"], code)
+        with self.assertRaisesRegex(FUZZ.SUPPORT.Refusal, "^command-failed$"):
+            runner.run([sys.executable, "-c", "raise SystemExit(1)"], "single-mismatch")
+        for code in (0, 1):
+            runner.run([sys.executable, "-c", f"raise SystemExit({code})"], "audit-status", accepted_exits=(0, 1))
+            self.assertEqual(runner.stages[-1]["exit_code"], code)
+        with self.assertRaisesRegex(FUZZ.SUPPORT.Refusal, "^command-failed$"):
+            runner.run([sys.executable, "-c", "raise SystemExit(2)"], "audit-status", accepted_exits=(0, 1))
+        for invalid in ((), (0, True), (0, 0), (1, 0), [0, 1], (0, 3)):
+            with self.subTest(invalid=invalid), patch.object(FUZZ.SUPPORT.subprocess, "Popen") as popen, \
+                 self.assertRaisesRegex(FUZZ.SUPPORT.Refusal, "^command-status-invalid$"):
+                runner.run([sys.executable], "invalid-status", accepted_exits=invalid)
+            popen.assert_not_called()
+
+    @unittest.skipUnless(os.name == "posix", "Linux audit child cancellation")
+    def test_audit_signal_cancels_actual_child_before_it_can_finish(self):
+        auditor = FUZZ.CONTRACT.module("audit_dependencies")
+        with tempfile.TemporaryDirectory() as directory, FUZZ.cancellation() as cancelled:
+            root = Path(directory)
+            ready, release, completed = (root / name for name in ("ready", "release", "completed"))
+            program = root / "audit"
+            program.write_text("#!/usr/bin/env python3\nimport os,time\nfrom pathlib import Path\n"
+                               "Path(os.environ['FUZZ_AUDIT_READY']).write_text('ready')\n"
+                               "while not Path(os.environ['FUZZ_AUDIT_RELEASE']).exists(): time.sleep(0.01)\n"
+                               "Path(os.environ['FUZZ_AUDIT_COMPLETED']).write_text('finished')\n"
+                               "print('{\"vulnerabilities\":{\"list\":[]},\"warnings\":{}}')\n")
+            program.chmod(0o755)
+            environment = {"FUZZ_AUDIT_READY": str(ready), "FUZZ_AUDIT_RELEASE": str(release), "FUZZ_AUDIT_COMPLETED": str(completed)}
+            workspace = FUZZ.SUPPORT.Workspace()
+            source = Mock(path=root)
+            source.read.side_effect = lambda name: b"lock" if name.endswith("Cargo.lock") else b"{}"
+            processes = []
+            actual_popen = FUZZ.SUPPORT.subprocess.Popen
+            def spawned(*args, **kwargs):
+                process = actual_popen(*args, **kwargs)
+                processes.append(process)
+                return process
+            def stop():
+                deadline = time.monotonic() + 5
+                while not ready.exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                if ready.exists():
+                    os.kill(os.getpid(), signal.SIGTERM)
+                time.sleep(1)
+                release.write_text("release")
+            with patch.dict(os.environ, environment):
+                runner = FUZZ.SUPPORT.Runner(workspace.path, cancel_event=cancelled)
+                actual_run = runner.run
+                def command(arguments, *args, **kwargs):
+                    if arguments[0] != "git":
+                        return actual_run(arguments, *args, **kwargs)
+                    if arguments[3:6] == ["remote", "get-url", "origin"]:
+                        return b"https://github.com/RustSec/advisory-db.git\n"
+                    if arguments[3:5] == ["rev-parse", "HEAD"]:
+                        return b"a" * 40 + b"\n"
+                    return b""
+                thread = threading.Thread(target=stop)
+                thread.start()
+                error = None
+                try:
+                    with patch.object(auditor, "verify_private_fs"), \
+                         patch.object(auditor, "normalized_private_fs_lock", return_value=b"normalized lock"), \
+                         patch.object(FUZZ.CONTRACT, "module", return_value=auditor), \
+                         patch.object(runner, "run", side_effect=command), \
+                         patch.object(FUZZ.SUPPORT.subprocess, "Popen", side_effect=spawned):
+                        FUZZ.audit(runner, source, {"lock_sha256": "b" * 64}, [], root, program)
+                except Exception as failure:
+                    error = failure
+                finally:
+                    thread.join(timeout=7)
+                    workspace.close()
+                self.assertFalse(thread.is_alive())
+                self.assertFalse(completed.exists(), "Cancellation must reap the auditor before it finishes")
+                self.assertIsInstance(error, FUZZ.SUPPORT.Refusal)
+                self.assertEqual(str(error), "command-cancelled")
+                self.assertEqual(len(processes), 1)
+                self.assertIsNotNone(processes[0].returncode)
+                self.assertFalse(workspace.path.exists())
 
     @unittest.skipUnless(os.name == "posix", "Linux release cancellation handler")
     def test_repeated_signals_remain_cooperative_until_cleanup_finishes(self):

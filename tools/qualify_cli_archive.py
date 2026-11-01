@@ -341,8 +341,12 @@ class Runner:
         temporary.mkdir(mode=0o700)
         self.environment.update(TMPDIR=str(temporary), TMP=str(temporary), TEMP=str(temporary))
 
-    def run(self, arguments, stage, timeout=300, expected_exit=0):
+    def run(self, arguments, stage, timeout=300, expected_exit=0, *, accepted_exits=None):
         require(type(expected_exit) is int and expected_exit in (0, 1, 2), "command-status-invalid")
+        statuses = (expected_exit,) if accepted_exits is None else accepted_exits
+        require(type(statuses) is tuple and 1 <= len(statuses) <= 3
+                and all(type(value) is int and value in (0, 1, 2) for value in statuses)
+                and tuple(sorted(set(statuses))) == statuses, "command-status-invalid")
         started = time.monotonic()
         deadline = started + timeout
         with tempfile.TemporaryFile(dir=self.workspace) as stdout, tempfile.TemporaryFile(dir=self.workspace) as stderr:
@@ -370,7 +374,7 @@ class Runner:
                 diagnostic = stderr.read(MAX_OUTPUT + 1)
                 require(not any(value and (value.lower() in raw.lower() or value.lower() in diagnostic.lower())
                                 for value in self.secrets), "secret-displayed")
-                if status != expected_exit:
+                if status not in statuses:
                     evidence = {"exit_code": status, "stdout_sha256": hashlib.sha256(raw).hexdigest(),
                                 "stderr_sha256": hashlib.sha256(diagnostic).hexdigest()}
                     try:

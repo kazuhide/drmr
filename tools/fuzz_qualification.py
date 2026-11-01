@@ -6,10 +6,13 @@ the CLI, changes a corpus in the source tree, or forwards child diagnostics.
 """
 import argparse
 from contextlib import contextmanager
+import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import signal
+import stat
 import sys
 import threading
 import time
@@ -19,6 +22,9 @@ import fuzz_contract as CONTRACT
 SUPPORT = CONTRACT.module("qualify_cli_archive")
 CHECK = CONTRACT.module("check_release")
 ROOT = Path(__file__).resolve().parents[1]
+# ASan debug executables are about 67 MiB on the measured native build. Keep
+# a fixed 256 MiB admission cap while hashing only 64 KiB at a time.
+MAX_BINARY_BYTES = 256 * 1024 * 1024
 
 
 @contextmanager
@@ -68,8 +74,36 @@ def statistics(raw, target, elapsed):
             "peak_rss_mib": int(rss[0])}
 
 
+def binary_digest(binary):
+    """Retain read_regular's identity checks without buffering an executable."""
+    binary = Path(binary)
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        CONTRACT.require(not binary.is_symlink(), "fuzz-binary-invalid")
+        with os.fdopen(os.open(binary, flags), "rb") as stream:
+            before = os.fstat(stream.fileno())
+            CONTRACT.require(stat.S_ISREG(before.st_mode) and 0 < before.st_size <= MAX_BINARY_BYTES
+                             and not getattr(before, "st_file_attributes", 0) & 0x400, "fuzz-binary-invalid")
+            digest, size = hashlib.sha256(), 0
+            while True:
+                block = stream.read(min(65536, before.st_size + 1 - size))
+                if not block:
+                    break
+                size += len(block)
+                CONTRACT.require(size <= before.st_size, "fuzz-binary-changed")
+                digest.update(block)
+            after, current = os.fstat(stream.fileno()), binary.lstat()
+            def identity(value):
+                return value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns
+            CONTRACT.require(size == before.st_size and identity(before) == identity(after) == identity(current)
+                             and stat.S_ISREG(current.st_mode) and not binary.is_symlink(), "fuzz-binary-changed")
+        return digest.hexdigest()
+    except OSError:
+        raise CONTRACT.Failure("fuzz-binary-invalid") from None
+
+
 def run_target(runner, binary, target, corpus):
-    before = CONTRACT.sha(SUPPORT.read_regular(binary, 64 * 1024 * 1024))
+    before = binary_digest(binary)
     # No -jobs/-workers: libFuzzer's default is one in-process campaign. Those
     # switches would introduce a separate supervisor and worker process.
     arguments = ["/bin/sh", "-c", 'exec "$@" 2>&1', "drmr-fuzz", str(binary), str(corpus),
@@ -78,7 +112,7 @@ def run_target(runner, binary, target, corpus):
     started = time.monotonic()
     raw = runner.run(arguments, "fuzz-" + target, timeout=90)
     elapsed = round((time.monotonic() - started) * 1000)
-    CONTRACT.require(CONTRACT.sha(SUPPORT.read_regular(binary, 64 * 1024 * 1024)) == before, "fuzz-binary-changed")
+    CONTRACT.require(binary_digest(binary) == before, "fuzz-binary-changed")
     return {"target": target, "binary_sha256": before, **statistics(raw, target, elapsed),
             "exit_code": 0, "cancelled": False, "timed_out": False}
 
@@ -141,7 +175,12 @@ def audit(runner, source, identity, packages, database, cargo_audit):
     normalized = auditor.normalized_private_fs_lock(original, pin)
     for name, data in (("actual", original), ("registry", normalized)):
         checkpoint(runner.cancel_event)
-        value = auditor.audit_input(cargo_audit, database, source, data, runner.workspace / (name + "-audit.json"))
+        lock = runner.workspace / (name + "-Cargo.lock")
+        SUPPORT.private_write(lock, data)
+        raw = runner.run([cargo_audit, "audit", "--file", lock, "--db", database,
+                          "--no-fetch", "--deny", "warnings", "--json"], "fuzz-audit-" + name,
+                         timeout=180, accepted_exits=(0, 1))
+        value = auditor.read_json(raw)
         CONTRACT.require(not auditor.scoped_findings(value, packages), "fuzz-dependency-advisory")
     checkpoint(runner.cancel_event)
     CONTRACT.require(runner.run(["git", "-C", database, "rev-parse", "HEAD"], "fuzz-audit-unchanged", 30).strip() == revision.encode("ascii"),
