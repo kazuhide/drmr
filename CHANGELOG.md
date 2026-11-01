@@ -5,6 +5,15 @@ for installation, stable interfaces and versioning.
 
 ## [Unreleased]
 
+### Added
+
+- Convert and independently verify qualified HEVC Main/Main10 in MP4 and fMP4
+  HLS/DASH, including clear, CENC and CBCS media. Native checks read every sample,
+  parameter set, slice header and clock; optional decoding remains separate.
+- Add attributed Main/Main10 regression seeds, independent packet/decode oracles
+  and tamper/refusal coverage. Document the accepted codec profiles separately
+  from container, encryption and DRM-device claims.
+
 ## [1.0.3] - 2026-10-31
 
 Extend the qualified output profiles while retaining native media verification

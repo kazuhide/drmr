@@ -51,6 +51,35 @@ fn avc(value: &mut Value, metadata: &ts::avc::Metadata) {
         .map(|(top, bottom)| json!([top, bottom]))
         .unwrap_or_default();
 }
+
+fn hevc(value: &mut Value, metadata: &super::super::hevc::Metadata) {
+    value["width"] = metadata.width.into();
+    value["height"] = metadata.height.into();
+    value["pix_fmt"] = match metadata.bit_depth_luma {
+        8 => "yuv420p".into(),
+        depth => format!("yuv420p{depth}le").into(),
+    };
+    value["bits_per_raw_sample"] = metadata.bit_depth_luma.to_string().into();
+    value["field_order"] = if metadata.progressive {
+        "progressive".into()
+    } else {
+        Value::Null
+    };
+    if let Some((x, y)) = metadata.sample_aspect_ratio {
+        value["sample_aspect_ratio"] = format!("{x}:{y}").into();
+    }
+    value["color_range"] = metadata
+        .full_range
+        .map(|full| if full { "pc" } else { "tv" })
+        .into();
+    value["color_primaries"] = metadata.colour_primaries.into();
+    value["color_transfer"] = metadata.transfer_characteristics.into();
+    value["color_space"] = metadata.matrix_coefficients.into();
+    value["chroma_location"] = metadata
+        .chroma_location
+        .map(|(top, bottom)| json!([top, bottom]))
+        .unwrap_or_default();
+}
 pub(in crate::conversion) fn transport_profile(
     native: &ts::NativeEvidence,
 ) -> Result<Value, ConversionError> {
@@ -117,6 +146,13 @@ pub(in crate::conversion) fn mp4_profile(
         let (config, width) = ts::avc::Configuration::from_avcc(&track.decoder_config)?;
         avc(&mut value, config.metadata());
         value["nal_length_size"] = width.to_string().into();
+    } else if track.decoder_config_kind == *b"hvcC" {
+        let (config, width) = super::super::hevc::Configuration::from_hvcc(&track.decoder_config)?;
+        config.validate_entry(track.codec)?;
+        hevc(&mut value, config.metadata());
+        value["nal_length_size"] = width.to_string().into();
+        value["extradata_hash"] =
+            format!("SHA256:{}", hex::encode(config.semantic_identity())).into();
     } else if track.decoder_config_kind == *b"esds" {
         let config = super::super::native_media::AacConfiguration::parse(&track.decoder_config)?;
         value["sample_rate"] = config.sample_rate.to_string().into();

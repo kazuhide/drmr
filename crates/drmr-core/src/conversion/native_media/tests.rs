@@ -102,7 +102,7 @@ fn native(input: &Path, keys: &InputKeys) -> (Movie, BTreeMap<usize, Vec<Packet>
     assert!(digest.is_none());
     (movie, records)
 }
-fn compare(input: &Path, encrypted: bool) {
+pub(super) fn compare(input: &Path, encrypted: bool) {
     let (movie, actual) = native(
         input,
         &if encrypted {

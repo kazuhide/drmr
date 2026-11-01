@@ -130,9 +130,42 @@ pub(super) fn subsamples(
             encrypted: u32::try_from(bytes.len()).map_err(|_| BAD)?,
         }]);
     }
-    let (configuration, width) =
-        super::super::ts::avc::Configuration::from_avcc(&track.decoder_config)?;
-    configuration.length_prefixed_access_unit(bytes, width)?;
+    match &track.codec {
+        b"avc1" | b"avc3" => {
+            let (configuration, width) =
+                super::super::ts::avc::Configuration::from_avcc(&track.decoder_config)?;
+            configuration.length_prefixed_access_unit(bytes, width)?;
+            nal_subsamples(bytes, width, scheme, stop, |nal| {
+                if matches!(nal[0] & 31, 1 | 5) {
+                    configuration.slice_header_bytes(nal)
+                } else {
+                    Ok(nal.len())
+                }
+            })
+        }
+        b"hvc1" | b"hev1" => {
+            let (configuration, width) =
+                super::super::hevc::Configuration::from_hvcc(&track.decoder_config)?;
+            configuration.length_prefixed_access_unit(bytes, width, track.codec)?;
+            nal_subsamples(bytes, width, scheme, stop, |nal| {
+                if ((nal[0] >> 1) & 63) <= 31 {
+                    configuration.slice_header_bytes(nal)
+                } else {
+                    Ok(nal.len())
+                }
+            })
+        }
+        _ => Err(super::UNSUPPORTED),
+    }
+}
+
+fn nal_subsamples(
+    bytes: &[u8],
+    width: u8,
+    scheme: Scheme,
+    stop: &Stop,
+    slice_header: impl Fn(&[u8]) -> Result<usize, ConversionError>,
+) -> Result<Vec<crypto::Subsample>, ConversionError> {
     let width = usize::from(width);
     let mut at = 0_usize;
     let mut clear = 0_u64;
@@ -147,11 +180,7 @@ pub(super) fn subsamples(
             .fold(0_usize, |value, byte| (value << 8) | usize::from(*byte));
         let end = begin.checked_add(size).ok_or(BAD)?;
         let nal = bytes.get(begin..end).filter(|n| !n.is_empty()).ok_or(BAD)?;
-        let header = if matches!(nal[0] & 31, 1 | 5) {
-            configuration.slice_header_bytes(nal)?
-        } else {
-            nal.len()
-        };
+        let header = slice_header(nal)?;
         let mut protected = nal.len().checked_sub(header).ok_or(BAD)?;
         let tail = if scheme == Scheme::Cenc {
             protected % 16
@@ -208,6 +237,114 @@ fn append_span(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hevc_escaped_header_extent_is_clear_before_cipher_alignment() {
+        use super::super::super::hevc;
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../drmr/tests/fixtures/bbb/hevc-main.mp4");
+        let stop = Stop::new();
+        let mut track = super::super::inspect(&path, &stop)
+            .unwrap()
+            .tracks
+            .remove(0);
+        track.decoder_config = hevc::test_configuration(8);
+        let (mut nal, header) = hevc::test_slice();
+        assert!(nal[..header].windows(3).any(|bytes| bytes == [0, 0, 3]));
+        assert_eq!(nal.len() - header, 64);
+        nal.extend([0x55; 3]);
+        let mut sample = u32::try_from(nal.len()).unwrap().to_be_bytes().to_vec();
+        sample.extend(nal);
+        for scheme in [Scheme::Cenc, Scheme::Cbcs] {
+            let spans = subsamples(&track, &sample, scheme, &stop)
+                .unwrap()
+                .into_iter()
+                .map(|span| (span.clear, span.encrypted))
+                .collect::<Vec<_>>();
+            let clear = u32::try_from(4 + header).unwrap();
+            assert_eq!(
+                spans,
+                if scheme == Scheme::Cenc {
+                    vec![(clear, 64), (3, 0)]
+                } else {
+                    vec![(clear, 67)]
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn hevc_subsamples_keep_full_slice_headers_and_non_vcl_nals_clear_for_both_schemes() {
+        for name in ["hevc-main.mp4", "hevc-main10.mp4"] {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../drmr/tests/fixtures/bbb")
+                .join(name);
+            let stop = Stop::new();
+            let mut bytes = Vec::new();
+            let movie = super::super::scan(
+                &path,
+                &super::super::InputKeys::default(),
+                &stop,
+                &mut |_, info, data| {
+                    if info.ordinal == 0 {
+                        bytes.extend_from_slice(data);
+                    }
+                    Ok(())
+                },
+            )
+            .unwrap();
+            let track = &movie.tracks[0];
+            let (configuration, width) =
+                super::super::super::hevc::Configuration::from_hvcc(&track.decoder_config).unwrap();
+            for scheme in [Scheme::Cenc, Scheme::Cbcs] {
+                let spans = subsamples(track, &bytes, scheme, &stop).unwrap();
+                let mut protected = Vec::new();
+                for span in &spans {
+                    if scheme == Scheme::Cenc {
+                        assert_eq!(span.encrypted % 16, 0);
+                    }
+                    protected.extend(std::iter::repeat_n(false, span.clear as usize));
+                    protected.extend(std::iter::repeat_n(true, span.encrypted as usize));
+                }
+                assert_eq!(protected.len(), bytes.len());
+                assert!(protected.contains(&true));
+                let mut at = 0;
+                let mut slices = 0;
+                while at < bytes.len() {
+                    let begin = at + usize::from(width);
+                    let length = bytes[at..begin]
+                        .iter()
+                        .fold(0_usize, |value, byte| (value << 8) | usize::from(*byte));
+                    let end = begin + length;
+                    let nal = &bytes[begin..end];
+                    let header = if ((nal[0] >> 1) & 63) <= 31 {
+                        slices += 1;
+                        let header = configuration.slice_header_bytes(nal).unwrap();
+                        assert!(header > 2);
+                        header
+                    } else {
+                        length
+                    };
+                    assert!(protected[at..begin + header].iter().all(|value| !value));
+                    let tail = if scheme == Scheme::Cenc {
+                        (length - header) % 16
+                    } else {
+                        0
+                    };
+                    assert!(
+                        protected[begin + header..end - tail]
+                            .iter()
+                            .all(|value| *value)
+                    );
+                    assert!(protected[end - tail..end].iter().all(|value| !value));
+                    at = end;
+                }
+                assert!(slices > 0);
+            }
+            assert!(subsamples(track, &bytes[..bytes.len() - 1], Scheme::Cenc, &stop).is_err());
+        }
+    }
+
     #[test]
     fn exhausted_iv_sequence_never_wraps_or_reuses_a_reserved_value() {
         let sequence = AtomicU64::new(u64::from(u32::MAX) - 2);

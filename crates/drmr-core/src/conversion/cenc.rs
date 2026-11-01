@@ -162,8 +162,14 @@ fn sample_entry(
     if sinf.children.len() != 3 {
         return Err(UNSUPPORTED);
     }
-    if mark(sinf, *b"frma", allowed)?.header.payload(data) != if audio { b"mp4a" } else { b"avc1" }
-    {
+    let expected = match (actual.kind, actual.codec.as_deref()) {
+        (TrackKind::Audio, Some("mp4a")) => b"mp4a",
+        (TrackKind::Video, Some("avc1")) => b"avc1",
+        (TrackKind::Video, Some("hvc1")) => b"hvc1",
+        (TrackKind::Video, Some("hev1")) => b"hev1",
+        _ => return Err(UNSUPPORTED),
+    };
+    if mark(sinf, *b"frma", allowed)?.header.payload(data) != expected {
         return Err(UNSUPPORTED);
     }
     let scheme = mark(sinf, *b"schm", allowed)?.header.payload(data);
@@ -506,6 +512,35 @@ mod tests {
         ])
         .unwrap()
     }
+
+    #[test]
+    fn encryption_auxiliary_admission_binds_each_video_original_format() {
+        let path = fixture(8);
+        let original = audio::movie(&path).unwrap();
+        let mut report = inspection::inspect(&path).unwrap();
+        let video = report
+            .tracks
+            .iter()
+            .position(|track| track.kind == TrackKind::Video)
+            .unwrap();
+        let boxes = mp4::parse_boxes(&original.bytes).unwrap();
+        let format = mp4::walk(&boxes)
+            .into_iter()
+            .find(|node| node.kind() == *b"frma" && node.header.payload(&original.bytes) == b"avc1")
+            .unwrap();
+        let at = format.header.offset + format.header.header_size;
+        // This layer qualifies encryption records; native codec admission separately
+        // binds the decoder configuration and encoded samples to this declaration.
+        for codec in ["avc1", "hvc1", "hev1"] {
+            let mut changed = audio::movie(&path).unwrap();
+            changed.bytes[at..at + 4].copy_from_slice(codec.as_bytes());
+            report.tracks[video].codec = Some(codec.into());
+            validate(&changed, &report, &keys()).unwrap();
+            report.tracks[video].codec = Some("avc3".into());
+            assert_eq!(validate(&changed, &report, &keys()), Err(UNSUPPORTED));
+        }
+    }
+
     #[test]
     fn every_auxiliary_header_count_offset_and_sample_extent_is_checked() {
         for width in [8, 16] {

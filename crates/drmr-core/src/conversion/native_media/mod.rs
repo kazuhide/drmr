@@ -35,6 +35,8 @@ pub(in crate::conversion) use segment::{
     SegmentEvidence, SegmentInput, SegmentReceipt, SegmentTrackEvidence, SegmentTransformer,
 };
 #[cfg(test)]
+mod hevc_tests;
+#[cfg(test)]
 mod payload_window_tests;
 #[cfg(test)]
 mod segment_tests;

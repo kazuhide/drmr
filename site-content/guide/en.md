@@ -98,7 +98,9 @@ Common `plan`, `convert` and `verify` commands accept an output list for DASH wi
 
 # 3. Supported input and output profiles
 
-Complete media admission accepts the implemented AVC (H.264) and typed AAC profiles. Metadata-only identification of HEVC, AV1, VP9, AC-3, E-AC-3, Opus or FLAC does not establish complete validation. Full operations refuse unimplemented native codec profiles with `native-codec-profile-not-supported`, even with `--decode`. Container and encryption tables do not qualify every codec those formats can carry.
+MP4 and fMP4 HLS/DASH accept the implemented AVC (H.264), HEVC (H.265) and AAC profiles. Transport stream video still requires H.264. HEVC supports single-layer, progressive Main/Main10 with 4:2:0 chroma and matching 8-bit or 10-bit luma/chroma depths. It requires one stable set of video, sequence and picture decoding parameters (VPS/SPS/PPS). See [HEVC validation and limits](https://github.com/kazuhide/drmr/blob/main/docs/verification.md#hevc-in-mp4-and-fmp4) for the exact accepted syntax and refusal conditions.
+
+HEVC support is included in current source, not the v1.0.3 release archives. Metadata-only identification of AV1, VP9, AC-3, E-AC-3, Opus or FLAC does not establish complete validation. Full operations refuse unimplemented codec profiles, even with `--decode`. Container and encryption tables do not qualify every codec those formats can carry.
 
 ## Accepted input containers
 
@@ -121,7 +123,7 @@ Choose an input and an output independently within these profiles. Codec, track,
 | `hls` (fMP4) | `clear`, `cenc`, `cbcs`, `hls-aes128` | `master.m3u8` |
 | `hls-ts` (MPEG-TS) | `clear`, `hls-aes128`, `hls-sample-aes` | `master.m3u8` |
 
-The support matrix on the home page links each input/output choice to its concrete configuration and command. Joint MP4 output accepts qualified tracks from one progressive MP4 or up to one video and one audio track from HLS TS. Separate DASH/fMP4 HLS tracks and unrelated files are not combined into one MP4.
+The support matrix on the home page links each input/output choice to its concrete configuration and command. Joint MP4 output accepts qualified tracks from one complete MP4 or up to one video and one audio track from HLS TS. Separate DASH/fMP4 HLS tracks and unrelated files are not combined into one MP4.
 
 ## HLS input protection
 
@@ -149,13 +151,15 @@ With `auto`/`stitch`, DRM output requires complete source admission for a suppor
 
 This is an MP4 playback-metadata profile, not a separate codec. An edit list can specify the exact decoded-audio start and duration, excluding encoder warm-up and final padding.
 
-The complete progressive source must contain one AAC-LC audio track (`mp4a`), optionally with one H.264 video track (`avc1`). The audio edit must be one normal-rate continuous window, have a nonnegative start and convert exactly into integer audio clock units.
+The complete progressive source must contain one AAC-LC audio track (`mp4a`), optionally with one H.264 (`avc1`) or qualified HEVC Main/Main10 (`hvc1`/`hev1`) video track. The audio edit must be one normal-rate continuous window, have a nonnegative start and convert exactly into integer audio clock units.
 
 The qualified clear, cenc and cbcs inputs share the output choices above: MP4/DASH clear, cenc or cbcs; fMP4 HLS also permits AES-128.
 
-Clear MP4 retains progressive sample tables. Encrypted MP4 is fragmented and can retain the two qualified tracks in one file. DASH/HLS uses separate tracks. Every encrypted source track needs its own key mapping.
+Clear output from a progressive MP4 retains its sample tables. Encrypted MP4 is fragmented and can retain the two qualified tracks in one file. DASH/HLS uses separate tracks. Every encrypted source track needs its own key mapping.
 
-Rust writes a private copy, decrypting each sample at its original position. Clear sample types and zeroed padding replace protection metadata. Sample positions, clocks and playback edits stay unchanged. No FFmpeg, decoding or new segmentation is needed.
+Progressive MP4 copying and decryption run in Rust, using a private copy with each sample at its original position. Clear sample types and zeroed padding replace protection metadata. Sample positions, clocks and playback edits stay unchanged. This copy uses no FFmpeg, decoding or new segmentation.
+
+A complete joint fragmented MP4 can also be converted again to clear, cenc or cbcs MP4. It requires exactly one supported video and one AAC-LC audio track, matching protection, and one positive normal-rate finite edit per track. Shaka Packager processes each track; drmr restores the original playback windows and independently checks the combined result. Clear output stays fragmented. This does not combine separate source files.
 
 This progressive-input profile refuses multiple edits, initial empty edits, rate changes, extra tracks, unrelated-file combinations, key rotation and input DRM initialization headers. CENC accepts supported 8/16-byte sample-IV layouts; CBCS accepts supported 16-byte constant-IV and pattern layouts. This does not admit arbitrary encrypted MP4.
 

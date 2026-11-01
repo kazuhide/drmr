@@ -136,6 +136,11 @@ fn codecs(media: &native::SegmentedMedia) -> Result<Vec<String>, ConversionError
                         config[3]
                     ))
                 }
+                b"hvc1" | b"hev1" => {
+                    conversion::hevc::Configuration::from_hvcc(&descriptor.decoder_config)?
+                        .0
+                        .codec_string(descriptor.codec)
+                }
                 b"mp4a" => Ok(format!(
                     "mp4a.40.{}",
                     conversion::native_media::AacConfiguration::parse(&descriptor.decoder_config)?

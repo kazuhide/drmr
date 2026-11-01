@@ -61,6 +61,12 @@ pub(super) fn aspect_ratio(track: &TrackDescriptor) -> Result<Ratio, ConversionE
         let (numerator, denominator) = config.metadata().sample_aspect_ratio.unwrap_or((1, 1));
         return Ratio::new(i128::from(numerator), u64::from(denominator));
     }
+    if track.decoder_config_kind == *b"hvcC" {
+        let (config, _) = super::super::hevc::Configuration::from_hvcc(&track.decoder_config)?;
+        config.validate_entry(track.codec)?;
+        let (numerator, denominator) = config.metadata().sample_aspect_ratio.unwrap_or((1, 1));
+        return Ratio::new(i128::from(numerator), u64::from(denominator));
+    }
     Ratio::new(1, 1)
 }
 

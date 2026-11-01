@@ -16,15 +16,31 @@ fn entry_equal(a: &Track, b: &Track) -> Result<bool, ConversionError> {
             (&a.descriptor.codec, &b.descriptor.codec),
             (b"avc1", b"avc3") | (b"avc3", b"avc1") | (b"hvc1", b"hev1") | (b"hev1", b"hvc1")
         );
-    Ok(a.descriptor.kind == b.descriptor.kind
-        && codec
-        && match (&a.config, &b.config) {
+    let (configuration, progressive_hevc) = if a.descriptor.decoder_config_kind == *b"hvcC"
+        && b.descriptor.decoder_config_kind == *b"hvcC"
+    {
+        let (left, _) = super::super::hevc::Configuration::from_hvcc(&a.descriptor.decoder_config)?;
+        let (right, _) =
+            super::super::hevc::Configuration::from_hvcc(&b.descriptor.decoder_config)?;
+        left.validate_entry(a.descriptor.codec)?;
+        right.validate_entry(b.descriptor.codec)?;
+        (
+            left.semantic_eq(&right),
+            left.metadata().progressive && right.metadata().progressive,
+        )
+    } else {
+        let equal = match (&a.config, &b.config) {
             (Some(x), Some(y)) => x == y,
             _ => {
                 a.descriptor.decoder_config_kind == b.descriptor.decoder_config_kind
                     && a.descriptor.decoder_config == b.descriptor.decoder_config
             }
-        }
+        };
+        (equal, false)
+    };
+    Ok(a.descriptor.kind == b.descriptor.kind
+        && codec
+        && configuration
         && x.width == y.width
         && x.height == y.height
         && (aac || (x.channels == y.channels && x.sample_rate == y.sample_rate))
@@ -42,21 +58,27 @@ fn entry_equal(a: &Track, b: &Track) -> Result<bool, ConversionError> {
                 && matches!(y.alternate_group, 0 | 1)))
         && super::semantics::aspect_ratio(&a.descriptor)?
             == super::semantics::aspect_ratio(&b.descriptor)?
-        && semantic_boxes_equal(&x.boxes, &y.boxes))
+        && semantic_boxes_equal(&x.boxes, &y.boxes, progressive_hevc))
 }
 
 fn semantic_boxes_equal(
     a: &[super::super::native_media::SemanticBox],
     b: &[super::super::native_media::SemanticBox],
+    progressive_hevc: bool,
 ) -> bool {
+    // A one-frame progressive declaration is equivalent to its absence only
+    // when both independently parsed HEVC configurations establish progressive pictures.
+    let redundant = |node: &&super::super::native_media::SemanticBox| {
+        node.kind == *b"pasp" || progressive_hevc && node.kind == *b"fiel" && node.payload == [1, 0]
+    };
     let mut a: Vec<_> = a
         .iter()
-        .filter(|node| node.kind != *b"pasp")
+        .filter(|node| !redundant(node))
         .map(|node| (&node.kind, node.payload.as_slice()))
         .collect();
     let mut b: Vec<_> = b
         .iter()
-        .filter(|node| node.kind != *b"pasp")
+        .filter(|node| !redundant(node))
         .map(|node| (&node.kind, node.payload.as_slice()))
         .collect();
     a.sort_unstable();
@@ -372,6 +394,55 @@ impl Backend {
     ) -> Result<VerificationReport, ConversionError> {
         self.native_validate_mp4_with_clock(input, index, keys, None)
     }
+    /// Qualify every track from one complete guarded sample scan.
+    pub(in crate::conversion) fn native_validate_complete_mp4(
+        &self,
+        input: &Path,
+        keys: Option<super::super::keys::ProbeKeys<'_>>,
+        views: Option<&[std::path::PathBuf]>,
+    ) -> Result<VerificationReport, ConversionError> {
+        let media = self.native_media(input, keys)?;
+        if views.is_some_and(|views| views.len() != media.tracks.len()) {
+            return Err(ConversionError("source-track-view-verification-failed"));
+        }
+        for (index, track) in media.tracks.iter().enumerate() {
+            super::mp4_profile(&track.descriptor)?;
+            let source_window = checked_window(
+                track,
+                media.movie.fragmented,
+                super::super::finite::window(input, index)?,
+            )?;
+            super::super::progressive::playback_controls_equal(input, index, input, index)?;
+            if let Some(views) = views {
+                let view = self.native_media(&views[index], keys)?;
+                let [selected] = view.tracks.as_slice() else {
+                    return Err(ConversionError("source-track-view-verification-failed"));
+                };
+                let result_window = checked_window(
+                    selected,
+                    view.movie.fragmented,
+                    super::super::finite::window(&views[index], 0)?,
+                )?;
+                let mut check =
+                    compare_tracks(&media, track, source_window, &view, selected, result_window)?;
+                check.checks.packet_timing_equal &=
+                    super::super::progressive::playback_controls_equal(
+                        input,
+                        index,
+                        &views[index],
+                        0,
+                    )?;
+                check.refresh_passed();
+                if !check.passed {
+                    return Err(ConversionError("source-track-view-verification-failed"));
+                }
+            }
+        }
+        let mut report = report(true, true, true);
+        report.scope = VerificationScope::SourceAdmission;
+        report.refresh_passed();
+        Ok(report)
+    }
     pub(in crate::conversion) fn native_validate_mp4_with_clock(
         &self,
         input: &Path,
@@ -530,5 +601,79 @@ impl Backend {
             && track.samples.presented_end_pts == Ratio::ticks(timing.end_pts, 90_000)?
             && track.samples.continuous_decode;
         Ok(report(metadata, payload, clocks))
+    }
+}
+
+#[cfg(test)]
+mod hevc_metadata_tests {
+    use super::super::super::native_media::SemanticBox;
+    use super::*;
+
+    #[test]
+    fn hevc_review_unknown_source_cannot_gain_progressive_or_field_metadata_equivalence() {
+        use super::super::super::{hevc, native_media};
+        let bytes = hevc::Configuration::test_unknown_source_configuration();
+        let (configuration, width) = hevc::Configuration::from_hvcc(&bytes).unwrap();
+        let (slice, _) = hevc::test_slice();
+        let mut sample = u32::try_from(slice.len()).unwrap().to_be_bytes().to_vec();
+        sample.extend(slice);
+        assert!(
+            configuration
+                .length_prefixed_access_unit(&sample, width, *b"hvc1")
+                .is_ok()
+        );
+        let neutral = SemanticBox {
+            kind: *b"fiel",
+            payload: vec![1, 0],
+        };
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../drmr/tests/fixtures/bbb/hevc-main.mp4");
+        let movie = native_media::inspect(&path, &crate::concurrency::Stop::new()).unwrap();
+        let mut descriptor = movie.tracks[0].clone();
+        descriptor.decoder_config = bytes;
+        descriptor.sample_entry_metadata.width = Some(128);
+        descriptor.sample_entry_metadata.height = Some(128);
+        let profile = super::super::profile::mp4_profile(&descriptor).unwrap();
+        assert_eq!(
+            (
+                configuration.metadata().progressive,
+                semantic_boxes_equal(&[neutral], &[], configuration.metadata().progressive),
+                &profile["field_order"],
+            ),
+            (false, false, &serde_json::Value::Null)
+        );
+    }
+
+    #[test]
+    fn hevc_field_box_equivalence_requires_progressive_evidence_and_exact_neutral_value() {
+        let neutral = SemanticBox {
+            kind: *b"fiel",
+            payload: vec![1, 0],
+        };
+        assert!(semantic_boxes_equal(
+            std::slice::from_ref(&neutral),
+            &[],
+            true
+        ));
+        assert!(!semantic_boxes_equal(
+            std::slice::from_ref(&neutral),
+            &[],
+            false
+        ));
+        for value in [vec![2, 1], vec![1, 1], vec![1, 0, 0]] {
+            assert!(!semantic_boxes_equal(
+                &[SemanticBox {
+                    kind: *b"fiel",
+                    payload: value
+                }],
+                &[],
+                true,
+            ));
+        }
+        let colour = SemanticBox {
+            kind: *b"colr",
+            payload: vec![1, 2, 3],
+        };
+        assert!(!semantic_boxes_equal(&[neutral, colour], &[], true));
     }
 }

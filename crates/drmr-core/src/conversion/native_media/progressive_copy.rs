@@ -25,16 +25,17 @@ fn clear_movie(bytes: &mut [u8]) -> Result<(), ConversionError> {
         if matches!(&node.kind(), b"enca" | b"encv") {
             let sinf = read::one(&node.children, *b"sinf")?;
             let format = read::one(&sinf.children, *b"frma")?.header.payload(bytes);
-            let expected = if node.kind() == *b"enca" {
-                *b"mp4a"
+            let format: [u8; 4] = format.try_into().map_err(|_| UNSUPPORTED)?;
+            let supported = if node.kind() == *b"enca" {
+                format == *b"mp4a"
             } else {
-                *b"avc1"
+                matches!(&format, b"avc1" | b"avc3" | b"hvc1" | b"hev1")
             };
-            if format != expected {
+            if !supported {
                 return Err(UNSUPPORTED);
             }
             let at = node.header.offset + 4;
-            bytes[at..at + 4].copy_from_slice(&expected);
+            bytes[at..at + 4].copy_from_slice(&format);
         }
     }
     for node in nodes {
@@ -138,3 +139,49 @@ pub(in crate::conversion) fn copy_progressive(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod format_tests {
+    use super::*;
+
+    #[test]
+    fn clearing_protection_restores_the_declared_video_format_without_rewriting_config() {
+        let boxed = super::super::test_files::boxed;
+        for codec in [*b"avc1", *b"avc3", *b"hvc1", *b"hev1"] {
+            let config_kind = if matches!(&codec, b"hvc1" | b"hev1") {
+                *b"hvcC"
+            } else {
+                *b"avcC"
+            };
+            let config = boxed(config_kind, &[1, 2, 3, 4]);
+            let sinf = boxed(*b"sinf", &boxed(*b"frma", &codec));
+            let mut payload = vec![0; 78];
+            payload.extend(&config);
+            payload.extend(&sinf);
+            let mut bytes = boxed(*b"encv", &payload);
+            let original = bytes.clone();
+            clear_movie(&mut bytes).unwrap();
+            let nodes = mp4::parse_boxes(&bytes).unwrap();
+            assert_eq!(nodes[0].kind(), codec);
+            assert_eq!(bytes.len(), original.len());
+            assert_eq!(nodes[0].children[0].header.bytes(&bytes), config);
+            let padding = &nodes[0].children[1];
+            assert_eq!(padding.kind(), *b"free");
+            assert!(padding.header.payload(&bytes).iter().all(|byte| *byte == 0));
+        }
+    }
+
+    #[test]
+    fn clearing_protection_refuses_an_unmodeled_or_wrong_role_format() {
+        let boxed = super::super::test_files::boxed;
+        for (kind, codec) in [
+            (*b"encv", *b"vp09"),
+            (*b"encv", *b"mp4a"),
+            (*b"enca", *b"hvc1"),
+        ] {
+            let mut payload = vec![0; if kind == *b"encv" { 78 } else { 28 }];
+            payload.extend(boxed(*b"sinf", &boxed(*b"frma", &codec)));
+            assert_eq!(clear_movie(&mut boxed(kind, &payload)), Err(UNSUPPORTED));
+        }
+    }
+}

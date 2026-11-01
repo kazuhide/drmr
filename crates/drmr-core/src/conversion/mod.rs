@@ -2,9 +2,10 @@
 //!
 //! Qualified local MP4, static DASH, and fragmented-MP4 HLS inputs use fresh source bytes.
 //! Joint DASH/HLS output preserves audio and video without transcoding.
-//! Qualified finite-edit AAC with optional H.264 from the same original progressive file
-//! supports clear progressive or encrypted fragmented MP4 output. Other MP4 output
-//! supports one track. Unknown protection and unsupported features fail closed.
+//! Qualified finite-edit AAC with supported video from the same original progressive file
+//! supports clear progressive or encrypted fragmented MP4 output. A finite fragmented
+//! video/AAC pair can be converted again; other MP4 output supports one track.
+//! Unknown protection and unsupported features fail closed.
 //! Shaka's raw-key interface passes keys to its child process as arguments. Records and
 //! errors are redacted, but operating-system process inspection can observe those arguments.
 mod aes128;
@@ -38,6 +39,7 @@ mod files;
 mod frozen;
 pub mod manifest_lint;
 pub use frozen::{FrozenSource, SourceFile, SourceInventory};
+pub(in crate::conversion) mod hevc;
 mod hls;
 mod keys;
 mod media_progress;

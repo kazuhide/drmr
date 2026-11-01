@@ -66,3 +66,6 @@ python3 crates/drmr/tests/fixtures/bbb/regression.py --verify-fixture
 ```
 
 The finite progressive two-key CENC fixtures and their offline generation instructions are documented in [CENC.md](CENC.md). Their public keys are test data only.
+
+The separate video-only HEVC Main and Main 10 seeds, including open-GOP, in-band
+parameter-set and SEI coverage, are documented in [HEVC.md](HEVC.md).
