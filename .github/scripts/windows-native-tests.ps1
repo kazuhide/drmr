@@ -4,7 +4,7 @@ $ErrorActionPreference = 'Stop'
 # an ordinary user. Elevated tokens can assign Administrators as a new file's
 # owner, which is deliberately outside the media workspace security profile.
 # Select the same library, binary and integration test targets in one Cargo graph.
-$messages = & cargo test -p drmr-core --test conversion_bundle_publication --locked --no-run --message-format=json
+$messages = & cargo test -p drmr-core --test conversion_bundle_plan --test conversion_bundle_publication --locked --no-run --message-format=json
 if ($LASTEXITCODE -ne 0) { throw 'Native test compilation failed' }
 $executables = @()
 foreach ($line in $messages) {
@@ -13,7 +13,7 @@ foreach ($line in $messages) {
         $executables += $message.executable
     }
 }
-if ($executables.Count -ne 1) { throw 'Exactly one research test binary is required' }
+if ($executables.Count -ne 2) { throw 'Exactly two research test binaries are required' }
 $executables = @($executables | Sort-Object -Unique)
 $cargo = (& rustup which cargo).Trim()
 if ($LASTEXITCODE -ne 0) { throw 'The selected native Cargo is unavailable' }
@@ -85,16 +85,23 @@ New-Item -ItemType Directory -Path $env:TEMP | Out-Null
 New-Item -ItemType Directory -Path $env:CARGO_HOME | Out-Null
 # Temporary bounded reproduction, not complete native or release qualification.
 $executables = @(Get-Content (Join-Path $PSScriptRoot 'executables.json') | ConvertFrom-Json)
-if ($executables.Count -ne 1) { throw 'The research binary is ambiguous' }
-$listing = @(& $executables[0] --list --format terse)
-if ($LASTEXITCODE -ne 0) { throw 'Could not list the research tests' }
-$names = @($listing | ForEach-Object {
-    if ($_ -notmatch '^([A-Za-z_][A-Za-z_0-9:]*): test$') { throw 'Invalid research test inventory' }
-    $Matches[1]
-})
-if ($names.Count -ne 5 -or @($names | Sort-Object -Unique).Count -ne 5 -or
-    $names -notcontains 'changed_media_at_final_publication_cannot_be_committed') {
-    throw 'The five-test research inventory does not match'
+if ($executables.Count -ne 2) { throw 'The research binaries are ambiguous' }
+$groups = @()
+foreach ($spec in @(@{ name = 'conversion_bundle_plan'; test_count = 7 }, @{ name = 'conversion_bundle_publication'; test_count = 5 })) {
+    $selectedExecutables = @($executables | Where-Object { [IO.Path]::GetFileName($_) -match ('^' + $spec.name + '-[0-9a-f]+\.exe$') })
+    if ($selectedExecutables.Count -ne 1) { throw 'A named research binary is missing or ambiguous' }
+    $researchExecutable = $selectedExecutables[0]
+    $listing = @(& $researchExecutable --list --format terse)
+    if ($LASTEXITCODE -ne 0) { throw 'Could not list the research tests' }
+    $names = @($listing | ForEach-Object {
+        if ($_ -notmatch '^([A-Za-z_][A-Za-z_0-9:]*): test$') { throw 'Invalid research test inventory' }
+        $Matches[1]
+    })
+    if ($names.Count -ne $spec.test_count -or @($names | Sort-Object -Unique).Count -ne $spec.test_count -or
+        ($spec.name -eq 'conversion_bundle_publication' -and $names -notcontains 'changed_media_at_final_publication_cannot_be_committed')) {
+        throw 'The seven-plus-five research test inventory does not match'
+    }
+    $groups += @{ executable = $researchExecutable; arguments = @('--test-threads', '2', '--nocapture'); expected_tests = $spec.test_count }
 }
 . (Join-Path (Get-Location).Path '.github/scripts/windows-native-parallel.ps1')
 $budget = Get-DrmrNativeTestBudget
@@ -109,9 +116,6 @@ $cancel.CancelAfter(180000)
 try {
     for ($wave = 0; $wave -lt 10; $wave++) {
         $cancel.Token.ThrowIfCancellationRequested()
-        $groups = @(0, 1 | ForEach-Object {
-            @{ executable = $executables[0]; arguments = @('--test-threads', '2', '--nocapture'); expected_tests = 5 }
-        })
         foreach ($i in 1, 2) {
             [IO.File]::AppendAllText($progress, "Native group $($completed + $i)/20 started`n", $utf8)
         }
@@ -129,7 +133,7 @@ try {
     }
 } finally { $cancel.Dispose() }
 if ($completed -ne 20) { throw 'The bounded research campaign is incomplete' }
-Write-Output 'Research only: 20 five-test binary runs passed; complete native qualification was not performed.'
+Write-Output 'Research only: 10 plan and 10 publication runs (120 tests) passed; complete native qualification was not performed.'
 exit 0
 '@ | Set-Content $script
 $stdout = Join-Path $directory 'stdout.log'
