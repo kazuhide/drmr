@@ -37,9 +37,7 @@ jobs:
           printf 'RUSTUP_TOOLCHAIN=%s\n' "$channel" >> "$GITHUB_ENV"
           rustup run "$channel" rustc --version
       - name: Install the native GLib regression prerequisites
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y libglib2.0-dev pkg-config
+        run: bash .github/scripts/ubuntu-prerequisites.sh glib
       - name: Fetch locked sources and install the pinned auditor
         run: |
           cargo fetch --locked

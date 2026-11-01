@@ -13,8 +13,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        sudo apt-get update
-        sudo apt-get install -y --no-install-recommends python3 nodejs unzip xz-utils
+        bash .github/scripts/ubuntu-prerequisites.sh media
         curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 \
           -o "$RUNNER_TEMP/ffmpeg.tar.xz" \
           "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-30-13-08/${FFMPEG_ARCHIVE}"
