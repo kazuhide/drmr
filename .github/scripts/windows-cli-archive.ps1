@@ -2,10 +2,12 @@ param(
     [Parameter(Mandatory = $true)][string]$Archive,
     [Parameter(Mandatory = $true)][string]$Version,
     [Parameter(Mandatory = $true)][string]$Report,
-    [string]$RoundtripInputs = ''
+    [string]$RoundtripInputs = '',
+    [switch]$CodecOnly
 )
 
 $ErrorActionPreference = 'Stop'
+if ($CodecOnly -and $RoundtripInputs) { throw 'Codec-only and complete release qualification are separate requests' }
 . (Join-Path $PSScriptRoot 'windows-cli-archive-cleanup.ps1')
 if (Test-Path -LiteralPath $Report) { throw 'The qualification report already exists' }
 $checkout = (Get-Location).Path
@@ -59,6 +61,7 @@ try {
         rustc = $rustc
         tools = $env:DRMR_WINDOWS_MEDIA_TOOLS
         roundtrip_inputs = $RoundtripInputs
+        codec_only = [bool]$CodecOnly
     }
     $context | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $directory 'context.json')
     foreach ($path in @($checkout, (Split-Path $cargo), (Split-Path $rustc), $env:DRMR_WINDOWS_MEDIA_TOOLS)) {
@@ -90,7 +93,10 @@ $env:GIT_CONFIG_KEY_0 = 'safe.directory'
 $env:GIT_CONFIG_VALUE_0 = $context.checkout
 Set-Location -LiteralPath $context.checkout
 $privateReport = Join-Path $PSScriptRoot 'qualification.json'
-if ($context.roundtrip_inputs) {
+if ($context.codec_only) {
+    & $context.python tools/codec_qualification.py --archive $context.archive --target x86_64-pc-windows-msvc `
+        --expected-version $context.version --source $context.checkout --scope full --jobs 4 --report $privateReport
+} elseif ($context.roundtrip_inputs) {
     & $context.python tools/release_roundtrip.py --inputs $context.roundtrip_inputs --target x86_64-pc-windows-msvc --report $privateReport
 } else {
     & $context.python tools/qualify_cli_archive.py --archive $context.archive --target x86_64-pc-windows-msvc --expected-version $context.version --report $privateReport
