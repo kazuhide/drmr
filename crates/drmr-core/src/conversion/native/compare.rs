@@ -16,15 +16,31 @@ fn entry_equal(a: &Track, b: &Track) -> Result<bool, ConversionError> {
             (&a.descriptor.codec, &b.descriptor.codec),
             (b"avc1", b"avc3") | (b"avc3", b"avc1") | (b"hvc1", b"hev1") | (b"hev1", b"hvc1")
         );
-    Ok(a.descriptor.kind == b.descriptor.kind
-        && codec
-        && match (&a.config, &b.config) {
+    let (configuration, progressive_hevc) = if a.descriptor.decoder_config_kind == *b"hvcC"
+        && b.descriptor.decoder_config_kind == *b"hvcC"
+    {
+        let (left, _) = super::super::hevc::Configuration::from_hvcc(&a.descriptor.decoder_config)?;
+        let (right, _) =
+            super::super::hevc::Configuration::from_hvcc(&b.descriptor.decoder_config)?;
+        left.validate_entry(a.descriptor.codec)?;
+        right.validate_entry(b.descriptor.codec)?;
+        (
+            left.semantic_eq(&right),
+            left.metadata().progressive && right.metadata().progressive,
+        )
+    } else {
+        let equal = match (&a.config, &b.config) {
             (Some(x), Some(y)) => x == y,
             _ => {
                 a.descriptor.decoder_config_kind == b.descriptor.decoder_config_kind
                     && a.descriptor.decoder_config == b.descriptor.decoder_config
             }
-        }
+        };
+        (equal, false)
+    };
+    Ok(a.descriptor.kind == b.descriptor.kind
+        && codec
+        && configuration
         && x.width == y.width
         && x.height == y.height
         && (aac || (x.channels == y.channels && x.sample_rate == y.sample_rate))
@@ -42,21 +58,27 @@ fn entry_equal(a: &Track, b: &Track) -> Result<bool, ConversionError> {
                 && matches!(y.alternate_group, 0 | 1)))
         && super::semantics::aspect_ratio(&a.descriptor)?
             == super::semantics::aspect_ratio(&b.descriptor)?
-        && semantic_boxes_equal(&x.boxes, &y.boxes))
+        && semantic_boxes_equal(&x.boxes, &y.boxes, progressive_hevc))
 }
 
 fn semantic_boxes_equal(
     a: &[super::super::native_media::SemanticBox],
     b: &[super::super::native_media::SemanticBox],
+    progressive_hevc: bool,
 ) -> bool {
+    // A one-frame progressive declaration is equivalent to its absence only
+    // when both independently parsed HEVC configurations establish progressive pictures.
+    let redundant = |node: &&super::super::native_media::SemanticBox| {
+        node.kind == *b"pasp" || progressive_hevc && node.kind == *b"fiel" && node.payload == [1, 0]
+    };
     let mut a: Vec<_> = a
         .iter()
-        .filter(|node| node.kind != *b"pasp")
+        .filter(|node| !redundant(node))
         .map(|node| (&node.kind, node.payload.as_slice()))
         .collect();
     let mut b: Vec<_> = b
         .iter()
-        .filter(|node| node.kind != *b"pasp")
+        .filter(|node| !redundant(node))
         .map(|node| (&node.kind, node.payload.as_slice()))
         .collect();
     a.sort_unstable();
@@ -530,5 +552,44 @@ impl Backend {
             && track.samples.presented_end_pts == Ratio::ticks(timing.end_pts, 90_000)?
             && track.samples.continuous_decode;
         Ok(report(metadata, payload, clocks))
+    }
+}
+
+#[cfg(test)]
+mod hevc_metadata_tests {
+    use super::super::super::native_media::SemanticBox;
+    use super::*;
+
+    #[test]
+    fn hevc_field_box_equivalence_requires_progressive_evidence_and_exact_neutral_value() {
+        let neutral = SemanticBox {
+            kind: *b"fiel",
+            payload: vec![1, 0],
+        };
+        assert!(semantic_boxes_equal(
+            std::slice::from_ref(&neutral),
+            &[],
+            true
+        ));
+        assert!(!semantic_boxes_equal(
+            std::slice::from_ref(&neutral),
+            &[],
+            false
+        ));
+        for value in [vec![2, 1], vec![1, 1], vec![1, 0, 0]] {
+            assert!(!semantic_boxes_equal(
+                &[SemanticBox {
+                    kind: *b"fiel",
+                    payload: value
+                }],
+                &[],
+                true,
+            ));
+        }
+        let colour = SemanticBox {
+            kind: *b"colr",
+            payload: vec![1, 2, 3],
+        };
+        assert!(!semantic_boxes_equal(&[neutral, colour], &[], true));
     }
 }

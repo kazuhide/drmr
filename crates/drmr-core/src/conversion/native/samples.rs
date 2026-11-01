@@ -1,5 +1,5 @@
 //! Bounded sample digests keep packet boundaries and exact rational clocks.
-use super::super::{ConversionError, native_media::SampleInfo, ts::CanonicalConfig};
+use super::super::{ConversionError, hevc, native_media::SampleInfo, ts::CanonicalConfig};
 use crate::sha256::Sha256;
 use std::cmp::Ordering;
 use zeroize::Zeroizing;
@@ -111,6 +111,13 @@ struct Pending {
     canonical_bytes: Zeroizing<Vec<u8>>,
 }
 
+struct Hevc {
+    configuration: hevc::Configuration,
+    width: u8,
+    codec: [u8; 4],
+    payload: Sha256,
+}
+
 pub(super) struct Samples {
     scale: u32,
     expected: u64,
@@ -118,6 +125,7 @@ pub(super) struct Samples {
     raw: Sha256,
     canonical: Option<(CanonicalConfig, u8, Sha256)>,
     avc: Option<super::super::ts::avc::Configuration>,
+    hevc: Option<Hevc>,
     audio_clock: Option<super::audio_clock::AudioClock>,
     clocks: Sha256,
     presentation_clocks: Sha256,
@@ -159,6 +167,7 @@ impl Samples {
             raw: Sha256::new(),
             canonical: canonical.map(|(config, width)| (config, width, Sha256::new())),
             avc,
+            hevc: None,
             audio_clock: None,
             clocks: Sha256::new(),
             presentation_clocks: Sha256::new(),
@@ -203,6 +212,24 @@ impl Samples {
         self.presentation_offset = offset;
         self
     }
+    pub(super) fn with_hevc(
+        mut self,
+        configuration: hevc::Configuration,
+        width: u8,
+        codec: [u8; 4],
+    ) -> Result<Self, ConversionError> {
+        if self.canonical.is_some() || self.hevc.is_some() || !matches!(width, 1 | 2 | 4) {
+            return Err(BAD);
+        }
+        configuration.validate_entry(codec)?;
+        self.hevc = Some(Hevc {
+            configuration,
+            width,
+            codec,
+            payload: Sha256::new(),
+        });
+        Ok(self)
+    }
     fn push_checked(&mut self, info: &SampleInfo, bytes: &[u8]) -> Result<(), ConversionError> {
         if bytes.is_empty() || bytes.len() > super::super::native_media::CHUNK_BYTES {
             return Err(BAD);
@@ -224,6 +251,9 @@ impl Samples {
             if size > MAX_CANONICAL_BYTES {
                 if self.avc.is_some() {
                     return Err(ConversionError("native-avc-access-unit-size-limit"));
+                }
+                if self.hevc.is_some() {
+                    return Err(ConversionError("native-hevc-access-unit-size-limit"));
                 }
                 self.canonical = None;
             }
@@ -251,7 +281,7 @@ impl Samples {
             .filter(|n| *n <= info.size)
             .ok_or(BAD)?;
         self.raw.update(bytes);
-        if self.canonical.is_some() {
+        if self.canonical.is_some() || self.hevc.is_some() {
             if pending.canonical_bytes.capacity() == 0 {
                 pending
                     .canonical_bytes
@@ -270,6 +300,21 @@ impl Samples {
         self.record_sample(info, &pending.canonical_bytes)
     }
     fn record_sample(&mut self, info: &SampleInfo, bytes: &[u8]) -> Result<(), ConversionError> {
+        if let Some(hevc) = &mut self.hevc {
+            let unit = hevc
+                .configuration
+                .length_prefixed_access_unit(bytes, hevc.width, hevc.codec)?;
+            if info.is_sync != unit.is_sync {
+                return Err(ConversionError("native-hevc-sync-sample-mismatch"));
+            }
+            hevc.payload.update(b"access-unit");
+            hevc.configuration.units_with_width(
+                bytes,
+                hevc.width,
+                hevc.codec,
+                &mut hevc.payload,
+            )?;
+        }
         if let Some((config, width, hash)) = &mut self.canonical {
             if let Some(avc) = &self.avc {
                 let unit = avc.length_prefixed_access_unit(bytes, *width)?;
@@ -367,10 +412,14 @@ impl Samples {
         if self.failed || self.pending.is_some() || self.count != self.expected || self.count == 0 {
             return Err(BAD);
         }
+        let canonical_payload = match self.hevc {
+            Some(hevc) => Some(hevc.payload.finalize()),
+            None => self.canonical.map(|(_, _, hash)| hash.finalize()),
+        };
         Ok(SampleEvidence {
             count: self.count,
             raw_payload: self.raw.finalize(),
-            canonical_payload: self.canonical.map(|(_, _, hash)| hash.finalize()),
+            canonical_payload,
             clocks: self.clocks.finalize(),
             presentation_clocks: self.presentation_clocks.finalize(),
             presentation_offset: self.presentation_offset,
@@ -416,6 +465,10 @@ fn same_sample(a: &SampleInfo, b: &SampleInfo) -> bool {
 
 #[cfg(test)]
 mod borrowing_tests;
+
+#[cfg(test)]
+#[path = "hevc_samples_tests.rs"]
+mod hevc_tests;
 
 #[cfg(test)]
 mod tests {

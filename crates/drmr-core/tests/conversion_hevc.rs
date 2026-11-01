@@ -183,7 +183,7 @@ fn real_main_and_main10_sources_have_native_admission_without_decoder_tools() {
 fn native_mp4_clear_cenc_cbcs_clear_roundtrips_keep_the_original() {
     let root = common::private_tempdir().unwrap();
     let empty = InputKeys::default();
-    let (command, events) = converter(ProcessingMode::Auto, false, false);
+    let (command, events) = converter(ProcessingMode::Auto, true, false);
     for (profile, (name, _)) in SEEDS.into_iter().enumerate() {
         let original = fixture(name);
         let before = fs::read(&original).unwrap();
@@ -225,7 +225,7 @@ fn native_mp4_clear_cenc_cbcs_clear_roundtrips_keep_the_original() {
         }
         assert_eq!(fs::read(original).unwrap(), before);
     }
-    assert_tools(&events, false);
+    assert_tools(&events, true);
 }
 
 fn last_resource(entry: &Path) -> PathBuf {
@@ -425,7 +425,8 @@ fn fmp4_hls_dash_modes_and_late_mutations_use_fresh_native_verification() {
 #[test]
 fn malformed_configuration_and_a_late_forbidden_nal_never_publish() {
     let root = common::private_tempdir().unwrap();
-    let (command, events) = converter(ProcessingMode::Auto, false, false);
+    let (validation, validation_events) = converter(ProcessingMode::Auto, false, false);
+    let (command, events) = converter(ProcessingMode::Auto, true, false);
     for (profile, (name, _)) in SEEDS.into_iter().enumerate() {
         let seed = fixture(name);
         let original = fs::read(&seed).unwrap();
@@ -469,6 +470,19 @@ fn malformed_configuration_and_a_late_forbidden_nal_never_publish() {
             let source = root.path().join(format!("{profile}-{label}.mp4"));
             let destination = source.with_extension("result.mp4");
             fs::write(&source, &broken).unwrap();
+            assert!(
+                validation
+                    .validate_source(
+                        VerificationSource {
+                            input: &source,
+                            input_keys: &InputKeys::default(),
+                            hls_keys: &HlsInputKeys::default(),
+                        },
+                        SourceValidationPurpose::Conversion,
+                    )
+                    .is_err(),
+                "{label} must fail complete native admission without a media tool"
+            );
             let result = command.convert(ConversionRequest {
                 input: &source,
                 output: &destination,
@@ -480,21 +494,29 @@ fn malformed_configuration_and_a_late_forbidden_nal_never_publish() {
                 hls_key_uri: None,
                 hls_output_key: None,
             });
-            assert!(result.is_err(), "{label} must fail native admission");
+            let error = result.err().expect("malformed HEVC must fail conversion");
+            assert!(
+                matches!(
+                    error.0,
+                    "invalid-hevc-syntax" | "native-hevc-configuration-not-supported"
+                ),
+                "{label}: {error}"
+            );
             assert!(!destination.exists());
             assert_eq!(fs::read(source).unwrap(), broken);
         }
         assert_eq!(fs::read(seed).unwrap(), original);
     }
-    assert_tools(&events, false);
+    assert_tools(&validation_events, false);
+    assert_tools(&events, true);
 }
 
 #[test]
 fn explicit_decode_adds_complete_main_and_main10_picture_comparison() {
     let root = common::private_tempdir().unwrap();
     let empty = InputKeys::default();
-    let (native, _) = converter(ProcessingMode::Auto, false, false);
-    let (decoded, events) = converter(ProcessingMode::Auto, false, true);
+    let (native, _) = converter(ProcessingMode::Auto, true, false);
+    let (decoded, events) = converter(ProcessingMode::Auto, true, true);
     for (profile, (name, _)) in SEEDS.into_iter().enumerate() {
         let original = fixture(name);
         let (output, keys, _) = convert(

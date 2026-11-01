@@ -124,6 +124,8 @@ fn canonical(
                 Ok(None)
             }
         }
+        // HEVC has its own access-unit evidence and never claims a TS profile.
+        b"hvcC" => Ok(None),
         _ => Err(ConversionError("native-codec-profile-not-supported")),
     }
 }
@@ -136,6 +138,25 @@ pub(super) fn accumulator_with_clock(
     let config = canonical.as_ref().map(|(config, _)| config.clone());
     let mut samples = Samples::new(descriptor.timescale, descriptor.sample_count, canonical)?
         .with_presentation_offset(presentation_offset(descriptor)?);
+    if descriptor.decoder_config_kind == *b"hvcC" {
+        let (configuration, width) =
+            super::super::hevc::Configuration::from_hvcc(&descriptor.decoder_config)?;
+        let metadata = configuration.metadata();
+        if descriptor.sample_entry_metadata.width.map(u32::from) != Some(metadata.width)
+            || descriptor.sample_entry_metadata.height.map(u32::from) != Some(metadata.height)
+        {
+            return Err(ConversionError("native-video-dimensions-mismatch"));
+        }
+        if descriptor
+            .sample_entry_metadata
+            .boxes
+            .iter()
+            .any(|node| node.kind == *b"fiel" && node.payload != [1, 0])
+        {
+            return Err(ConversionError("native-hevc-field-order-not-supported"));
+        }
+        samples = samples.with_hevc(configuration, width, descriptor.codec)?;
+    }
     if descriptor.decoder_config_kind == *b"esds" {
         let aac = native_media::AacConfiguration::parse(&descriptor.decoder_config)?;
         samples = if let Some(clock) = clock {
