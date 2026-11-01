@@ -1,6 +1,7 @@
 """Fuzz evidence comes from matching real CLI counters, never raw diagnostics."""
 import contextlib
 import copy
+import hashlib
 import importlib.util
 import io
 import json
@@ -13,6 +14,7 @@ import tempfile
 import threading
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -133,6 +135,51 @@ class FuzzExecution(unittest.TestCase):
             with patch.object(FUZZ.time, "monotonic", side_effect=[0, 61.36]):
                 record = FUZZ.run_target(runner, binary, "hevc", root)
             self.assertEqual(record["binary_sha256"], FUZZ.CONTRACT.VERIFY.file_digest(binary))
+
+    def test_executable_digest_accepts_api_specific_ctime_clocks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory) / "binary"
+            data = b"same file with distinct API clocks"
+            binary.write_bytes(data)
+            actual = binary.stat()
+            fields = {name: getattr(actual, name) for name in
+                      ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_mode")}
+            path = SimpleNamespace(**fields, st_ctime_ns=100, st_file_attributes=0)
+            descriptor = SimpleNamespace(**fields, st_ctime_ns=200, st_file_attributes=0)
+            with patch.object(FUZZ.Path, "lstat", return_value=path), \
+                 patch.object(FUZZ.os, "fstat", return_value=descriptor):
+                self.assertEqual(FUZZ.binary_digest(binary), hashlib.sha256(data).hexdigest())
+
+    def test_executable_digest_keeps_each_clock_and_all_file_bindings_strict(self):
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory) / "PRIVATE_FILENAME"
+            binary.write_bytes(b"private input")
+            actual = binary.stat()
+            fields = {name: getattr(actual, name) for name in
+                      ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_mode")}
+            original = [SimpleNamespace(**fields, st_ctime_ns=clock, st_file_attributes=0)
+                        for clock in (100, 100, 200, 200)]
+            # Path-before, path-after, descriptor-before, descriptor-after.
+            changes = [(1, "st_ctime_ns", 101), (3, "st_ctime_ns", 201)]
+            for index in range(4):
+                changes.extend((index, name, fields[name] + 1)
+                               for name in ("st_dev", "st_ino", "st_size", "st_mtime_ns"))
+                changes.extend(((index, "st_mode", FUZZ.stat.S_IFDIR),
+                                (index, "st_mode", FUZZ.stat.S_IFLNK),
+                                (index, "st_file_attributes", 0x400)))
+            for index, name, value in changes:
+                snapshots = copy.deepcopy(original)
+                setattr(snapshots[index], name, value)
+                path_calls = iter((snapshots[0], snapshots[1]))
+                def by_path(_):
+                    return next(path_calls, snapshots[1])
+                with self.subTest(snapshot=index, field=name), \
+                     patch.object(FUZZ.Path, "lstat", by_path), \
+                     patch.object(FUZZ.os, "fstat", side_effect=snapshots[2:]), \
+                     self.assertRaises(FUZZ.CONTRACT.Failure) as error:
+                    FUZZ.binary_digest(binary)
+                self.assertNotIn("PRIVATE_FILENAME", str(error.exception))
+                self.assertIn(str(error.exception), ("fuzz-binary-invalid", "fuzz-binary-changed"))
 
     def test_executable_digest_has_a_fixed_cap_and_only_reads_small_chunks(self):
         self.assertEqual(FUZZ.MAX_BINARY_BYTES, 256 * 1024 * 1024)

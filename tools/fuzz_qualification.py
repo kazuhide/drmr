@@ -78,12 +78,17 @@ def binary_digest(binary):
     """Retain read_regular's identity checks without buffering an executable."""
     binary = Path(binary)
     flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+    def identity(value):
+        return value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns
+    def regular(value):
+        return stat.S_ISREG(value.st_mode) and not getattr(value, "st_file_attributes", 0) & 0x400
     try:
-        CONTRACT.require(not binary.is_symlink(), "fuzz-binary-invalid")
+        initial = binary.lstat()
+        CONTRACT.require(regular(initial), "fuzz-binary-invalid")
         with os.fdopen(os.open(binary, flags), "rb") as stream:
             before = os.fstat(stream.fileno())
-            CONTRACT.require(stat.S_ISREG(before.st_mode) and 0 < before.st_size <= MAX_BINARY_BYTES
-                             and not getattr(before, "st_file_attributes", 0) & 0x400, "fuzz-binary-invalid")
+            CONTRACT.require(regular(before) and 0 < before.st_size <= MAX_BINARY_BYTES, "fuzz-binary-invalid")
+            CONTRACT.require(identity(initial) == identity(before), "fuzz-binary-changed")
             digest, size = hashlib.sha256(), 0
             while True:
                 block = stream.read(min(65536, before.st_size + 1 - size))
@@ -93,10 +98,11 @@ def binary_digest(binary):
                 CONTRACT.require(size <= before.st_size, "fuzz-binary-changed")
                 digest.update(block)
             after, current = os.fstat(stream.fileno()), binary.lstat()
-            def identity(value):
-                return value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns
-            CONTRACT.require(size == before.st_size and identity(before) == identity(after) == identity(current)
-                             and stat.S_ISREG(current.st_mode) and not binary.is_symlink(), "fuzz-binary-changed")
+            # Windows can expose creation time through lstat and change time
+            # through fstat. Compare each ctime only within the same API.
+            CONTRACT.require(size == before.st_size and identity(initial) == identity(before) == identity(after) == identity(current)
+                             and before.st_ctime_ns == after.st_ctime_ns and initial.st_ctime_ns == current.st_ctime_ns
+                             and regular(after) and regular(current), "fuzz-binary-changed")
         return digest.hexdigest()
     except OSError:
         raise CONTRACT.Failure("fuzz-binary-invalid") from None
