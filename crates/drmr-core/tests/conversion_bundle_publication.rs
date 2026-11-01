@@ -363,7 +363,8 @@ fn refuse_changed_output(point: MutationPoint) {
         );
     assert!(
         observed.fired.load(Ordering::SeqCst),
-        "the requested publication window was reached"
+        "the requested publication window was reached; conversion_error={:?}",
+        result.as_ref().err().map(|error| error.0)
     );
     let mutations = observed.mutations.lock().unwrap().clone();
     assert_eq!(
