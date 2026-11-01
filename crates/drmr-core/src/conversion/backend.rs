@@ -312,6 +312,7 @@ impl Backend {
             &Path::new(&output).join("init.mp4"),
             &self.stop,
         )?;
+        self.finish_vp9_flat_hls(Path::new(&input), Path::new(&output))?;
         Ok(())
     }
     pub fn profile(

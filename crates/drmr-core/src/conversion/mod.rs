@@ -367,7 +367,7 @@ impl Converter {
         }
         let actual = validate(&localized.combined, input_keys)?;
         let key = source_key(&actual, input_keys);
-        let check = self.backend.verify_views(
+        let check = self.backend.verify_source_views(
             verify::StreamView::new(&localized.reference, 0, key)
                 .with_metadata(&localized.combined),
             verify::StreamView::new(&localized.combined, 0, key),

@@ -3,8 +3,9 @@ mod manifest;
 use super::Backend;
 use crate::conversion::{
     ConversionError, Converter, InputKeys, OutputKey, SourceValidationPurpose,
-    TrackConversionRequest,
+    TrackConversionRequest, VerificationReport,
     native_media::{self, Vp9Protection},
+    verify::StreamView,
 };
 use crate::inspection::TargetProtection;
 use std::path::{Path, PathBuf};
@@ -107,6 +108,51 @@ fn retained_bytes(rows: &[Rendition]) -> Result<u64, ConversionError> {
 }
 
 impl Backend {
+    /// Both views are the same provided source, before any generated output.
+    pub(in crate::conversion) fn verify_source_views(
+        &self,
+        source: StreamView<'_>,
+        view: StreamView<'_>,
+    ) -> Result<VerificationReport, ConversionError> {
+        self.vp9_admission_scope(SourceValidationPurpose::Conversion)
+            .verify_views(source, view)
+    }
+
+    pub(in crate::conversion) fn finish_vp9_flat_hls(
+        &self,
+        source: &Path,
+        output: &Path,
+    ) -> Result<(), ConversionError> {
+        let source = native_media::inspect(source, &self.stop)?;
+        let descriptor = source.tracks.first().ok_or(BAD)?;
+        if descriptor.codec != *b"vp09" {
+            return Ok(());
+        }
+        let _permit = self.native_sample_permit()?;
+        let root = output.canonicalize().map_err(|_| BAD)?;
+        let rows = manifest::graph(&root, crate::inspection::OutputFormat::Hls, &self.stop)?;
+        let [row] = rows.as_slice() else {
+            return Err(BAD);
+        };
+        native_media::restore_vp9_level(
+            &row.initialization,
+            &descriptor.decoder_config,
+            &self.stop,
+        )?;
+        let actual = native_media::inspect(&row.initialization, &self.stop)?;
+        let [track] = actual.tracks.as_slice() else {
+            return Err(BAD);
+        };
+        let codec = crate::conversion::segments::fmp4_codec(track)?;
+        manifest::finish(
+            &root,
+            crate::inspection::OutputFormat::Hls,
+            &rows,
+            &[Some(codec)],
+            &self.stop,
+        )
+    }
+
     pub(in crate::conversion) fn admit_vp9_encrypted_input(
         &self,
         input: &Path,

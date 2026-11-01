@@ -3,9 +3,16 @@ use super::{TrackDescriptor, scan};
 use crate::{
     concurrency::Stop,
     conversion::{
-        CheckOutcome, ContentKey, ConversionRequest, Converter, DecodeEvidence, HlsInputKeys,
-        InputKeys, OutputKey, ProcessingMode, SourceValidationPurpose, ValidationDepth,
-        VerificationReport, VerificationRequest, VerificationSource, key_file, vp9,
+        Aes128Key, CheckOutcome, ContentKey, ConversionRequest, Converter, DecodeEvidence,
+        HlsInputKeys, HlsOutputKey, InputKeys, OutputKey, ProcessingMode, SourceValidationPurpose,
+        ValidationDepth, VerificationReport, VerificationRequest, VerificationSource,
+        conformance::ManifestValidationTools,
+        key_file,
+        plan::{
+            self,
+            bundle::{BundleOutputIntent, BundlePlanRequest, ManifestValidation},
+        },
+        vp9,
     },
     events::Collector,
     inspection::{OutputFormat, TargetProtection},
@@ -811,19 +818,42 @@ fn all_six_direct_mp4_outputs_have_independently_verified_prefix_senc_ranges() {
 }
 
 fn prepare_manifest(input: &Path, root: &Path, format: OutputFormat) -> PathBuf {
+    prepare_manifest_protection(input, root, format, false)
+}
+
+fn prepare_manifest_protection(
+    input: &Path,
+    root: &Path,
+    format: OutputFormat,
+    protected: bool,
+) -> PathBuf {
     crate::native::create_media_dir_all(root).unwrap();
     let mut command = Command::new("packager");
     command.arg("--single_threaded").arg(format!(
-        "input={},stream=video,init_segment={},segment_template={},playlist_name=video.m3u8",
+        "input={},stream=video,init_segment={},segment_template={},playlist_name=video.m3u8{}",
         input.display(),
         root.join("init.mp4").display(),
-        root.join("segment-$Number$.m4s").display()
+        root.join("segment-$Number$.m4s").display(),
+        if protected { ",drm_label=VIDEO" } else { "" },
     ));
     command.args([
         "--segment_duration",
         "2",
         "--mp4_reset_initial_composition_offset_to_zero=false",
     ]);
+    if protected {
+        command.args([
+            "--enable_raw_key_encryption",
+            "--keys",
+            &format!("label=VIDEO:key_id={KID}:key={KEY}"),
+            "--protection_scheme",
+            "cenc",
+            "--clear_lead",
+            "0",
+            "--hls_key_uri",
+            URI,
+        ]);
+    }
     match format {
         OutputFormat::Hls => {
             command
@@ -1004,7 +1034,7 @@ fn joint_vp9_aac_mp4_has_canonical_video_ranges_and_fresh_native_proof() {
     assert_eq!(fs::read(input).unwrap(), original);
 }
 
-fn prepare_tail(input: &Path, output: &Path) {
+pub(in crate::conversion) fn prepare_tail(input: &Path, output: &Path) {
     run(Command::new("packager")
         .arg("--single_threaded")
         .arg(format!(
@@ -1235,4 +1265,231 @@ fn shaka_tail_sources_require_explicit_repair_and_cannot_verify_as_final_outputs
     assert_forbidden_ranges(&independent, &video, root.path());
     assert_eq!(fs::read(&tail).unwrap(), tail_bytes);
     assert_eq!(fs::read(input).unwrap(), original);
+}
+
+fn outer_keys() -> (HlsOutputKey, HlsInputKeys) {
+    (
+        HlsOutputKey::new(URI, Aes128Key::from_hex(KEY).unwrap()).unwrap(),
+        HlsInputKeys::new(vec![(URI.into(), Aes128Key::from_hex(KEY).unwrap())]).unwrap(),
+    )
+}
+
+fn verify_outer(input: &Path, input_keys: &InputKeys, output: &Path, hls_keys: &HlsInputKeys) {
+    let (fresh, events) = command(ProcessingMode::Auto, false);
+    proof(
+        &fresh
+            .verify(VerificationRequest {
+                source: source(input, input_keys, &HlsInputKeys::default()),
+                output: source(&output.join("media.m3u8"), &InputKeys::default(), hls_keys),
+            })
+            .unwrap(),
+    );
+    tools(&events, false);
+}
+
+fn assert_outer_codec(output: &Path, expected: &str) {
+    let master = fs::read_to_string(output.join("master.m3u8")).unwrap();
+    let values: Vec<_> = master
+        .lines()
+        .filter_map(|line| line.strip_prefix("#EXT-X-STREAM-INF:"))
+        .map(|line| {
+            crate::m3u8::parse_attributes(line)
+                .unwrap()
+                .get("CODECS")
+                .unwrap()
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(values, [expected]);
+}
+
+#[test]
+fn vp9_review_public_flat_aes128_preserves_declared_levels_and_full_codecs() {
+    let root = crate::native::private_tempdir().unwrap();
+    let seed = fixture(SEEDS[0]);
+    let original = fs::read(&seed).unwrap();
+    let nodes = mp4::parse_boxes(&original).unwrap();
+    let config = mp4::walk(&nodes)
+        .into_iter()
+        .find(|node| node.kind() == *b"vpcC")
+        .unwrap();
+    let (key, hls_keys) = outer_keys();
+    let empty = InputKeys::default();
+    for level in [0, 20, 11] {
+        let mut bytes = original.clone();
+        bytes[config.header.offset + config.header.header_size + 5] = level;
+        let input = root.path().join(format!("level-{level}.mp4"));
+        fs::write(&input, &bytes).unwrap();
+        let codec = initialization_codec(&input);
+        for mode in [ProcessingMode::Auto, ProcessingMode::Stitch] {
+            let (converter, events) = command(mode, true);
+            let output = root.path().join(format!("flat-{level}-{mode:?}"));
+            proof(
+                &converter
+                    .convert_hls_aes128(&input, &output, &empty, &key)
+                    .unwrap()
+                    .verification,
+            );
+            assert_outer_codec(&output, &codec);
+            verify_outer(&input, &empty, &output, &hls_keys);
+            let rekeyed = root.path().join(format!("flat-rekey-{level}-{mode:?}"));
+            proof(
+                &converter
+                    .convert_hls_to_hls_aes128(
+                        &output.join("media.m3u8"),
+                        &rekeyed,
+                        &empty,
+                        &hls_keys,
+                        &key,
+                    )
+                    .unwrap()
+                    .verification,
+            );
+            assert_outer_codec(&rekeyed, &codec);
+            verify_outer(&input, &empty, &rekeyed, &hls_keys);
+            tools(&events, true);
+        }
+        assert_eq!(fs::read(input).unwrap(), bytes);
+    }
+    assert_eq!(fs::read(seed).unwrap(), original);
+}
+
+fn tail_manifest(root: &Path, format: OutputFormat) -> PathBuf {
+    let input = fixture(SEEDS[0]);
+    let entry = prepare_manifest_protection(&input, root, format, true);
+    assert_binding(&plain_video(&input), root, false);
+    entry
+}
+
+#[test]
+fn vp9_review_direct_tail_hls_to_outer_aes128_uses_source_admission_only() {
+    let root = crate::native::private_tempdir().unwrap();
+    let input_root = root.path().join("source");
+    let input = tail_manifest(&input_root, OutputFormat::Hls);
+    let before = snapshot(&input_root);
+    let (key, hls_keys) = outer_keys();
+    for mode in [ProcessingMode::Auto, ProcessingMode::Stitch] {
+        let (converter, events) = command(mode, true);
+        let output = root.path().join(format!("outer-{mode:?}"));
+        proof(
+            &converter
+                .convert_hls_to_hls_aes128(
+                    &input_root.join("video.m3u8"),
+                    &output,
+                    &keys(),
+                    &HlsInputKeys::default(),
+                    &key,
+                )
+                .unwrap()
+                .verification,
+        );
+        assert_outer_codec(&output, &initialization_codec(&input_root.join("init.mp4")));
+        verify_outer(&input, &keys(), &output, &hls_keys);
+        tools(&events, true);
+    }
+    assert_eq!(snapshot(&input_root), before);
+}
+
+#[test]
+fn vp9_review_generic_tail_hls_and_dash_use_source_only_view_comparison() {
+    let root = crate::native::private_tempdir().unwrap();
+    let video = plain_video(&fixture(SEEDS[0]));
+    let key = OutputKey::from_hex(KID, KEY).unwrap();
+    for format in [OutputFormat::Hls, OutputFormat::Dash] {
+        let input_root = root.path().join(format!("source-{}", format.as_str()));
+        let input = tail_manifest(&input_root, format);
+        let before = snapshot(&input_root);
+        for mode in [ProcessingMode::Auto, ProcessingMode::Stitch] {
+            let (converter, events) = command(mode, true);
+            let output = root
+                .path()
+                .join(format!("result-{}-{mode:?}", format.as_str()));
+            proof(
+                &converter
+                    .convert(request(
+                        &input,
+                        &keys(),
+                        &output,
+                        OutputFormat::Dash,
+                        &HlsInputKeys::default(),
+                        &key,
+                    ))
+                    .unwrap()
+                    .verification,
+            );
+            assert_binding(&video, &output, true);
+            assert_manifest_codecs(&output, OutputFormat::Dash);
+            verify_from(
+                &input,
+                &keys(),
+                &entry(&output, OutputFormat::Dash),
+                &keys(),
+            );
+            tools(&events, true);
+        }
+        assert_eq!(snapshot(&input_root), before);
+    }
+}
+
+#[test]
+fn vp9_review_saved_bundle_verifies_tail_source_but_refuses_tail_output() {
+    let root = crate::native::private_tempdir().unwrap();
+    let input = root.path().join("tail.mp4");
+    prepare_tail(&fixture(SEEDS[0]), &input);
+    let original = fs::read(&input).unwrap();
+    let output_root = root.path().join("bundle");
+    let input_keys = keys();
+    let hls = HlsInputKeys::default();
+    let intents = [BundleOutputIntent {
+        id: "mp4".into(),
+        format: OutputFormat::Mp4,
+        target: TargetProtection::Cenc,
+        drms: Vec::new(),
+        conformance: ManifestValidation::None,
+        processing: None,
+        dash_addressing: None,
+    }];
+    let (converter, events) = command(ProcessingMode::Auto, true);
+    let plan = converter
+        .create_bundle_plan(BundlePlanRequest {
+            input: source(&input, &input_keys, &hls),
+            output_root: &output_root,
+            outputs: &intents,
+        })
+        .unwrap();
+    let saved = root.path().join("bundle.json");
+    plan::write_bundle(&saved, &plan).unwrap();
+    let plan::SavedPlan::Bundle(reopened) = plan::read_saved(&saved).unwrap() else {
+        panic!("bundle expected");
+    };
+    let mut operator = key_file::BundleOperatorKeys {
+        input: keys(),
+        ..Default::default()
+    };
+    let mut output_keys = key_file::OperatorKeys::default();
+    output_keys.output = Some(OutputKey::from_hex(KID, KEY).unwrap());
+    operator.outputs.insert("mp4".into(), output_keys);
+    converter
+        .execute_bundle_plan(&reopened, &operator, &ManifestValidationTools::default())
+        .unwrap();
+    let (fresh, fresh_events) = command(ProcessingMode::Auto, false);
+    assert!(
+        fresh
+            .verify_bundle_plan(&reopened, &operator, &ManifestValidationTools::default())
+            .unwrap()
+            .passed
+    );
+    let output = output_root.join("mp4/media.mp4");
+    assert_binding(&plain_video(&fixture(SEEDS[0])), &output, true);
+    fs::write(&output, &original).unwrap();
+    assert_eq!(
+        fresh
+            .verify_bundle_plan(&reopened, &operator, &ManifestValidationTools::default())
+            .unwrap_err()
+            .0,
+        LAYOUT
+    );
+    assert_eq!(fs::read(&input).unwrap(), original);
+    tools(&events, true);
+    tools(&fresh_events, false);
 }

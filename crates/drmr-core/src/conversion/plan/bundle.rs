@@ -610,7 +610,7 @@ impl Converter {
                     .map(|output| plan.processing_mode(&output.id)),
             ))
             .with_decode(false)
-            .validate_source(source, SourceValidationPurpose::Verification)?;
+            .validate_source(source, SourceValidationPurpose::Conversion)?;
         command.register_bundle_tracks(qualified.track_protection.len());
         revalidate_output_settings(&command, plan, source.input, &qualified)?;
         let manifests = outputs::ManifestDemands::capture(&command, plan)?;

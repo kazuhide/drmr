@@ -2538,7 +2538,7 @@ impl Converter {
                         .with_all_keys(input_keys),
                     )?
                 } else {
-                    self.backend.verify_views(
+                    self.backend.verify_source_views(
                         StreamView::new(&source.source, source.index, key_for(source, input_keys))
                             .with_metadata(&source.media)
                             .with_clock(source.clock),

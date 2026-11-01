@@ -53,7 +53,7 @@ mod test_files;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
-mod vp9_binding_tests;
+pub(in crate::conversion) mod vp9_binding_tests;
 #[cfg(test)]
 mod vp9_tests;
 
