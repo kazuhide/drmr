@@ -16,6 +16,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import roundtrip_reports
+import codec_reports
 
 SPEC = importlib.util.spec_from_file_location("prepare_release", Path(__file__).resolve().parents[1] / "prepare_release.py")
 PREPARE = importlib.util.module_from_spec(SPEC)
@@ -57,7 +58,7 @@ class FakeGitHub:
                      "native_manifest": {"schema_version": 1, "scope": "manifest-only", "profile": "dash-static-manifest", "errors": 0,
                                          "warnings": 0, "truncated": False, "incomplete": False, "document_count": 1}}
             graph = {"sha256": "d" * 64, "files": 7, "bytes": 10000}
-            media = {"schema_version": 1, "success": True, "kind": "native-cli-archive-media", "source_head": head, "source_tree": tree,
+            media = {"schema_version": 2, "success": True, "kind": "native-cli-archive-media", "source_head": head, "source_tree": tree,
                      "target": target, "version": "1.0.0", "binary_reported_version": "1.0.0", "archive_sha256": archive_hash,
                      "binary_sha256": binary_hash, "archive_files": 100, "dependency_packages": 20, "native_ordinary_user": True,
                      "owned_workspace_cleanup": "confirmed", "limits": PREPARE.MEDIA_LIMITS,
@@ -89,6 +90,7 @@ class FakeGitHub:
                                       "duration": 2089} for packet in range(432)]})}
             audio.pop("prepared_source_against_original_video")
             media["aac_44100"] = audio
+            media["codecs"] = codec_reports.complete(PREPARE.CODECS, "smoke", head, tree, target, "1.0.0", archive_hash, binary_hash)
             self.entries[name] = [("drmr-1.0.0-" + target + suffix, archive), ("cli-archive-verification.json", json.dumps(archive_report).encode()),
                                   ("cli-media-qualification.json", json.dumps(media).encode())]
             self.artifacts[name] = {"id": 200 + index, "name": name, "expired": False, "created_at": "2026-10-22T00:10:00Z",
@@ -204,6 +206,13 @@ class ReleasePacket(unittest.TestCase):
         self.assertFalse(result["publication_ready"])
         self.assertFalse(manifest["publication_ready"])
         self.assertEqual(manifest["kind"], "native-cli-roundtrip-inputs")
+
+    def test_h264_aac_archive_proof_without_codec_smoke_cannot_be_staged(self):
+        name = PREPARE.TARGETS[0][1]
+        self.client.report(name, "cli-media-qualification.json", lambda value: value.pop("codecs", None))
+        with self.assertRaises(PREPARE.Failure):
+            self.prepare()
+        self.assertFalse(self.output.exists())
 
     def test_successful_workflow_cannot_hide_missing_skipped_or_unbound_native_jobs(self):
         original = copy.deepcopy(self.client.jobs)
@@ -343,8 +352,12 @@ class ReleasePacket(unittest.TestCase):
                     patch.object(QUALIFY.VERIFY, "qualify", return_value=archive_proof), patch.object(QUALIFY, "extract_cli", side_effect=extract), \
                     patch.object(QUALIFY, "Runner", return_value=runner), patch.object(QUALIFY, "media", return_value=previous["media"]), \
                     patch.object(QUALIFY, "audio_media", return_value=previous["aac_44100"]), \
+                    patch.object(QUALIFY, "codec_media", return_value=previous["codecs"]) as codecs, \
                     patch.object(QUALIFY, "metadata_analysis", return_value=previous["metadata_analysis"]) as metadata:
                 result = QUALIFY.qualify(candidate, target, "1.0.0", self.root)
+                self.assertEqual(codecs.call_count, 1)
+                self.assertEqual(codecs.call_args.args[2], {name: previous[name] for name in (
+                    "source_head", "source_tree", "target", "version", "archive_sha256", "binary_sha256")})
                 metadata.assert_called_once_with(runner.workspace / ("drmr.exe" if target.endswith("windows-msvc") else "drmr"),
                                                  runner, runner.workspace / "dash/manifest.mpd")
             self.client.report(artifact, "cli-media-qualification.json", lambda report: (report.clear(), report.update(result)))

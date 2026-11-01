@@ -17,6 +17,7 @@ def module(name):
 
 EXAMPLES = module("conversion_examples")
 EVIDENCE = module("media_evidence")
+CODECS = module("codec_contract")
 LAYOUTS = ("video", "aac44100", "aac48000", "video-aac44100", "video-aac48000")
 OUTPUTS = tuple((container, protection) for container in ("mp4", "dash", "hls-fmp4", "hls-ts")
                 for protection in (("clear", "hls-aes128", "hls-sample-aes") if container == "hls-ts"
@@ -157,8 +158,8 @@ def validate(report, head, tree, target, version, archive_hash, binary_hash):
     exact(report, ("schema_version", "kind", "success", "source_head", "source_tree", "target", "version",
                    "archive_sha256", "binary_sha256", "binary_header_target", "binary_reported_version",
                    "fixture_sha256", "matrix_sha256", "native_ordinary_user", "required_depth", "decode_evidence",
-                   "license_playback_verified", "fixture_metadata", "fixture_profiles", "records", "counts", "owned_workspace_cleanup", "limits"))
-    require(type(report["schema_version"]) is int and report["schema_version"] == 1
+                   "license_playback_verified", "fixture_metadata", "fixture_profiles", "records", "counts", "codecs", "owned_workspace_cleanup", "limits"))
+    require(type(report["schema_version"]) is int and report["schema_version"] == 2
             and report["kind"] == "native-cli-release-roundtrip" and report["success"] is True
             and report["source_head"] == head and report["source_tree"] == tree
             and report["target"] == target and report["version"] == version
@@ -214,4 +215,8 @@ def validate(report, head, tree, target, version, archive_hash, binary_hash):
                                  "failed": 0, "not_checked": 0, "not_qualified": expected_counts["layout-condition"],
                                  "kinds": expected_counts},
             "roundtrip-counts-invalid")
+    try:
+        CODECS.validate(report["codecs"], "full", head, tree, target, version, archive_hash, binary_hash)
+    except CODECS.Failure:
+        raise Failure("roundtrip-codec-proof-invalid") from None
     return report

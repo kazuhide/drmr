@@ -177,7 +177,7 @@ requirements and remaining scope limits. These checks supplement the existing
 unit, media, manifest and archive-content tests; they do not claim universal
 media or DRM-device compatibility.
 
-The current source's archive qualifier defines 18 stages: the original 11-stage
+The current source's archive qualifier retains 18 decoded/metadata stages: the original 11-stage
 video workflow, six stages that create and probe a 44.1 kHz AAC TS fixture,
 then analyze it, save a plan, convert it to CBCS DASH, and independently verify it,
 and a metadata-only analysis of the retained clear DASH source. The metadata
@@ -192,6 +192,60 @@ in the workflow to succeed for the same source.
 The existing v1.0.0 assets and their original 11-stage reports are unchanged.
 These additional checks apply to newly built CI archives; they do not qualify the
 old release archives for 44.1 kHz input.
+
+## Codec checks on extracted archives
+
+Current CI also checks the extracted Linux, macOS and Windows CLI against the
+committed ten-second HEVC Main/Main10 and six VP9 profile/depth fixtures.
+These checks do not rebuild or regenerate the fixtures. Each fixture runs
+`analyze`, saves a native execution plan, converts using that exact plan, and
+independently verifies the result. A return conversion is then compared directly
+with the original fixture. HEVC smoke cases use CBCS fMP4 HLS with FairPlay,
+Widevine and PlayReady declarations; VP9 smoke cases use CENC DASH with Widevine
+and PlayReady declarations.
+
+The eight normal-CI round trips are distinct from the full codec matrix below.
+Both scopes require 38 refusal controls: unsupported MPEG-TS output for every
+fixture, VP9/CBCS output, missing and incorrect keys, and one changed media
+sample. Decoder executables are unavailable during codec checks. A native pass
+establishes complete sample, metadata, timing and manifest consistency; it does
+not establish decoded-pixel equality, HDR, license acquisition or device playback.
+
+To qualify a previously built CI archive on its native system without creating a
+tag or release, use a clean checkout of its exact source revision:
+
+```sh
+python3 tools/codec_qualification.py \
+  --archive /path/to/ci-archive.tar.gz \
+  --target aarch64-apple-darwin --expected-version 1.0.3 \
+  --source /path/to/exact-source --scope full --jobs 4 \
+  --report /path/outside/source/codec-qualification.json
+```
+
+Choose the actual target and archive name; Windows accepts its `.zip` archive.
+The command rechecks archive contents, notices, native executable header and
+version, then binds the codec report to the source commit/tree and archive/binary
+hashes. It neither compiles the CLI nor repeats the H.264/AAC release matrix.
+It refuses elevated or non-native execution. `--scope smoke` runs only the eight
+representative round trips; that report cannot substitute for a full report.
+Reports contain fixed classifications and allowlisted evidence, not temporary
+keys, paths or child-process output. All owned media and keys are removed after
+checking. This source qualification does not change existing v1.0.3 archives.
+
+The `Codec archives` manual workflow runs this full check on all three native
+systems using archives from successful `CI` and `Windows` runs. Choose the two
+run IDs for the same exact source commit, then dispatch it without publishing:
+
+```sh
+gh workflow run codec-archives.yml \
+  -f ci_run_id=CI_RUN_ID -f windows_run_id=WINDOWS_RUN_ID
+```
+
+The workflow validates run and archive identities before native execution and
+retains the three full codec reports as CI artifacts. It fetches locked package
+metadata for archive verification but does not rebuild the CLI or repeat full
+source regressions. All three native jobs must finish successfully; a successful
+smoke run alone does not establish full-matrix qualification.
 
 ## Release-only round-trip qualification
 
@@ -224,13 +278,22 @@ arbitrary original HLS selection groups or player selection attributes; see
 Each matrix cell expands to the input protection schemes and qualified track
 layouts. The matrix uses automatic processing and default DASH `SegmentTemplate`
 references; separate regressions cover other processing and addressing options.
-The report contains 845 explicit records across 13 input and output profiles:
+The report retains 845 H.264/AAC records across 13 input and output profiles:
 
 | Records per native archive | Required check |
 | --- | --- |
 | 761 reversible cases | Convert A → B, independently verify B against A, convert B → A, independently verify the return leg, and compare final A directly with original A |
 | 42 joint MP4 → DASH/HLS cases | Convert and independently verify the forward direction; the reverse joint DASH/HLS → MP4 layout is not qualified |
 | 42 joint DASH/HLS → MP4 conditions | Explicitly record the single-track MP4 output restriction rather than report a successful conversion |
+
+An additional codec report requires 534 reversible cases: all 100 valid
+container/protection pairs for each HEVC fixture, all 49 pairs for each VP9
+fixture, and 40 explicit `segments`/`stitch` cases for same-container DASH and
+fMP4 HLS. HEVC uses clear, CENC and CBCS in MP4, DASH and fMP4 HLS; VP9 uses
+clear and CENC. Both also cover whole-resource AES-128 fMP4 HLS. Protected-to-
+protected cases use distinct output keys, and every return result is checked
+against the original clear fixture. VP9/CBCS and MPEG-TS output remain refusal
+controls rather than successful matrix cells.
 
 These are codec and layout conditions, not a claim that every possible input
 bitstream is supported. Multiple video qualities are not silently selected for
@@ -251,7 +314,9 @@ the conversion matrix itself uses native complete-media verification without
 path containing only failing FFmpeg/FFprobe guards. A native preflight checks
 that both guards refuse execution, so an unintended external inspection or
 decoding fallback cannot qualify. The existing 18-stage archive qualification retains its separate
-decoded checks. Neither report establishes DRM license acquisition or device
+decoded checks. Archive-media and release-roundtrip report schema 2 require the
+scope-bound codec report; older reports without it cannot qualify a new release.
+These report versions are independent of the CLI version. Neither report establishes DRM license acquisition or device
 playback.
 
 The `cli-release-roundtrip-TARGET.json` assets bind the source commit and tree,

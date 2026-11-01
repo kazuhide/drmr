@@ -39,6 +39,12 @@ class ReleaseMatrix(unittest.TestCase):
         self.assertFalse(value["license_playback_verified"])
         self.assertLess(len(json.dumps(value, indent=2)), ROUNDTRIP.PREPARE.MAX_ROUNDTRIP_REPORT)
 
+    def test_h264_aac_matrix_alone_cannot_qualify_a_codec_aware_release(self):
+        value = roundtrip_reports.complete(CONTRACT)
+        value.pop("codecs", None)
+        with self.assertRaises(CONTRACT.Failure):
+            self.validate(value)
+
     def test_tuple_writer_and_list_case_profiles_keep_the_same_actual_providers(self):
         for profile in CONTRACT.OUTPUTS:
             expected = roundtrip_reports.providers(profile)
