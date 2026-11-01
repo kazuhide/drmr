@@ -219,6 +219,78 @@ class CodecMatrix(unittest.TestCase):
                     "target": "aarch64-apple-darwin", "version": "1.0.3", "archive_sha256": archive_hash, "binary_sha256": binary_hash})
             self.assertEqual(list(root.iterdir()), [archive_path])
 
+    def test_partial_submission_cancels_owned_futures_before_wait_and_cleans_up(self):
+        for interruption in (KeyboardInterrupt, RuntimeError):
+            with self.subTest(interruption=interruption.__name__), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                archive_path = root / "candidate.archive"
+                archive_path.write_bytes(b"archive")
+                source = Mock(head="a" * 40, tree="b" * 40)
+                fixture = RUN.CONTRACT.FIXTURES[0]
+                source.read.return_value = (RUN.CONTRACT.ROOT / fixture["path"]).read_bytes()
+                archive = {"success": True, "archive_sha256": CONTRACT.sha(b"archive"),
+                           "binaries": {"drmr": {"sha256": CONTRACT.sha(b"binary")}}}
+                executor = Mock(cancel=threading.Event(), convert=Mock(return_value=(Path("unused"), {})))
+                case = RUN.CONTRACT.cases("smoke")[0]
+                cases = [{**case, "id": str(index)} for index in range(3)]
+                started, observed, before_wait, submitted = [], [], [], []
+                ready, release = threading.Event(), threading.Event()
+                pool_type = RUN.concurrent.futures.ThreadPoolExecutor
+                real_submit, real_exit = pool_type.submit, pool_type.__exit__
+                workspace_factory = RUN.SUPPORT.Workspace
+
+                def work(item, *_):
+                    if executor.cancel.is_set():
+                        return {**item, "status": "not-checked"}
+                    started.append(item["id"])
+                    ready.set()
+                    release.wait(2)
+                    observed.append(executor.cancel.is_set())
+                    return {**item, "status": "not-checked"}
+
+                def submit(pool, *args, **kwargs):
+                    future = real_submit(pool, *args, **kwargs)
+                    submitted.append(future)
+                    if len(submitted) == 3:
+                        self.assertTrue(ready.wait(2))
+                        raise interruption()
+                    return future
+
+                def finish(pool, *args):
+                    before_wait.append(executor.cancel.is_set())
+                    release.set()
+                    return real_exit(pool, *args)
+
+                def extract(_archive, _target, _digest, output):
+                    output.write_bytes(b"binary")
+                    return output
+
+                controls = (patch.object(RUN.SUPPORT, "require_native"), patch.object(RUN.SUPPORT, "require_version"),
+                            patch.object(RUN.SUPPORT.VERIFY, "command", return_value=b""),
+                            patch.object(RUN.SUPPORT.VERIFY, "Source", return_value=source),
+                            patch.object(RUN.SUPPORT.VERIFY, "metadata", return_value={}),
+                            patch.object(RUN.SUPPORT.VERIFY, "build_expectation", return_value={}),
+                            patch.object(RUN.SUPPORT.VERIFY, "qualify", return_value=archive),
+                            patch.object(RUN.SUPPORT, "Workspace", side_effect=lambda: workspace_factory(parent=root)),
+                            patch.object(RUN.SUPPORT, "extract_cli", side_effect=extract),
+                            patch.object(RUN.SUPPORT, "Runner", return_value=Mock(run=Mock(return_value=b"drmr 1.0.3\n"))),
+                            patch.object(RUN, "Executor", return_value=executor),
+                            patch.object(RUN.CONTRACT, "FIXTURES", (fixture,)),
+                            patch.object(RUN.CONTRACT, "cases", return_value=cases),
+                            patch.object(RUN, "execute_case", side_effect=work),
+                            patch.object(pool_type, "submit", submit), patch.object(pool_type, "__exit__", finish))
+                with contextlib.ExitStack() as stack:
+                    for control in controls:
+                        stack.enter_context(control)
+                    with self.assertRaises(interruption):
+                        RUN.qualify_archive(archive_path, "aarch64-apple-darwin", "1.0.3", root, jobs=1)
+                self.assertEqual(before_wait, [True])
+                self.assertEqual(started, ["0"])
+                self.assertEqual(observed, [True])
+                self.assertTrue(submitted[1].cancelled())
+                self.assertTrue(all(future.done() for future in submitted))
+                self.assertEqual(list(root.iterdir()), [archive_path])
+
 
 if __name__ == "__main__":
     unittest.main()

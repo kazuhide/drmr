@@ -325,6 +325,83 @@ class ReleaseMatrix(unittest.TestCase):
             self.assertEqual(str(error), "roundtrip-cancelled")
             self.assertEqual(set(root.iterdir()), {archive})
 
+    def test_partial_submission_cancels_owned_futures_before_wait_and_cleans_up(self):
+        for interruption in (KeyboardInterrupt, RuntimeError):
+            with self.subTest(interruption=interruption.__name__), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                archive = root / "candidate.archive"
+                archive.write_bytes(b"archive")
+                source = Mock(head="a" * 40, tree="b" * 40)
+                report = {"archive_sha256": CONTRACT.sha(b"archive"),
+                          "binaries": {"drmr": {"sha256": CONTRACT.sha(b"binary")}}}
+                executor = Mock(cancel=threading.Event())
+                case = CONTRACT.cases()[0]
+                cases = [{**case, "id": str(index)} for index in range(3)]
+                started, observed, before_wait, submitted = [], [], [], []
+                ready, release = threading.Event(), threading.Event()
+                pool_type = ROUNDTRIP.concurrent.futures.ThreadPoolExecutor
+                real_submit, real_exit = pool_type.submit, pool_type.__exit__
+                workspace_factory = ROUNDTRIP.SUPPORT.Workspace
+
+                def work(item, *_):
+                    if executor.cancel.is_set():
+                        return {**item, "status": "not-checked"}
+                    started.append(item["id"])
+                    ready.set()
+                    release.wait(2)
+                    observed.append(executor.cancel.is_set())
+                    return {**item, "status": "not-checked"}
+
+                def submit(pool, *args, **kwargs):
+                    future = real_submit(pool, *args, **kwargs)
+                    submitted.append(future)
+                    if len(submitted) == 3:
+                        self.assertTrue(ready.wait(2))
+                        raise interruption()
+                    return future
+
+                def finish(pool, *args):
+                    before_wait.append(executor.cancel.is_set())
+                    release.set()
+                    return real_exit(pool, *args)
+
+                def extract(_archive, _target, _digest, output):
+                    output.write_bytes(b"binary")
+                    return output
+
+                controls = (patch.object(ROUNDTRIP.SUPPORT, "require_native"),
+                            patch.object(ROUNDTRIP.SUPPORT.VERIFY, "command", return_value=b""),
+                            patch.object(ROUNDTRIP.SUPPORT.VERIFY, "Source", return_value=source),
+                            patch.object(ROUNDTRIP, "packet", return_value=("1.0.3", archive, report)),
+                            patch.object(ROUNDTRIP.SUPPORT, "require_version"),
+                            patch.object(ROUNDTRIP.SUPPORT, "Workspace", side_effect=lambda: workspace_factory(parent=root)),
+                            patch.object(ROUNDTRIP.SUPPORT, "extract_cli", side_effect=extract),
+                            patch.object(ROUNDTRIP.SUPPORT, "Runner", return_value=Mock(run=Mock(return_value=b"drmr 1.0.3\n"))),
+                            patch.object(ROUNDTRIP.FIXTURES, "source_seeds", return_value={}),
+                            patch.object(ROUNDTRIP, "Executor", return_value=executor),
+                            patch.object(ROUNDTRIP, "fixture_profiles", return_value=({}, [])),
+                            patch.object(CONTRACT, "cases", return_value=cases),
+                            patch.object(ROUNDTRIP, "execute_case", side_effect=work),
+                            patch.object(pool_type, "submit", submit), patch.object(pool_type, "__exit__", finish))
+                with contextlib.ExitStack() as stack:
+                    for control in controls:
+                        stack.enter_context(control)
+                    load_codec = stack.enter_context(patch.object(CONTRACT, "module"))
+                    error = None
+                    try:
+                        ROUNDTRIP.qualify(root, "aarch64-apple-darwin", root, 1)
+                    except BaseException as caught:
+                        error = caught
+                    load_codec.assert_not_called()
+                self.assertEqual(before_wait, [True])
+                self.assertEqual(started, ["0"])
+                self.assertEqual(observed, [True])
+                self.assertTrue(submitted[1].cancelled())
+                self.assertTrue(all(future.done() for future in submitted))
+                self.assertEqual(list(root.iterdir()), [archive])
+                self.assertIsInstance(error, CONTRACT.Failure)
+                self.assertEqual(str(error), "roundtrip-cancelled")
+
     def test_existing_report_is_preserved_and_private_argument_is_not_logged(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

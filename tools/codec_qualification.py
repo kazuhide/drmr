@@ -246,9 +246,11 @@ def qualify(cli, source, binding, root, scope="smoke", jobs=4):
                 profiles[(fixture["id"], profile)] = path
     records = [None] * len(cases)
     with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
-        futures = {pool.submit(execute_case, case, executor, profiles, seeds, fixtures, root): index
-                   for index, case in enumerate(cases)}
+        futures = {}
         try:
+            for index, case in enumerate(cases):
+                future = pool.submit(execute_case, case, executor, profiles, seeds, fixtures, root)
+                futures[future] = index
             for completed, future in enumerate(concurrent.futures.as_completed(futures), 1):
                 records[futures[future]] = future.result()
                 if scope == "full" and (completed % 32 == 0 or completed == len(cases)):
