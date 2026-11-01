@@ -51,7 +51,9 @@ impl Object {
         }
         let mut output = files::create_new(destination)?;
         let (sha256, bytes) = transfer(&mut input, &mut output, control, self.bytes, after_chunk)?;
-        output.sync_all().map_err(|_| CHANGED)?;
+        // These process-local snapshots need readability, not crash durability.
+        // File writes have no user-space buffer. Keep the complete byte and
+        // identity guards without persisting each temporary resource to storage.
         if bytes != self.bytes || expected.is_some_and(|file| file.sha256 != sha256) {
             return Err(CHANGED);
         }
