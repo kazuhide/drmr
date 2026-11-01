@@ -43,6 +43,7 @@ def module(name):
 CHECK = module("check_release")
 VERIFY = module("verify_archive")
 EVIDENCE = module("media_evidence")
+CODECS = module("codec_contract")
 ROUNDTRIP = module("roundtrip_contract")
 CI_CONTRACT = module("ci_contract")
 COMPRESSED_ERRORS = (EOFError, tarfile.TarError, zipfile.BadZipFile, zlib.error, NotImplementedError)
@@ -67,6 +68,7 @@ MEDIA_LIMITS = (
     "One native packaged CLI, one ten-second video-only Clear DASH to CBCS DASH saved-plan route "
     "and one generated ten-second 44.1 kHz stereo AAC Clear HLS/TS to CBCS DASH saved-plan route. "
     "One local Clear DASH metadata-only analysis with the original preserved. "
+    "Eight native-only HEVC/VP9 saved-plan roundtrips and 38 refusal controls with unavailable decoders. "
     "Full original video comparison, complete generated audio frame/clock evidence and CLI media comparisons, "
     "and native manifest linting; no independent external audio PCM comparison, DRM license/device playback, "
     "GUI, installer, signature, or build-origin certification.")
@@ -342,8 +344,8 @@ def reports(archive_proof, media, head, tree, target, version, archive_hash):
             and re.fullmatch(r"0o[0-7]{1,3}", binary["mode"]) is not None, "archive-proof-invalid")
     exact_keys(media, ("schema_version", "success", "kind", "source_head", "source_tree", "target", "version", "binary_reported_version",
                        "archive_sha256", "binary_sha256", "archive_files", "dependency_packages", "native_ordinary_user", "doctor", "media", "aac_44100",
-                       "metadata_analysis", "stages", "owned_workspace_cleanup", "limits"))
-    require(type(media["schema_version"]) is int and media["schema_version"] == 1 and media["kind"] == "native-cli-archive-media"
+                       "metadata_analysis", "codecs", "stages", "owned_workspace_cleanup", "limits"))
+    require(type(media["schema_version"]) is int and media["schema_version"] == 2 and media["kind"] == "native-cli-archive-media"
             and media["version"] == version and media["binary_reported_version"] == version and media["binary_sha256"] == binary["sha256"]
             and media["archive_files"] == archive_proof["files"] and media["dependency_packages"] == archive_proof["packages"]
             and media["native_ordinary_user"] is True and media["owned_workspace_cleanup"] == "confirmed"
@@ -380,6 +382,10 @@ def reports(archive_proof, media, head, tree, target, version, archive_hash):
     for name in ("prepared_source_against_original_video", "conversion", "independent_verification"):
         proof(value[name])
     aac44100(media["aac_44100"])
+    try:
+        CODECS.validate(media["codecs"], "smoke", head, tree, target, version, archive_hash, binary["sha256"])
+    except CODECS.Failure:
+        raise Failure("media-codec-proof-invalid") from None
     metadata = media["metadata_analysis"]
     exact_keys(metadata, ("schema_version", "format", "protection", "evidence", "media_verified", "source_unchanged"))
     require(type(metadata["schema_version"]) is int and metadata["schema_version"] == 1

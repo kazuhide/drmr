@@ -347,9 +347,11 @@ def qualify(inputs, target, source_root, jobs):
         cases = CONTRACT.cases()
         records = [None] * len(cases)
         with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
-            futures = {pool.submit(execute_case, case, executor, profiles, workspace.path): index
-                       for index, case in enumerate(cases)}
+            futures = {}
             try:
+                for index, case in enumerate(cases):
+                    future = pool.submit(execute_case, case, executor, profiles, workspace.path)
+                    futures[future] = index
                 for completed, future in enumerate(concurrent.futures.as_completed(futures), 1):
                     records[futures[future]] = future.result()
                     if completed % 24 == 0 or completed == len(cases):
@@ -358,6 +360,7 @@ def qualify(inputs, target, source_root, jobs):
                 executor.cancel.set()
                 for future in futures:
                     future.cancel()
+        require(not executor.cancel.is_set(), "roundtrip-cancelled")
         for future, index in futures.items():
             if records[index] is None:
                 try:
@@ -373,8 +376,17 @@ def qualify(inputs, target, source_root, jobs):
                    "failed": sum(record["status"] == "failed" for record in records),
                    "not_checked": sum(record["status"] == "not-checked" for record in records),
                    "not_qualified": sum(record["status"] == "not-qualified" for record in records), "kinds": CONTRACT.counts(cases)}
-        result = {"schema_version": 1, "kind": "native-cli-release-roundtrip",
-                  "success": summary["failed"] == 0 and summary["not_checked"] == 0 and not executor.cancel.is_set(),
+        codecs = CONTRACT.module("codec_qualification")
+        try:
+            codec_proof = codecs.qualify(cli, source, {"source_head": source.head, "source_tree": source.tree,
+                            "target": target, "version": version, "archive_sha256": archive_report["archive_sha256"],
+                            "binary_sha256": binary_hash}, workspace.path / "codecs", "full", jobs)
+        except codecs.ERRORS + (codecs.SUPPORT.VERIFY.Failure,):
+            raise CONTRACT.Failure("roundtrip-codec-qualification-failed") from None
+        require(SUPPORT.VERIFY.file_digest(snapshot) == archive_report["archive_sha256"]
+                and SUPPORT.VERIFY.file_digest(cli) == binary_hash, "roundtrip-artifact-changed")
+        result = {"schema_version": 2, "kind": "native-cli-release-roundtrip",
+                  "success": summary["failed"] == 0 and summary["not_checked"] == 0 and not executor.cancel.is_set() and codec_proof["success"],
                   "source_head": source.head, "source_tree": source.tree, "target": target, "version": version,
                   "archive_sha256": archive_report["archive_sha256"], "binary_sha256": binary_hash,
                   "binary_header_target": target, "binary_reported_version": version,
@@ -382,7 +394,7 @@ def qualify(inputs, target, source_root, jobs):
                   "native_ordinary_user": True, "required_depth": "native", "decode_evidence": "not-checked",
                   "license_playback_verified": False, "fixture_metadata": CONTRACT.FIXTURE_METADATA,
                   "fixture_profiles": fixtures, "records": records,
-                  "counts": summary, "owned_workspace_cleanup": "confirmed", "limits": CONTRACT.LIMITS}
+                  "counts": summary, "codecs": codec_proof, "owned_workspace_cleanup": "confirmed", "limits": CONTRACT.LIMITS}
         if result["success"]:
             CONTRACT.validate(result, source.head, source.tree, target, version, archive_report["archive_sha256"], binary_hash)
         return result

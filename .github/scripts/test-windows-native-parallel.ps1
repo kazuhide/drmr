@@ -21,7 +21,10 @@ elif mode == 'cancel':
     time.sleep(60)
 elif mode == 'failure':
     sys.exit(7)
+elif mode == 'after-priority':
+    if not (root / 'priority.finished').is_file(): sys.exit(8)
 print('temp-' + os.environ['TEMP'], flush=True)
+(root / (index + '.finished')).write_text('finished')
 '@ | Set-Content -Encoding utf8 $fixture
 try {
     $progressPath = Join-Path $root 'shared-progress.log'
@@ -69,6 +72,19 @@ try {
     )
     $failed = @(Invoke-DrmrNativeTestGroups -Groups $failure -Directory (Join-Path $root 'failure') -Workers 1)
     if ($failed.Count -ne 2 -or $failed[0].exit_code -ne 7 -or $failed[1].exit_code -ne 0) { throw 'Native failure aggregation lost a group' }
+    $earlyFailure = @(
+        @{ executable = $python; arguments = @($fixture, $root, 'failure', 'early-failed') },
+        @{ executable = $python; arguments = @($fixture, $root, 'ok', 'must-not-start') }
+    )
+    $early = @(Invoke-DrmrNativeTestGroups -Groups $earlyFailure -Directory (Join-Path $root 'early-failure') -Workers 2 -PriorityCount 1)
+    if ($early.Count -ne 1 -or $early[0].exit_code -ne 7 -or
+        (Test-Path -LiteralPath (Join-Path $root 'must-not-start.started'))) { throw 'An early failure started expensive tests' }
+    $barrier = @(
+        @{ executable = $python; arguments = @($fixture, $root, 'ok', 'priority') },
+        @{ executable = $python; arguments = @($fixture, $root, 'after-priority', 'after') }
+    )
+    $after = @(Invoke-DrmrNativeTestGroups -Groups $barrier -Directory (Join-Path $root 'barrier') -Workers 2 -PriorityCount 1)
+    if ($after.Count -ne 2 -or @($after | Where-Object exit_code -ne 0).Count -ne 0) { throw 'Native priority barrier was bypassed' }
     $source = [Threading.CancellationTokenSource]::new()
     $source.CancelAfter(15000)
     $canceller = Start-ThreadJob -ArgumentList $source, $root -ScriptBlock {

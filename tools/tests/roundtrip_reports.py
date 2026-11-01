@@ -28,6 +28,7 @@ def native(container):
 
 def complete(contract, head="a" * 40, tree="b" * 40, target="aarch64-apple-darwin", version="1.0.3",
              archive_hash="c" * 64, binary_hash="d" * 64):
+    import codec_reports
     graph = {"sha256": "e" * 64, "files": 7, "bytes": 10000}
 
     def leg(profile, layout):
@@ -51,7 +52,7 @@ def complete(contract, head="a" * 40, tree="b" * 40, target="aarch64-apple-darwi
         if case["kind"] == "roundtrip":
             record.update(backward=leg(case["source"], case["layout"]), final_against_original=native(case["source"][0]))
         records.append(record)
-    return {"schema_version": 1, "kind": "native-cli-release-roundtrip", "success": True,
+    return {"schema_version": 2, "kind": "native-cli-release-roundtrip", "success": True,
             "source_head": head, "source_tree": tree, "target": target, "version": version,
             "archive_sha256": archive_hash, "binary_sha256": binary_hash, "binary_header_target": target,
             "binary_reported_version": version, "fixture_sha256": contract.CLIP_SHA256,
@@ -60,4 +61,5 @@ def complete(contract, head="a" * 40, tree="b" * 40, target="aarch64-apple-darwi
             "fixture_metadata": copy.deepcopy(contract.FIXTURE_METADATA), "fixture_profiles": fixtures,
             "records": records, "counts": {"expected": 845, "complete": 803, "failed": 0, "not_checked": 0,
                                            "not_qualified": 42, "kinds": contract.counts(contract.cases())},
+            "codecs": codec_reports.complete(contract.CODECS, "full", head, tree, target, version, archive_hash, binary_hash),
             "owned_workspace_cleanup": "confirmed", "limits": contract.LIMITS}

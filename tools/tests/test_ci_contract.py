@@ -8,7 +8,9 @@ import re
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -253,6 +255,51 @@ class WorkflowWiring(unittest.TestCase):
         body = text.split("\njobs:\n", 1)[1]
         chunks = re.split(r"^  ([a-z][a-z0-9-]*):\n", body, flags=re.MULTILINE)
         return dict(zip(chunks[1::2], chunks[2::2]))
+
+    def test_optimized_native_tests_keep_assertions_and_integer_overflow_checks(self):
+        expected = {"CARGO_PROFILE_TEST_OPT_LEVEL": "1",
+                    "CARGO_PROFILE_TEST_DEBUG_ASSERTIONS": "true",
+                    "CARGO_PROFILE_TEST_OVERFLOW_CHECKS": "true"}
+        for filename, selected in [("ci.yml", "core-tests"), ("windows.yml", "native")]:
+            for job, block in self.blocks(filename).items():
+                with self.subTest(workflow=filename, job=job):
+                    if job != selected:
+                        self.assertNotIn("CARGO_PROFILE_TEST_", block)
+                        continue
+                    settings = re.findall(r"^      (CARGO_PROFILE_TEST_[A-Z_]+): ([^\n]+)$",
+                                          block.split("\n    steps:\n", 1)[0], re.MULTILINE)
+                    self.assertEqual({key: value.strip("\"'") for key, value in settings}, expected)
+
+    def test_compiled_cache_identity_separates_optimization_and_runtime_checks(self):
+        action = (ROOT / ".github/actions/rust-cache/action.yml").read_text(encoding="utf-8")
+        script = textwrap.dedent(action.split("        python - <<'PYTHON'\n", 1)[1]
+                                .split("        PYTHON\n", 1)[0])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            defaults = {"CARGO_PROFILE_TEST_OPT_LEVEL": "1",
+                        "CARGO_PROFILE_TEST_DEBUG_ASSERTIONS": "true",
+                        "CARGO_PROFILE_TEST_OVERFLOW_CHECKS": "true"}
+
+            def identity(settings):
+                output = root / "outputs"
+                output.unlink(missing_ok=True)
+                environment = {"HOME": directory, "USERPROFILE": directory,
+                               "CARGO_HOME": str(root / "cargo"), "GITHUB_WORKSPACE": directory,
+                               "GITHUB_OUTPUT": str(output), "CACHE_PROFILE": "debug",
+                               "CACHE_TARGET_DIRECTORY": "target", **settings}
+                commands = {("rustc", "-vV"): b"rustc fixture\nhost: fixture-host\n",
+                            ("cargo", "-V"): b"cargo fixture\n"}
+                with mock.patch.dict(os.environ, environment, clear=True), mock.patch(
+                        "subprocess.check_output", side_effect=lambda command: commands[tuple(command)]):
+                    exec(compile(script, "rust-cache-identity", "exec"), {})
+                return output.read_text(encoding="utf-8").splitlines()[0]
+
+            baseline = identity(defaults)
+            for key, value in [("CARGO_PROFILE_TEST_OPT_LEVEL", "0"),
+                               ("CARGO_PROFILE_TEST_DEBUG_ASSERTIONS", "false"),
+                               ("CARGO_PROFILE_TEST_OVERFLOW_CHECKS", "false")]:
+                with self.subTest(setting=key):
+                    self.assertNotEqual(identity({**defaults, key: value}), baseline)
 
     def test_every_native_group_is_bound_to_classification_and_an_always_run_gate(self):
         for filename, groups in CI.NATIVE_NEEDS.items():

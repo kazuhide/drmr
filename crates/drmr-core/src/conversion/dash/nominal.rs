@@ -41,10 +41,28 @@ fn common_scale(left: u64, right: u64) -> Result<u64, ConversionError> {
         .ok_or(error("dash-nominal-timescale-not-representable"))
 }
 
+fn planned_scale(common: u64, planned_ms: Option<u32>) -> Result<u64, ConversionError> {
+    let Some(millis) = planned_ms else {
+        return Ok(common);
+    };
+    if millis == 0 {
+        return Err(error("dash-nominal-duration-required"));
+    }
+    let (mut a, mut b) = (u64::from(millis), 1000);
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    // Only the request's reduced denominator is needed. Whole seconds retain
+    // the original clock; fractional intent gains exact integer units without
+    // rounding any sample edge or changing encoded media timestamps.
+    common_scale(common, 1000 / a)
+}
+
 fn measure(
     root: &Path,
     resolved: &Representation,
     stop: &Stop,
+    planned_ms: Option<u32>,
 ) -> Result<Measured, ConversionError> {
     let initialization = reference(root, &resolved.base, &resolved.initialization.uri)?;
     let report = crate::inspection::inspect(&initialization)
@@ -77,7 +95,7 @@ fn measure(
         return Err(error("dash-nominal-timeline-not-representable"));
     }
     let actual_scale = actual_scale.ok_or(error("dash-empty-segment-timeline"))?;
-    let common = common_scale(resolved.timescale, actual_scale)?;
+    let common = planned_scale(common_scale(resolved.timescale, actual_scale)?, planned_ms)?;
     for span in &mut spans {
         span.0 = scale(span.0, actual_scale, common)?;
         span.1 = scale(span.1, actual_scale, common)?;
@@ -159,7 +177,7 @@ pub(super) fn output(
     planned_ms: Option<u32>,
     stop: &Stop,
 ) -> Result<Output, ConversionError> {
-    let measured = measure(root, resolved, stop)?;
+    let measured = measure(root, resolved, stop, planned_ms)?;
     let end = measured
         .spans
         .last()
@@ -225,4 +243,28 @@ pub(super) fn output(
             .ok_or(error("dash-empty-segment-timeline"))?
             .number,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fractional_millisecond_intent_and_all_media_edges_have_an_exact_common_clock() {
+        let common = planned_scale(12288, Some(2083)).unwrap();
+        assert_eq!(common, 1_536_000);
+        assert_eq!(scale(2083, 1000, common).unwrap(), 3_199_488);
+        assert_eq!(scale(23552, 12288, common).unwrap(), 2_944_000);
+        assert_eq!(scale(24576, 12288, common).unwrap(), 3_072_000);
+        assert_eq!(scale(25600, 12288, common).unwrap(), 3_200_000);
+    }
+
+    #[test]
+    fn integer_intent_and_legacy_metadata_keep_their_original_clock() {
+        for planned in [None, Some(2000), Some(6000), Some(1500)] {
+            assert_eq!(planned_scale(12288, planned).unwrap(), 12288);
+        }
+        assert!(planned_scale(12288, Some(0)).is_err());
+        assert!(planned_scale(u64::from(u32::MAX), Some(1)).is_err());
+    }
 }
