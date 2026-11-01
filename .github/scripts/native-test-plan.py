@@ -84,7 +84,7 @@ def split_transport_tests(tests):
     return [bucket for bucket in buckets if bucket]
 
 
-def build_plan(inventory, *, windows=False):
+def build_plan(inventory, *, windows=False, split_transport=True):
     if not inventory:
         raise ValueError("Native test binaries are missing")
     by_name, paths = {}, set()
@@ -113,7 +113,7 @@ def build_plan(inventory, *, windows=False):
         if item is policy or item is admission:
             continue
         selected = set(item["tests"]) - (set(checks) if item is core else set())
-        if name(item["executable"]) == "conversion_ts_output" and selected:
+        if split_transport and name(item["executable"]) == "conversion_ts_output" and selected:
             remaining.extend(group(item, bucket) for bucket in split_transport_tests(selected))
         else:
             remaining.append(group(item, selected))
@@ -141,11 +141,11 @@ def list_tests(executable, arguments=()):
     return result.stdout
 
 
-def plan(executables, *, windows=False):
+def plan(executables, *, windows=False, split_transport=True):
     if len(executables) != len(set(executables)):
         raise ValueError("Duplicate native test binaries")
     inventory = [{"executable": path, "tests": parse_listing(list_tests(path))} for path in executables]
-    groups = build_plan(inventory, windows=windows)
+    groups = build_plan(inventory, windows=windows, split_transport=split_transport)
     for item in groups:
         if item["arguments"]:
             validate_selection(item, list_tests(item["executable"], item["arguments"]))
