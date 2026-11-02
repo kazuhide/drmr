@@ -1,6 +1,6 @@
 ---
 title: ユーザーガイド
-updated: 2026-11-02
+updated: 2026-11-03
 version: 1.2.0
 ---
 
@@ -140,7 +140,7 @@ VP9（`vp09`）は MP4・fMP4 HLS/DASH の clear・cenc に対応します。HLS
 | --- | --- | --- |
 | `mp4` | `clear`、`cenc`、`cbcs` | `media.mp4` |
 | `dash`（fMP4） | `clear`、`cenc`、`cbcs` | `manifest.mpd` |
-| `hls`（fMP4） | `clear`、`cenc`、`cbcs`、`hls-aes128` | `master.m3u8` |
+| `hls-fmp4`（fMP4） | `clear`、`cenc`、`cbcs`、`hls-aes128` | `master.m3u8` |
 | `hls-ts`（MPEG-TS） | `clear`、`hls-aes128`、`hls-sample-aes` | `master.m3u8` |
 
 ホームの対応表では入力と希望する出力方式を選んで具体的な設定例とコマンドへ進めます。一つの MP4 への出力では、対応条件を満たす MP4 内のトラック、または HLS TS の映像一つと音声一つまでを扱います。DASH/fMP4 HLS の別々のトラックや無関係なファイルを、一つの MP4 にまとめる機能ではありません。
@@ -158,14 +158,14 @@ fMP4 メディアプレイリストは一つの音声または映像トラック
 
 `auto`・`stitch` で DRM 情報を付ける場合も、MP4・DASH・HLS の各入力条件を満たす必要があります。暗号化入力には既知の鍵を渡し、コーデック・暗号情報・再生範囲を含むメディア全体の検査を行います。メタデータの識別だけでは変換できません。`segments` は fMP4 同士の DASH/HLS、または TS 同士の FairPlay 変換で使えます。
 
-| 出力一覧の format と target | DRM システム | auto・stitch の入力 |
+| `output_format` と `encryption` | DRM システム | auto・stitch の入力 |
 | --- | --- | --- |
 | `dash`、`cenc` または `cbcs` | Widevine、PlayReady、または両方 | 対応する MP4・DASH・HLS |
-| `hls`、`cenc` | Widevine、PlayReady、または両方 | 対応する MP4・DASH・HLS |
-| `hls`、`cbcs` | Widevine、PlayReady、FairPlay の単独または組み合わせ | 対応する MP4・DASH・HLS |
+| `hls-fmp4`、`cenc` | Widevine、PlayReady、または両方 | 対応する MP4・DASH・HLS |
+| `hls-fmp4`、`cbcs` | Widevine、PlayReady、FairPlay の単独または組み合わせ | 対応する MP4・DASH・HLS |
 | `hls-ts`、`hls-sample-aes` | FairPlay | 対応する TS またはフラグメント化 MP4。暗号化入力には既知の鍵が必要 |
 
-`hls` のコンテナ形式は fMP4、`hls-ts` は TS です。DASH と組み合わせる HLS をどちらか一方にすることも、両方を出力することもできます。各出力には別々の名前と鍵設定を指定します。DRM と暗号方式の組み合わせは上表の範囲に限られます。
+`hls-fmp4` のコンテナ形式は fMP4、`hls-ts` は TS です。DASH と組み合わせる HLS をどちらか一方にすることも、両方を出力することもできます。各出力には別々の名前と鍵設定を指定します。DRM と暗号方式の組み合わせは上表の範囲に限られます。
 
 ## MP4 の有限音声範囲
 

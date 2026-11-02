@@ -138,7 +138,7 @@ The [fetch policy](#convert-a-url) applies to remote metadata too, including all
 
 `--metadata-only` refuses `--download-dir`, `--keys-file`, `--packager-bin`, `--max-workers`, `--decode` and `--stats`. `--fetch-config` is accepted only with a URL. The former `inspect INPUT` command is removed; replace it with `analyze --metadata-only INPUT`. See the [pre-release migration](releases.md#pre-release-cli-consolidation).
 
-`plan INPUT --encryption clear|cenc|cbcs|hls-aes128|hls-sample-aes` describes the requested operations and independent input/output key roles. `--output-format mp4|dash|hls-fmp4|hls-ts` selects output packaging; comma-separated values are accepted. Omitting it retains the input format. An HLS AES-128 target requires `hls` or `hls-ts` output. SAMPLE-AES TS requires `hls-ts`. `cenc` and `cbcs` are refused with TS output. CENC fMP4 HLS uses `SAMPLE-AES-CTR` and does not support FairPlay; see [HLS DRM declarations](conversion-support.md#drm-declarations-in-fmp4-hls). Unsupported source protection or unresolved encryption is reported as incompatible, except that a consistent SAMPLE-AES declaration can produce conditional HLS routes. Those routes still require the appropriate keys, IVs, and actual media validation.
+`plan INPUT --encryption clear|cenc|cbcs|hls-aes128|hls-sample-aes` describes the requested operations and independent input/output key roles. `--output-format mp4|dash|hls-fmp4|hls-ts` selects output packaging; comma-separated values are accepted. Omitting it retains the input format. An HLS AES-128 target requires `hls-fmp4` or `hls-ts` output. SAMPLE-AES TS requires `hls-ts`. `cenc` and `cbcs` are refused with TS output. CENC fMP4 HLS uses `SAMPLE-AES-CTR` and does not support FairPlay; see [HLS DRM declarations](conversion-support.md#drm-declarations-in-fmp4-hls). Unsupported source protection or unresolved encryption is reported as incompatible, except that a consistent SAMPLE-AES declaration can produce conditional HLS routes. Those routes still require the appropriate keys, IVs, and actual media validation.
 
 A compatible plan has a valid format/protection combination and a conditional processing route for each requested output format. Known unsupported declarations, such as a text track that no media handler can retain, produce `compatible: false`, `execution_available: false`, and exit code `1`. A plan is also unsupported if only some requested formats have a route. This corrects older version-one reports that could advertise executable intent with an empty or incomplete candidate list; supported plans retain their existing JSON fields and values.
 
@@ -176,7 +176,7 @@ This covers direct conversion and saved plans, with one or multiple outputs:
   the source URL.
 - Each `Output` shows its resolved format and protection profile. `Destination`
   shows the output file or directory; named outputs use their published child
-  directories. `hls` means fMP4 HLS; `hls-ts` means MPEG-TS HLS.
+  directories. `hls-fmp4` means fMP4 HLS; `hls-ts` means MPEG-TS HLS.
 - `Processing` shows the recorded processing mode. `Stats` shows the output count
   and, when complete download observations are available, observed download-file
   and received-byte counts. Unavailable download counts are omitted, including

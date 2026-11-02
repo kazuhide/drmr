@@ -5,6 +5,21 @@ for installation, stable interfaces and versioning.
 
 ## [Unreleased]
 
+Development for 1.3. Planned items below are not included in the 1.2.0 release.
+Completed changes are recorded by category before the next release.
+
+### Fixed
+
+- Use the current `hls-fmp4`, `output_format` and `encryption` names consistently
+  in the output tables and English/Japanese guides.
+
+### Planned for 1.3
+
+- Combine qualified separate video and AAC audio tracks from DASH or fMP4 HLS
+  into one MP4, with independent source comparison and round-trip checks.
+- Share encryption and segment packaging between compatible HLS/DASH outputs
+  while retaining separate final media, manifest and DRM verification.
+
 ## [1.2.0] - 2026-11-02
 
 ### Changed

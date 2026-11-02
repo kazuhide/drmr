@@ -1,6 +1,6 @@
 ---
 title: User guide
-updated: 2026-11-02
+updated: 2026-11-03
 version: 1.2.0
 ---
 
@@ -132,7 +132,7 @@ Choose an input and an output independently within these profiles. Codec, track,
 | --- | --- | --- |
 | `mp4` | `clear`, `cenc`, `cbcs` | `media.mp4` |
 | `dash` | `clear`, `cenc`, `cbcs` | `manifest.mpd` |
-| `hls` (fMP4) | `clear`, `cenc`, `cbcs`, `hls-aes128` | `master.m3u8` |
+| `hls-fmp4` (fMP4) | `clear`, `cenc`, `cbcs`, `hls-aes128` | `master.m3u8` |
 | `hls-ts` (MPEG-TS) | `clear`, `hls-aes128`, `hls-sample-aes` | `master.m3u8` |
 
 The support matrix on the home page links each input/output choice to its concrete configuration and command. Joint MP4 output accepts qualified tracks from one complete MP4 or up to one video and one audio track from HLS TS. Separate DASH/fMP4 HLS tracks and unrelated files are not combined into one MP4.
@@ -150,14 +150,14 @@ Each fMP4 media playlist must contain one video or audio track. A master can ass
 
 With `auto`/`stitch`, DRM output requires complete source admission for a supported MP4, DASH or HLS profile, including its codec, protection and playback window. Supply known keys for encrypted input. Metadata-only inspection is insufficient. With `segments`, fMP4 stays fMP4 for DASH/HLS and TS FairPlay keeps TS.
 
-| Output list format and target | DRM systems | Input with auto/stitch |
+| `output_format` and `encryption` | DRM systems | Input with auto/stitch |
 | --- | --- | --- |
 | `dash`, `cenc` or `cbcs` | Widevine, PlayReady, or both | Qualified MP4, DASH or HLS |
-| `hls`, `cenc` | Widevine, PlayReady, or both | Qualified MP4, DASH or HLS |
-| `hls`, `cbcs` | Widevine, PlayReady, FairPlay, or any combination | Qualified MP4, DASH or HLS |
+| `hls-fmp4`, `cenc` | Widevine, PlayReady, or both | Qualified MP4, DASH or HLS |
+| `hls-fmp4`, `cbcs` | Widevine, PlayReady, FairPlay, or any combination | Qualified MP4, DASH or HLS |
 | `hls-ts`, `hls-sample-aes` | FairPlay | Qualified TS or fragmented MP4; encrypted input needs known keys |
 
-`hls` produces fragmented MP4. `hls-ts` produces transport streams. One output list can select either HLS container alongside DASH, or request both HLS containers. Each output has its own named directory and runtime key settings. The list does not imply that every DRM system can be combined with every encryption scheme.
+`hls-fmp4` produces fragmented MP4. `hls-ts` produces transport streams. One output list can select either HLS container alongside DASH, or request both HLS containers. Each output has its own named directory and runtime key settings. The list does not imply that every DRM system can be combined with every encryption scheme.
 
 ## Finite audio presentation windows
 

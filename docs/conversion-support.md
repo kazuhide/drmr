@@ -51,11 +51,11 @@ The admitted input and output container can be selected independently within the
 conditions below. This avoids repeating the same output choices for each input
 protection scheme:
 
-| `format` | `target` choices | Entry point under `result/ID/` |
+| `output_format` | `encryption` choices | Entry point under `result/ID/` |
 | --- | --- | --- |
 | `mp4` | `clear`, `cenc`, `cbcs` | `media.mp4` |
 | `dash` | `clear`, `cenc`, `cbcs` | `manifest.mpd` |
-| `hls` (fMP4) | `clear`, `cenc`, `cbcs`, `hls-aes128` | `master.m3u8` |
+| `hls-fmp4` (fMP4) | `clear`, `cenc`, `cbcs`, `hls-aes128` | `master.m3u8` |
 | `hls-ts` (MPEG-TS) | `clear`, `hls-aes128`, `hls-sample-aes` | `master.m3u8` |
 
 These are container/protection capabilities, not qualification of every codec,
@@ -205,7 +205,7 @@ Set `DRMR_CONVERSION_REPORT` to a path outside the repository to save the JSON r
 | --- | --- | --- |
 | MP4 file | Clear, `cenc`, `cbcs` | One track, qualified joint MP4, or one video and one audio from supported TS HLS |
 | DASH directory | Clear, `cenc`, `cbcs` | Separate fragmented MP4 tracks in one static presentation |
-| HLS directory (`hls`) | Clear, `cenc`, `cbcs`, AES-128 | fMP4 resources and completed playlists |
+| HLS directory (`hls-fmp4`) | Clear, `cenc`, `cbcs`, AES-128 | fMP4 resources and completed playlists |
 | HLS directory (`hls-ts`) | Clear, AES-128, SAMPLE-AES | Qualified local TS or fMP4 input; separate TS audio/video playlists when both are present |
 
 ### DRM declarations in fMP4 HLS
