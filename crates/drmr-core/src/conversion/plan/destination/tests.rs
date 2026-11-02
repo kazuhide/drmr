@@ -14,6 +14,38 @@ fn converter() -> Converter {
 }
 
 #[test]
+fn existing_result_guard_never_accepts_new_roots_or_grants_write_authority() {
+    let root = crate::native::private_tempdir().unwrap();
+    let missing = root.path().join("missing");
+    assert!(ExistingDirectoryGuard::new(&missing).is_err());
+    let path = root.path().join("result");
+    files::create_dir(&path).unwrap();
+    let guard = ExistingDirectoryGuard::new(&path).unwrap();
+    assert_eq!(guard.path(), path.canonicalize().unwrap());
+    guard.check().unwrap();
+    drop(guard);
+    assert!(path.is_dir());
+    assert_eq!(std::fs::read_dir(&path).unwrap().count(), 0);
+}
+
+#[test]
+#[cfg(unix)]
+fn existing_result_guard_detects_replacement_without_deleting_either_tree() {
+    let root = crate::native::private_tempdir().unwrap();
+    let path = root.path().join("result");
+    files::create_dir(&path).unwrap();
+    let guard = ExistingDirectoryGuard::new(&path).unwrap();
+    let moved = root.path().join("original");
+    std::fs::rename(&path, &moved).unwrap();
+    files::create_dir(&path).unwrap();
+    std::fs::write(path.join("foreign"), b"keep").unwrap();
+    assert_eq!(guard.check(), Err(UNSAFE));
+    drop(guard);
+    assert_eq!(std::fs::read(path.join("foreign")).unwrap(), b"keep");
+    assert!(moved.is_dir());
+}
+
+#[test]
 fn ordinary_output_stages_use_the_requested_destination_parent() {
     let root = crate::native::private_tempdir().unwrap();
     let base = root.path().canonicalize().unwrap();

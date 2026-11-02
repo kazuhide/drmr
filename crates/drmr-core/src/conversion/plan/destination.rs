@@ -9,6 +9,83 @@ use std::{
 
 const UNSAFE: ConversionError = ConversionError("execution-plan-destination-unsafe");
 
+/// A read-only result root remains bound while direct verification qualifies the source.
+/// Holding this directory never grants publication or cleanup authority.
+pub(in crate::conversion) struct ExistingDirectoryGuard {
+    path: PathBuf,
+    parent: File,
+    parent_identity: FileIdentity,
+    directory: File,
+    identity: FileIdentity,
+    #[cfg(windows)]
+    _ancestors: Vec<File>,
+}
+
+impl ExistingDirectoryGuard {
+    pub(in crate::conversion) fn new(path: &Path) -> Result<Self, ConversionError> {
+        use std::path::Component;
+        if path
+            .components()
+            .any(|part| matches!(part, Component::ParentDir))
+        {
+            return Err(UNSAFE);
+        }
+        let path: PathBuf = path
+            .components()
+            .filter(|part| !matches!(part, Component::CurDir))
+            .collect();
+        let parent = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        if std::fs::symlink_metadata(parent)
+            .map_err(|_| UNSAFE)?
+            .file_type()
+            .is_symlink()
+        {
+            return Err(UNSAFE);
+        }
+        let parent = parent.canonicalize().map_err(|_| UNSAFE)?;
+        let path = parent.join(path.file_name().ok_or(UNSAFE)?);
+        if !super::absolute(&path) {
+            return Err(UNSAFE);
+        }
+        #[cfg(windows)]
+        let ancestors = hold_ancestors(&parent)?;
+        let parent = open_directory(&parent)?;
+        let directory = open_directory(&path)?;
+        let guard = Self {
+            parent_identity: FileIdentity::read(&parent).map_err(|_| UNSAFE)?,
+            identity: FileIdentity::read(&directory).map_err(|_| UNSAFE)?,
+            path,
+            parent,
+            directory,
+            #[cfg(windows)]
+            _ancestors: ancestors,
+        };
+        guard.check()?;
+        Ok(guard)
+    }
+
+    pub(in crate::conversion) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub(in crate::conversion) fn check(&self) -> Result<(), ConversionError> {
+        if FileIdentity::read(&self.directory).map_err(|_| UNSAFE)? != self.identity
+            || FileIdentity::read(&self.parent).map_err(|_| UNSAFE)? != self.parent_identity
+            || FileIdentity::read(&open_directory(&self.path)?).map_err(|_| UNSAFE)?
+                != self.identity
+            || FileIdentity::read(&open_directory(self.path.parent().ok_or(UNSAFE)?)?)
+                .map_err(|_| UNSAFE)?
+                != self.parent_identity
+        {
+            return Err(UNSAFE);
+        }
+        Ok(())
+    }
+}
+
 pub(in crate::conversion) struct OutputGuard {
     output: PathBuf,
     parent: File,
@@ -85,6 +162,7 @@ impl Converter {
             frozen_source: self.frozen_source.clone(),
             planned_destination: Some(Arc::new(guard)),
             output_signaling: self.output_signaling.clone(),
+            output_manifest: self.output_manifest.clone(),
             processing_mode: self.processing_mode,
             segment_duration_ms: self.segment_duration_ms,
             output_options: self.output_options.clone(),

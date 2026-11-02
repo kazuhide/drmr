@@ -275,7 +275,9 @@ impl Node {
                 Self::Leaf(Expected::LicenseUrl)
             }
             (Self::Signaling, F::WidevinePssh) => Self::Leaf(Expected::Pssh),
-            (Self::Signaling, F::Fairplay) => Self::Leaf(Expected::Boolean),
+            (Self::Signaling, F::Fairplay) | (Self::Intent, F::ExternalManifestCheck) => {
+                Self::Leaf(Expected::Boolean)
+            }
             (Self::OutputsRoot, F::Outputs) => Self::Outputs,
             (Self::OutputsRoot, F::OutputDir) => Self::Leaf(Expected::OutputDirectory),
             (Self::Intent, F::Id) => Self::Leaf(Expected::OutputId),
@@ -283,7 +285,6 @@ impl Node {
             (Self::Intent, F::Target | F::Encryption) => Self::Leaf(Expected::TargetProtection),
             (Self::Intent, F::Drms) => Self::Drms,
             (Self::Intent, F::Conformance) => Self::Leaf(Expected::Conformance),
-            (Self::Intent, F::ExternalManifestCheck) => Self::Leaf(Expected::Boolean),
             (Self::Intent, F::ManifestProfile) => Self::Leaf(Expected::ManifestProfile),
             (Self::Intent, F::Processing) => Self::Leaf(Expected::Processing),
             (Self::Intent, F::DashAddressing) => Self::Leaf(Expected::DashAddressing),

@@ -256,13 +256,13 @@ mod tests {
     fn hls() -> serde_json::Value {
         json!({"schema_version":4,"outputs":[{"id":"hls","output_format":"hls-fmp4","encryption":"clear","drms":[]}]})
     }
-    fn parse(value: serde_json::Value) -> Result<OutputConfig, Failure> {
-        parse_output_config_diagnostic(&serde_json::to_vec(&value).unwrap())
+    fn parse(value: &serde_json::Value) -> Result<OutputConfig, Failure> {
+        parse_output_config_diagnostic(&serde_json::to_vec(value).unwrap())
     }
 
     #[test]
     fn canonical_names_identify_fragmented_hls_without_changing_internal_format() {
-        let parsed = parse(hls()).unwrap();
+        let parsed = parse(&hls()).unwrap();
         assert_eq!(parsed.outputs.len(), 1);
         assert_eq!(parsed.outputs[0].format, OutputFormat::Hls);
         assert!(parsed.output_dir.is_none());
@@ -294,12 +294,12 @@ mod tests {
                 .as_object_mut()
                 .unwrap()
                 .extend(patch.as_object().unwrap().clone());
-            let error = parse(value).unwrap_err();
+            let error = parse(&value).unwrap_err();
             assert!(error.diagnostic.valid_for_code("output-spec-invalid"));
         }
         let mut value = hls();
         value["schema_version"] = json!(3);
-        assert!(parse(value).is_err());
+        assert!(parse(&value).is_err());
         assert!(
             parse_output_config_diagnostic(
                 br#"{"schema_version":4,"schema_version":4,"outputs":[]}"#
@@ -309,11 +309,11 @@ mod tests {
         let mut value = hls();
         let duplicate = value["outputs"][0].clone();
         value["outputs"].as_array_mut().unwrap().push(duplicate);
-        assert!(parse(value).is_err());
+        assert!(parse(&value).is_err());
         for output_dir in [json!(null), json!(""), json!("../result")] {
             let mut value = hls();
             value["output_dir"] = output_dir;
-            assert!(parse(value).is_err());
+            assert!(parse(&value).is_err());
         }
     }
 
@@ -339,7 +339,7 @@ mod tests {
     fn diagnostics_never_repeat_unknown_names_or_values() {
         let mut value = hls();
         value["outputs"][0]["PRIVATE_VALUE_CANARY"] = json!("PRIVATE_VALUE_CANARY");
-        let error = parse(value).unwrap_err();
+        let error = parse(&value).unwrap_err();
         assert!(!format!("{error:?}").contains("PRIVATE_VALUE_CANARY"));
         assert!(!error.diagnostic.message().contains("PRIVATE_VALUE_CANARY"));
         assert!(parse_output_config_diagnostic(&vec![b' '; LIMIT + 1]).is_err());

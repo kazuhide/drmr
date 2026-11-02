@@ -81,6 +81,7 @@ impl ManifestChecks {
 /// Publication callers retain this guard through their existing atomic commit checks.
 pub(super) struct CheckedManifest {
     pub report: NativeManifestReport,
+    pub external_manifest: Option<super::conformance::ManifestValidationReport>,
     snapshot: snapshot::Snapshot,
 }
 
@@ -108,6 +109,11 @@ impl ManifestSizing {
 }
 
 impl CheckedManifest {
+    pub fn apply_to(&self, report: &mut super::VerificationReport) {
+        report.native_manifest = Some(self.report.clone());
+        report.external_manifest.clone_from(&self.external_manifest);
+        report.refresh_passed();
+    }
     pub fn require_clean(&self) -> Result<(), ConversionError> {
         if self.report.is_clean_for_scope() {
             Ok(())
@@ -290,9 +296,12 @@ impl Converter {
         } else if text.starts_with(b"<") {
             OutputFormat::Dash
         } else {
+            if self.output_manifest.checking_final_result {
+                self.validate_output_manifest_policy(OutputFormat::Mp4)?;
+            }
             return Ok(None);
         };
-        self.checked_manifest(path, format).map(Some)
+        self.checked_verification_manifest(path, format).map(Some)
     }
 
     pub(super) fn checked_manifest(
@@ -303,7 +312,7 @@ impl Converter {
         self.checked_manifest_with_profile(entrypoint, format, ManifestProfile::Base)
     }
 
-    fn checked_manifest_with_profile(
+    pub(super) fn checked_manifest_with_profile(
         &self,
         entrypoint: &Path,
         format: OutputFormat,
@@ -374,7 +383,11 @@ impl Converter {
         .map_err(|_| CONFIG)?;
         self.backend.check_cancelled()?;
         snapshot.check_admitted(self)?;
-        Ok(CheckedManifest { report, snapshot })
+        Ok(CheckedManifest {
+            report,
+            external_manifest: None,
+            snapshot,
+        })
     }
 
     fn manifest_options(&self, profile: Profile) -> Options {
@@ -406,11 +419,15 @@ impl Converter {
         destination: &Path,
         manifest: &Path,
         format: OutputFormat,
-    ) -> Result<NativeManifestReport, ConversionError> {
-        let checked = self.checked_manifest(manifest, format)?;
-        checked.require_clean()?;
+        verification: &mut super::VerificationReport,
+    ) -> Result<(), ConversionError> {
+        let checked = self.checked_publication_manifest(manifest, format)?;
+        checked.apply_to(verification);
+        if !verification.passed {
+            return Err(ConversionError("round-trip-verification-failed"));
+        }
         self.publish_directory_checked(stage, destination, || checked.check(self))?;
-        Ok(checked.report)
+        Ok(())
     }
 
     fn manifest_permit(

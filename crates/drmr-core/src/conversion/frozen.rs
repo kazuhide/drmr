@@ -175,6 +175,7 @@ impl super::Converter {
             frozen_source: guards,
             planned_destination: self.planned_destination.clone(),
             output_signaling: self.output_signaling.clone(),
+            output_manifest: self.output_manifest.clone(),
             processing_mode: self.processing_mode,
             segment_duration_ms: self.segment_duration_ms,
             output_options: self.output_options.clone(),

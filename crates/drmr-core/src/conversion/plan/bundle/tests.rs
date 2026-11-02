@@ -187,6 +187,8 @@ fn strict_saved_dispatch_accepts_both_schemas_and_preserves_private_no_replace()
             target: TargetProtection::Clear,
             output: root.path().canonicalize().unwrap().join("legacy-result"),
         },
+        manifest_profile: None,
+        external_manifest_check: None,
     };
     legacy.plan_id = super::super::identity(&legacy).unwrap();
     let path = root.path().join("legacy.plan.json");

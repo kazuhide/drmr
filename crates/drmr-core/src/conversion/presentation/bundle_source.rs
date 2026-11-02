@@ -357,12 +357,13 @@ impl Converter {
         } else {
             "master.m3u8"
         });
-        report.verification.native_manifest = Some(command.publish_manifest_output(
+        command.publish_manifest_output(
             &stage,
             &destination,
             &manifest,
             request.format,
-        )?);
+            &mut report.verification,
+        )?;
         report.input = shared.input.clone();
         describe_transport(
             &self.backend,

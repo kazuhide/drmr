@@ -81,6 +81,7 @@ pub use verify::{
     VerificationFailure, VerificationReport, VerificationScope,
 };
 pub mod measurement;
+mod output_manifest;
 const MAX_MEDIA_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 /// Fixed failure codes contain no paths, key material, or backend output.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -131,6 +132,7 @@ pub struct Converter {
     frozen_source: Vec<Arc<frozen::OriginalGuard>>,
     planned_destination: Option<Arc<plan::destination::OutputGuard>>,
     output_signaling: Option<Arc<OutputSignaling>>,
+    output_manifest: output_manifest::State,
 }
 impl Converter {
     pub fn new(
@@ -149,6 +151,7 @@ impl Converter {
             frozen_source: Vec::new(),
             planned_destination: None,
             output_signaling: None,
+            output_manifest: output_manifest::State::default(),
             backend: Backend {
                 vp9_admission: None,
                 stop: crate::concurrency::Stop::new(),
@@ -213,6 +216,7 @@ impl Converter {
             frozen_source: self.frozen_source.clone(),
             planned_destination: self.planned_destination.clone(),
             output_signaling: self.output_signaling.clone(),
+            output_manifest: self.output_manifest.clone(),
         };
         let result = execute(&command);
         (result, measurement.report())

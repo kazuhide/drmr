@@ -62,12 +62,12 @@ pub fn read_saved(path: &Path) -> Result<SavedPlan, ConversionError> {
         return Err(INVALID);
     }
     match header.schema_version {
-        1 | 3 | 5 | 7 | 9 => {
+        1 | 3 | 5 | 7 | 9 | 11 => {
             let plan = serde_json::from_slice(&bytes).map_err(|_| INVALID)?;
             validate(&plan)?;
             Ok(SavedPlan::Single(plan))
         }
-        2 | 4 | 6 | 8 | 10 => {
+        2 | 4 | 6 | 8 | 10 | 12 => {
             let plan = serde_json::from_slice(&bytes).map_err(|_| INVALID)?;
             bundle::validate(&plan)?;
             Ok(SavedPlan::Bundle(plan))
@@ -118,6 +118,18 @@ pub struct ExecutionPlan {
         skip_serializing_if = "Option::is_none"
     )]
     pub output_options: Option<OutputOptions>,
+    #[serde(
+        default,
+        deserialize_with = "present_profile",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub manifest_profile: Option<super::manifest_lint::ManifestProfile>,
+    #[serde(
+        default,
+        deserialize_with = "present_external",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub external_manifest_check: Option<bool>,
 }
 impl ExecutionPlan {
     /// Legacy version-one plans retain their original complete-decode requirement.
@@ -140,6 +152,18 @@ fn present_options<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<OutputOptions>, D::Error> {
     OutputOptions::deserialize(deserializer).map(Some)
+}
+
+fn present_profile<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<super::manifest_lint::ManifestProfile>, D::Error> {
+    super::manifest_lint::ManifestProfile::deserialize(deserializer).map(Some)
+}
+
+fn present_external<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<bool>, D::Error> {
+    bool::deserialize(deserializer).map(Some)
 }
 
 pub(super) fn present_depth<'de, D: serde::Deserializer<'de>>(
@@ -227,6 +251,9 @@ impl Converter {
         request: ExecutionPlanRequest<'_>,
     ) -> Result<ExecutionPlan, ConversionError> {
         self.backend.check_cancelled()?;
+        if let Some(format) = request.format {
+            self.validate_output_manifest_policy(format)?;
+        }
         let output = super::destination(request.output).map_err(|_| UNSAFE)?;
         let destination = destination::OutputGuard::new(&output)?;
         let frozen = self.capture_source(request.input.input)?;
@@ -249,6 +276,7 @@ impl Converter {
             qualified.actual_format,
             format,
         )?;
+        self.validate_output_manifest_policy(format)?;
         if !qualified.eligible_formats.contains(&format) || !supported(format, request.target) {
             return Err(UNSUPPORTED);
         }
@@ -259,9 +287,11 @@ impl Converter {
             format,
             processing.resolved,
         )?;
+        let manifest_policy =
+            self.output_manifest.profile.is_some() || self.output_manifest.external.is_some();
         let mut plan = ExecutionPlan {
             kind: KIND.into(),
-            schema_version: 9,
+            schema_version: if manifest_policy { 11 } else { 9 },
             plan_id: String::new(),
             source: frozen.inventory().clone(),
             source_format: qualified.actual_format,
@@ -273,6 +303,10 @@ impl Converter {
             required_depth: Some(self.backend.validation_depth),
             processing: Some(processing),
             output_options: Some(output_options),
+            manifest_profile: manifest_policy
+                .then_some(self.output_manifest.profile.unwrap_or_default()),
+            external_manifest_check: manifest_policy
+                .then_some(self.output_manifest.external.is_some()),
         };
         check_output_location(&plan)?;
         plan.plan_id = identity(&plan)?;
@@ -298,6 +332,10 @@ impl Converter {
         let destination = destination::OutputGuard::new(&plan.intent.output)?;
         let frozen = self.reopen_source(&plan.source).map_err(source_error)?;
         let mut command = self
+            .using_saved_manifest_policy(
+                plan.manifest_profile,
+                plan.external_manifest_check.unwrap_or(false),
+            )?
             .using_frozen_source(&frozen)
             .with_plan_processing(plan.processing, plan.schema_version >= 7)
             .using_output_options(plan.output_options.as_ref())
@@ -354,6 +392,10 @@ impl Converter {
         let original = self.reopen_source(&plan.source).map_err(source_error)?;
         let result = self.capture_source(&result_entrypoint(plan))?;
         let command = self
+            .using_saved_manifest_policy(
+                plan.manifest_profile,
+                plan.external_manifest_check.unwrap_or(false),
+            )?
             .using_frozen_source(&original)
             .with_plan_processing(plan.processing, plan.schema_version >= 7)
             .using_output_options(plan.output_options.as_ref())
@@ -379,7 +421,8 @@ impl Converter {
                 .track_protection
                 .iter()
                 .all(|protection| protection.matches_target(plan.intent.target));
-        let verification = command.verify(VerificationRequest { source, output })?;
+        let verification =
+            command.verify_with_output_checks(VerificationRequest { source, output })?;
         if plan.output_options.is_some() {
             command.verify_selected_output_options(
                 result.entrypoint(),
@@ -478,6 +521,10 @@ struct Identity<'a> {
     processing: Option<ProcessingSelection>,
     #[serde(skip_serializing_if = "Option::is_none")]
     output_options: Option<&'a OutputOptions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    manifest_profile: Option<super::manifest_lint::ManifestProfile>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    external_manifest_check: Option<bool>,
 }
 fn identity(plan: &ExecutionPlan) -> Result<String, ConversionError> {
     let bytes = serde_json::to_vec(&Identity {
@@ -489,6 +536,8 @@ fn identity(plan: &ExecutionPlan) -> Result<String, ConversionError> {
         required_depth: plan.required_depth,
         processing: plan.processing,
         output_options: plan.output_options.as_ref(),
+        manifest_profile: plan.manifest_profile,
+        external_manifest_check: plan.external_manifest_check,
     })
     .map_err(|_| INVALID)?;
     Ok(hex::encode(Sha256::digest(bytes)))
@@ -500,12 +549,15 @@ fn validate(plan: &ExecutionPlan) -> Result<(), ConversionError> {
                 plan.schema_version,
                 plan.required_depth,
                 plan.processing.is_some(),
-                plan.output_options.is_some()
+                plan.output_options.is_some(),
+                plan.manifest_profile.is_some(),
+                plan.external_manifest_check.is_some()
             ),
-            (1, None, false, false)
-                | (3, Some(_), false, false)
-                | (5, Some(_), true, false)
-                | (7 | 9, Some(_), true, true)
+            (1, None, false, false, false, false)
+                | (3, Some(_), false, false, false, false)
+                | (5, Some(_), true, false, false, false)
+                | (7 | 9, Some(_), true, true, false, false)
+                | (11, Some(_), true, true, true, true)
         )
         || plan.plan_id.len() != 64
         || !plan
@@ -518,6 +570,13 @@ fn validate(plan: &ExecutionPlan) -> Result<(), ConversionError> {
         return Err(INVALID);
     }
     frozen::validate(&plan.source).map_err(|_| INVALID)?;
+    if plan.manifest_profile.is_some_and(|profile| {
+        plan.intent.format == OutputFormat::Mp4
+            || profile == super::manifest_lint::ManifestProfile::AppleVod
+                && !matches!(plan.intent.format, OutputFormat::Hls | OutputFormat::HlsTs)
+    }) {
+        return Err(INVALID);
+    }
     if let Some(choice) = plan.processing {
         choice
             .validate(plan.source_format, plan.intent.format)
