@@ -208,28 +208,30 @@ fn joint_manifest_tracks(prepared: &[Prepared], format: inspection::InputFormat)
         .iter()
         .find(|track| track.report.tracks[0].kind == TrackKind::Audio)
         .expect("one audio");
-    let ordinal = prepared
-        .iter()
-        .filter(|track| track.report.tracks[0].kind == TrackKind::Video)
-        .count();
-    let expected = audio.metadata.audio.as_ref().map(|value| {
-        super::metadata::container_rendition(
-            ordinal,
-            value.language.clone(),
-            value.channels.clone(),
-        )
-    });
+    let expected = audio.metadata.audio.as_ref();
+    if expected.is_some_and(|value| {
+        !(0..prepared.len()).any(|ordinal| {
+            *value
+                == super::metadata::container_rendition(
+                    ordinal,
+                    value.language.clone(),
+                    value.channels.clone(),
+                )
+        })
+    }) {
+        return false;
+    }
     prepared.iter().all(|track| {
         track
             .metadata
             .audio
             .as_ref()
-            .is_none_or(|value| Some(value) == expected.as_ref())
+            .is_none_or(|value| Some(value) == expected)
             && track
                 .metadata
                 .audio_group
                 .as_ref()
-                .is_none_or(|group| expected.as_ref().is_some_and(|audio| &audio.group == group))
+                .is_none_or(|group| expected.is_some_and(|audio| &audio.group == group))
     })
 }
 
@@ -262,6 +264,28 @@ pub(super) fn manifest_comparison(
 }
 
 impl Converter {
+    pub(super) fn standalone_metadata_supported(
+        &self,
+        prepared: &[Prepared],
+        keys: &InputKeys,
+    ) -> Result<bool, ConversionError> {
+        for source in prepared {
+            if source.metadata.audio.is_some() {
+                let profile = self.backend.profile_stream_keys(
+                    &source.media,
+                    source.index,
+                    Some(super::super::keys::ProbeKeys::All(keys)),
+                )?;
+                if language(profile["language"].as_str().unwrap_or("und"))?
+                    != declared_language(source)?
+                {
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(true)
+    }
+
     fn transport_mp4_parts(
         &self,
         prepared: &[Prepared],
@@ -330,6 +354,9 @@ impl Converter {
             return Err(ConversionError(
                 "mp4-requires-one-video-and-audio-selection",
             ));
+        }
+        if !transport && !self.standalone_metadata_supported(&prepared, request.input_keys)? {
+            return Err(ConversionError("presentation-selection-not-representable"));
         }
         if matches!(
             request.target,

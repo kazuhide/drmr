@@ -27,7 +27,22 @@ class ReleaseMatrix(unittest.TestCase):
         self.assertEqual(len({record["id"] for record in records}), 845)
         self.assertEqual({record["recipe"] for record in records},
                          {CONTRACT.EXAMPLES.identifier(*route) for route in CONTRACT.EXAMPLES.routes()})
-        self.assertEqual(CONTRACT.counts(records), {"roundtrip": 761, "forward-only": 42, "layout-condition": 42})
+        self.assertEqual(CONTRACT.counts(records), {"roundtrip": 845, "forward-only": 0, "layout-condition": 0})
+
+    def test_joint_manifest_mp4_routes_require_both_legs_and_the_original(self):
+        cases = [case for case in CONTRACT.cases()
+                 if CONTRACT.joint(case["layout"])
+                 and ((case["source"][0] == "mp4" and case["target"][0] in ("dash", "hls-fmp4"))
+                      or (case["target"][0] == "mp4" and case["source"][0] in ("dash", "hls-fmp4")))]
+        self.assertEqual(len(cases), 84)
+        self.assertTrue(all(case["kind"] == "roundtrip" and case["condition"] is None for case in cases))
+        report = roundtrip_reports.complete(CONTRACT)
+        index = next(index for index, case in enumerate(CONTRACT.cases()) if case == cases[0])
+        for missing in ("forward", "backward", "final_against_original"):
+            broken = copy.deepcopy(report)
+            broken["records"][index].pop(missing)
+            with self.subTest(missing=missing), self.assertRaises(CONTRACT.Failure):
+                self.validate(broken)
 
     def validate(self, value):
         return CONTRACT.validate(value, "a" * 40, "b" * 40, "aarch64-apple-darwin", "1.0.3", "c" * 64, "d" * 64)

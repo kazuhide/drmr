@@ -257,11 +257,53 @@ fn fragmented_joint_reimport_requires_each_role_key_finite_windows_and_exact_tra
     assert_eq!(fs::read(altered).unwrap(), changed);
 }
 
-#[test]
-fn fragmented_audio_video_presentations_return_to_one_mp4_without_decoders() {
+fn presentation_roundtrips(
+    video: &str,
+    rate: Option<u32>,
+    targets: &[TargetProtection],
+    audio_first: bool,
+) {
     let owner = common::private_tempdir().unwrap();
     let progressive = owner.path().join("progressive.mp4");
-    joint(&progressive, false);
+    if let Some(rate) = rate {
+        let mut generate = std::process::Command::new("ffmpeg");
+        generate
+            .args(["-v", "error", "-nostdin", "-threads", "1", "-i"])
+            .arg(fixture(video))
+            .arg("-i")
+            .arg(fixture("clip.mp4"));
+        let maps = if audio_first {
+            ["1:a:0", "0:v:0"]
+        } else {
+            ["0:v:0", "1:a:0"]
+        };
+        for map in maps {
+            generate.args(["-map", map]);
+        }
+        assert!(
+            generate
+                .args([
+                    "-map_metadata",
+                    "-1",
+                    "-c:v",
+                    "copy",
+                    "-c:a",
+                    "aac",
+                    "-ar",
+                    &rate.to_string(),
+                    "-threads",
+                    "1",
+                    "-metadata:s:a:0",
+                    "language=eng"
+                ])
+                .arg(&progressive)
+                .status()
+                .unwrap()
+                .success()
+        );
+    } else {
+        joint(&progressive, false);
+    }
     let source = owner.path().join("source.mp4");
     let (command, events) = command();
     convert(
@@ -287,6 +329,9 @@ fn fragmented_audio_video_presentations_return_to_one_mp4_without_decoders() {
     .into_iter()
     .enumerate()
     {
+        if !targets.contains(&protection) {
+            continue;
+        }
         let presentation = owner.path().join(format!("presentation-{ordinal}"));
         command
             .convert(ConversionRequest {
@@ -326,14 +371,7 @@ fn fragmented_audio_video_presentations_return_to_one_mp4_without_decoders() {
             qualification.eligible_formats.contains(&OutputFormat::Mp4),
             "{format:?}/{protection:?}"
         );
-        for (index, target) in [
-            TargetProtection::Clear,
-            TargetProtection::Cenc,
-            TargetProtection::Cbcs,
-        ]
-        .into_iter()
-        .enumerate()
-        {
+        for (index, target) in targets.iter().copied().enumerate() {
             let output = owner.path().join(format!("result-{ordinal}-{index}.mp4"));
             let report = convert(&command, &entry, &output, keys, target)
                 .unwrap_or_else(|error| panic!("{format:?}/{protection:?}->{target:?}: {error:?}"));
@@ -388,4 +426,196 @@ fn fragmented_audio_video_presentations_return_to_one_mp4_without_decoders() {
                 .unwrap()
                 .contains("absent-ffprobe")
     }));
+}
+
+#[test]
+fn fragmented_audio_video_presentations_return_to_one_mp4_without_decoders() {
+    presentation_roundtrips(
+        "hevc-main.mp4",
+        None,
+        &[
+            TargetProtection::Clear,
+            TargetProtection::Cenc,
+            TargetProtection::Cbcs,
+        ],
+        false,
+    );
+}
+
+#[test]
+fn avc_aac_44100_and_48000_presentations_preserve_every_sample_and_window() {
+    for rate in [44100, 48000] {
+        presentation_roundtrips(
+            "clip.mp4",
+            Some(rate),
+            &[
+                TargetProtection::Clear,
+                TargetProtection::Cenc,
+                TargetProtection::Cbcs,
+            ],
+            false,
+        );
+    }
+}
+
+#[test]
+fn main10_audio_first_presentations_recover_the_container_projection() {
+    presentation_roundtrips(
+        "hevc-main10.mp4",
+        Some(44100),
+        &[
+            TargetProtection::Clear,
+            TargetProtection::Cenc,
+            TargetProtection::Cbcs,
+        ],
+        true,
+    );
+}
+
+#[test]
+fn vp9_presentations_return_to_clear_and_cenc_mp4_without_decoders() {
+    presentation_roundtrips(
+        "vp9-p0-8.mp4",
+        Some(48000),
+        &[TargetProtection::Clear, TargetProtection::Cenc],
+        false,
+    );
+}
+
+#[test]
+fn standalone_mp4_never_discards_custom_or_contradictory_manifest_metadata() {
+    let owner = common::private_tempdir().unwrap();
+    let progressive = owner.path().join("progressive.mp4");
+    joint(&progressive, false);
+    let mut bytes = fs::read(&progressive).unwrap();
+    let header = audio_nodes(&bytes)
+        .into_iter()
+        .find(|node| node.kind() == *b"mdhd")
+        .unwrap();
+    let offset = if header.header.payload(&bytes)[0] == 0 {
+        20
+    } else {
+        32
+    };
+    let at = header.header.offset + header.header.header_size + offset;
+    let language = b"eng"
+        .iter()
+        .fold(0u16, |value, byte| (value << 5) | u16::from(byte - 0x60));
+    bytes[at..at + 2].copy_from_slice(&language.to_be_bytes());
+    fs::write(&progressive, bytes).unwrap();
+    let source = owner.path().join("source.mp4");
+    let (command, events) = command();
+    let empty = InputKeys::default();
+    let hls = HlsInputKeys::default();
+    convert(
+        &command,
+        &progressive,
+        &source,
+        &empty,
+        TargetProtection::Clear,
+    )
+    .unwrap();
+    for format in [OutputFormat::Dash, OutputFormat::Hls] {
+        let directory = owner.path().join(format!("metadata-{format:?}"));
+        command
+            .convert(ConversionRequest {
+                input: &source,
+                output: &directory,
+                format,
+                target: TargetProtection::Clear,
+                input_keys: &empty,
+                hls_input_keys: &hls,
+                output_key: None,
+                hls_key_uri: None,
+                hls_output_key: None,
+            })
+            .unwrap();
+        let entry = directory.join(if format == OutputFormat::Dash {
+            "manifest.mpd"
+        } else {
+            "master.m3u8"
+        });
+        let original = fs::read_to_string(&entry).unwrap();
+        let edits: &[(&str, &str)] = if format == OutputFormat::Hls {
+            &[
+                ("NAME=\"stream_1\"", "NAME=\"Commentary\""),
+                ("default-audio-group", "custom-audio-group"),
+                ("DEFAULT=NO", "DEFAULT=YES"),
+                ("AUTOSELECT=YES", "AUTOSELECT=NO"),
+                ("CHANNELS=\"2\"", "CHANNELS=\"1\""),
+                ("RESOLUTION=320x180", "RESOLUTION=321x180"),
+            ]
+        } else {
+            &[
+                ("<Label>stream_1</Label>", "<Label>Commentary</Label>"),
+                ("selectionPriority=\"1\"", "selectionPriority=\"2\""),
+            ]
+        };
+        let mut edits = edits.to_vec();
+        let language_attribute = if format == OutputFormat::Hls {
+            "LANGUAGE=\""
+        } else {
+            "lang=\""
+        };
+        let at = original
+            .find(language_attribute)
+            .expect("declared language");
+        let end = at
+            + language_attribute.len()
+            + original[at + language_attribute.len()..].find('"').unwrap();
+        let language = &original[at..=end];
+        let wrong_language = if format == OutputFormat::Hls {
+            "LANGUAGE=\"jpn\""
+        } else {
+            "lang=\"jpn\""
+        };
+        edits.push((language, wrong_language));
+        for (index, (from, to)) in edits.iter().enumerate() {
+            assert!(original.contains(from), "missing declared field {from}");
+            fs::write(&entry, original.replace(from, to)).unwrap();
+            let source_view = VerificationSource {
+                input: &entry,
+                input_keys: &empty,
+                hls_keys: &hls,
+            };
+            let qualified =
+                command.validate_source(source_view, SourceValidationPurpose::Conversion);
+            assert!(
+                qualified.is_err()
+                    || !qualified
+                        .unwrap()
+                        .eligible_formats
+                        .contains(&OutputFormat::Mp4),
+                "{from}: invalid MP4 admission"
+            );
+            let output = owner.path().join(format!("refused-{format:?}-{index}.mp4"));
+            assert!(
+                convert(&command, &entry, &output, &empty, TargetProtection::Clear).is_err(),
+                "{from}"
+            );
+            assert!(!output.exists());
+            assert!(
+                command
+                    .verify(VerificationRequest {
+                        source: source_view,
+                        output: VerificationSource {
+                            input: &source,
+                            input_keys: &empty,
+                            hls_keys: &hls
+                        },
+                    })
+                    .is_err(),
+                "{from}: invalid standalone metadata comparison"
+            );
+            fs::write(&entry, &original).unwrap();
+        }
+    }
+    for record in events.records() {
+        if record.get("event").and_then(serde_json::Value::as_str) == Some("command") {
+            assert_eq!(
+                record.get("tool").and_then(serde_json::Value::as_str),
+                Some("packager")
+            );
+        }
+    }
 }

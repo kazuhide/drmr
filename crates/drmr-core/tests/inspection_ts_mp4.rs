@@ -76,3 +76,28 @@ fn multiple_video_or_audio_renditions_never_advertise_a_standalone_mp4_selection
         assert_eq!(report.processing.unwrap().candidates, []);
     }
 }
+
+#[test]
+fn one_video_and_one_audio_dash_offer_a_revalidated_fragmented_mp4_candidate() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("input.mpd");
+    std::fs::write(&path, r#"<MPD><Period><AdaptationSet contentType="video"><Representation codecs="avc1.64001f"/></AdaptationSet><AdaptationSet contentType="audio"><Representation codecs="mp4a.40.2"/></AdaptationSet></Period></MPD>"#).unwrap();
+    let input = inspection::inspect(&path).unwrap();
+    for target in [
+        TargetProtection::Clear,
+        TargetProtection::Cenc,
+        TargetProtection::Cbcs,
+    ] {
+        let report = inspection::plan(input.clone(), target, vec![OutputFormat::Mp4]);
+        assert!(
+            report.compatible && report.execution_available,
+            "{report:?}"
+        );
+        let candidate = &report.processing.unwrap().candidates[0];
+        assert_eq!(candidate.route.as_str(), "fragmented-mp4");
+        assert!(candidate.revalidation_required && !report.input.media_verified);
+        assert!(candidate.condition_codes.iter().any(|code| code
+            == "local-fragmented-single-video-audio-profile-and-presentation-windows-must-pass"));
+    }
+    assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+}
