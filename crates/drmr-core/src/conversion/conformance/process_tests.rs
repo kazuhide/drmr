@@ -34,6 +34,61 @@ fn apple_success() -> &'static str {
 }
 
 #[test]
+fn final_output_policy_records_one_external_check_without_fabricating_media_evidence() {
+    use crate::conversion::{
+        CheckOutcome, DecodeEvidence, ValidationDepth, VerificationChecks, VerificationReport,
+        VerificationScope,
+    };
+    let temp = tempfile::tempdir().unwrap();
+    let input = media(temp.path());
+    let before = std::fs::read(&input).unwrap();
+    let counter = temp.path().join("invocations");
+    let tools = fixture(
+        temp.path(),
+        &format!(
+            "printf x >> {}\n{}",
+            quote(counter.to_str().unwrap()),
+            apple_success(),
+        ),
+    );
+    let command =
+        converter(Arc::default(), Duration::from_secs(10)).with_external_manifest_check(tools);
+    let checked = command
+        .checked_publication_manifest(&input, OutputFormat::Hls)
+        .unwrap();
+    assert!(checked.report.is_clean_for_scope());
+    assert!(
+        checked
+            .external_manifest
+            .as_ref()
+            .is_some_and(|report| report.passed && report.manifest_count == 1)
+    );
+    let mut report = VerificationReport::new(
+        ValidationDepth::Native,
+        VerificationScope::Comparison,
+        VerificationChecks {
+            stream_metadata: CheckOutcome::Fail,
+            packet_payloads_equal: false,
+            packet_timing_equal: false,
+        },
+        DecodeEvidence::not_requested(),
+    );
+    checked.apply_to(&mut report);
+    assert!(
+        !report.passed,
+        "manifest evidence must not create a media comparison"
+    );
+    assert!(
+        report
+            .external_manifest
+            .as_ref()
+            .is_some_and(|external| external.scope == "manifest-only")
+    );
+    assert_eq!(std::fs::read(counter).unwrap(), b"x");
+    assert_eq!(std::fs::read(input).unwrap(), before);
+}
+
+#[test]
 fn owned_runner_accepts_complete_json_and_keeps_private_diagnostics_out_of_events() {
     let temp = tempfile::tempdir().unwrap();
     let input = media(temp.path());
