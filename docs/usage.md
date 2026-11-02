@@ -177,9 +177,11 @@ This covers direct conversion and saved plans, with one or multiple outputs:
 - Each `Output` shows its resolved format and protection profile. `Destination`
   shows the output file or directory; named outputs use their published child
   directories. `hls` means fMP4 HLS; `hls-ts` means MPEG-TS HLS.
-- `Processing` shows the recorded processing mode. `Stats` shows input-track and
-  output counts, and `Elapsed` shows total command time, including acquisition
-  and verification.
+- `Processing` shows the recorded processing mode. `Stats` shows the output count
+  and, when complete download observations are available, observed download-file
+  and received-byte counts. Unavailable download counts are omitted, including
+  for local input. `Elapsed` shows total command time, including acquisition and
+  verification.
 
 The summary uses existing results without additional media checks. Local paths
 are intentionally shown with terminal controls escaped. Source URLs, keys, IVs,
