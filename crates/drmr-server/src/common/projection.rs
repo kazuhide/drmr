@@ -852,15 +852,15 @@ pub fn project(
     let (mut value, kind, success) = match operation {
         OperationName::Analyze => analysis(v)?,
         OperationName::Plan => plan(v)?,
-        OperationName::Convert if matches!(schema, Some(1 | 3 | 5 | 7 | 9)) => {
+        OperationName::Convert if matches!(schema, Some(1 | 3 | 5 | 7 | 9 | 11)) => {
             single_conversion(v)?
         }
         OperationName::Convert | OperationName::Verify
-            if matches!(schema, Some(2 | 4 | 6 | 8 | 10)) =>
+            if matches!(schema, Some(2 | 4 | 6 | 8 | 10 | 12)) =>
         {
             bundle(operation, v)?
         }
-        OperationName::Verify if matches!(schema, Some(1 | 3 | 5 | 7 | 9)) => {
+        OperationName::Verify if matches!(schema, Some(1 | 3 | 5 | 7 | 9 | 11)) => {
             single_verification(v)?
         }
         _ => return Err(bad()),
@@ -903,6 +903,39 @@ mod coverage_tests {
         json!({"schema_version":2,"required_depth":"native","scope":"comparison","passed":true,
             "checks":{"stream_metadata":"pass","packet_payloads_equal":true,"packet_timing_equal":true},
             "decode_evidence":{"status":"not-checked","reason":"not-requested"},"license_playback_verified":false})
+    }
+
+    #[test]
+    fn policy_plan_versions_dispatch_their_result_shapes_without_accepting_unknown_versions() {
+        let fixtures =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb");
+        let inspection = drmr_core::inspection::inspect(&fixtures.join("clip.mp4")).unwrap();
+        let id = "a".repeat(64);
+        let media = json!({"schema_version":2,"input":inspection,"output":inspection,
+            "verification":native_report()});
+        let mut single_conversion = media.clone();
+        single_conversion["plan_id"] = json!(id);
+        let single_verification = json!({"kind":"plan-verification","schema_version":2,"plan_id":id,
+            "source_unchanged":true,"output_matches_plan":true,"verification":native_report()});
+        let bundle_conversion = json!({"kind":"bundle-conversion","schema_version":2,"plan_id":id,
+            "outputs":[{"id":"result","conversion":media,"signaling":{"systems":[],"verified":false},"conformance":null}]});
+        let bundle_verification = json!({"kind":"bundle-verification","schema_version":2,"plan_id":id,
+            "source_unchanged":true,"passed":true,"outputs":[{"id":"result","output_matches_plan":true,
+                "verification":native_report(),"signaling":{"systems":[],"verified":false},"conformance":null}]});
+        for (operation, payload, schemas) in [
+            (OperationName::Convert, single_conversion, [9, 11]),
+            (OperationName::Verify, single_verification, [9, 11]),
+            (OperationName::Convert, bundle_conversion, [10, 12]),
+            (OperationName::Verify, bundle_verification, [10, 12]),
+        ] {
+            for schema in schemas {
+                let result = project(operation, Some(schema), Some(&id), &payload).unwrap();
+                assert!(result.success, "schema {schema}");
+            }
+            for unknown in [0, 13, 14] {
+                assert!(project(operation, Some(unknown), Some(&id), &payload).is_err());
+            }
+        }
     }
 
     #[test]
