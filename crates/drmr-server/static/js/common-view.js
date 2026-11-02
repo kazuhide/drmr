@@ -87,7 +87,7 @@
     var outputBody = h('tbody');
     var outputTable = h('div', { className: 'common-output-wrap' }, h('table', { className: 'data common-outputs' },
       h('thead', null, h('tr', null, ['commonOutputId', 'commonFormat', 'commonProtection', 'commonProcessingMode', 'commonDrms', 'commonConformance', 'commonActions'].map(function (key) { return word('th', key, { scope: 'col' }); }))), outputBody));
-    var add = button('common-add-output', 'commonAddOutput', function () { if (!draft || rows.length >= 8) return; addRow({ id: 'output-' + (rows.length + 1), format: 'mp4', target: 'clear', drms: [], conformance: 'none' }); dirty(); });
+    var add = button('common-add-output', 'commonAddOutput', function () { if (!draft || rows.length >= 8) return; addRow({ id: 'output-' + (rows.length + 1), output_format: 'mp4', encryption: 'clear', drms: [], external_manifest_check: false }); dirty(); });
     var parent = selectionField('commonOutputParent', 'output-parent', function () { return draft && draft.parent; }, function (v) { if (draft) { draft.parent = v; dirty(); } }, 'commonDestinationHelp');
     var destination = h('input', { id: 'common-destination', autocomplete: 'off', spellcheck: 'false', maxlength: '32', oninput: function () { if (draft) { draft.destination = destination.value; dirty(); } } });
     var outputError = h('p', { className: 'help' });
@@ -125,7 +125,7 @@
     var globalStop = button('common-global-stop', 'commonStop', function () { model.stop(); });
     var globalCheck = button('common-global-check', 'commonCheckStatus', function () { if (model.snapshot().creation) model.recoverCreation(); else model.recover(); });
     UI.replace(global, globalText, globalActivity, globalProgress, h('div', { className: 'actions' }, globalStop, globalCheck));
-    function defaultDraft() { return { keys: null, workers: '', parent: null, destination: '', values: [{ id: 'output', format: 'mp4', target: 'clear', drms: [], conformance: 'none' }], dirty: false, planSeen: null, pendingSignature: null }; }
+    function defaultDraft() { return { keys: null, workers: '', parent: null, destination: '', values: [{ id: 'output', output_format: 'mp4', encryption: 'clear', drms: [], external_manifest_check: false }], dirty: false, planSeen: null, pendingSignature: null }; }
     function validSource() {
       if (sourceKind.value === 'local') return !!source.media;
       if (sourceKind.value === 'saved-plan') return !!source.plan;
@@ -140,12 +140,14 @@
     }
     function runtimeValue() { return { keys_ref: draft && draft.keys ? draft.keys.ref : null, max_workers: workers.value.trim() === '' ? null : Number(workers.value), decode: decode.checked }; }
     function validRuntime() { var value = runtimeValue().max_workers, cap = model.snapshot().capabilities; return value === null || Number.isInteger(value) && value >= 1 && value <= (cap ? cap.worker_policy.maximum : 0); }
-    function outputValues(keepDashChoice) { return rows.map(function (row) { var output = { id: row.id.value, format: row.format.value, target: row.target.value, processing: row.processing.value, drms: row.drms.filter(function (drm) { return drm.control.checked; }).map(function (drm) { return drm.value; }), conformance: row.conformance.value }; if (keepDashChoice || output.format === 'dash') output.dash_addressing = row['dash-addressing'].value; return output; }); }
+    function outputValues(keepChoices) { return rows.map(function (row) { var output = { id: row.id.value, output_format: row.format.value, encryption: row.target.value, processing: row.processing.value, drms: row.drms.filter(function (drm) { return drm.control.checked; }).map(function (drm) { return drm.value; }), external_manifest_check: row['external-manifest-check'].checked }; if (keepChoices || output.output_format === 'dash') output.dash_addressing = row['dash-addressing'].value; if (keepChoices || row['manifest-profile'].value !== 'base') output.manifest_profile = row['manifest-profile'].value; return output; }); }
     function signature() { return JSON.stringify({ parent: draft && draft.parent && draft.parent.ref, destination: destination.value, outputs: outputValues() }); }
     function validOutputs() {
       var values = outputValues(), names = new Set();
       return values.length >= 1 && values.length <= 8 && values.every(function (output) {
-        if (!validName(output.id) || names.has(output.id)) return false;
+        if (!validName(output.id) || names.has(output.id) ||
+            output.output_format === 'mp4' && (output.external_manifest_check || output.manifest_profile) ||
+            output.manifest_profile === 'apple-vod' && ['hls-fmp4', 'hls-ts'].indexOf(output.output_format) === -1) return false;
         names.add(output.id); return true;
       });
     }
@@ -158,14 +160,15 @@
         row[key] = element;
         var label = h('span', { className: key === 'dash-addressing' ? 'common-cell-label common-addressing-label' : 'common-cell-label' }), field = h('label', { className: 'field' }, label, element), td = cell || h('td');
         td.appendChild(field);
-        cells.push({ node: td, field: field, label: label, key: { id: 'commonOutputId', format: 'commonFormat', target: 'commonProtection', processing: 'commonProcessingMode', 'dash-addressing': 'commonDashAddressing', conformance: 'commonConformance' }[key], control: element }); return td;
+        cells.push({ node: td, field: field, label: label, key: { id: 'commonOutputId', format: 'commonFormat', target: 'commonProtection', processing: 'commonProcessingMode', 'dash-addressing': 'commonDashAddressing', 'external-manifest-check': 'commonConformance', 'manifest-profile': 'commonManifestProfile' }[key], control: element }); return td;
       }
       var id = h('input', { autocomplete: 'off', spellcheck: 'false', maxlength: '32', value: value.id, 'aria-describedby': 'common-output-name-help' });
-      var format = h('select', null, options([{ value: 'mp4', key: 'commonFormatMp4' }, { value: 'dash', key: 'commonFormatDash' }, { value: 'hls', key: 'commonFormatHls' }, { value: 'hls-ts', key: 'commonFormatHlsTs' }])); format.value = value.format;
-      var target = h('select', null, options(['clear', 'cenc', 'cbcs', 'hls-aes128', 'hls-sample-aes'])); target.value = value.target;
+      var format = h('select', null, options([{ value: 'mp4', key: 'commonFormatMp4' }, { value: 'dash', key: 'commonFormatDash' }, { value: 'hls-fmp4', key: 'commonFormatHls' }, { value: 'hls-ts', key: 'commonFormatHlsTs' }])); format.value = value.output_format;
+      var target = h('select', null, options(['clear', 'cenc', 'cbcs', 'hls-aes128', 'hls-sample-aes'])); target.value = value.encryption;
       var processing = h('select', { 'aria-describedby': 'common-processing-help' }, options([{ value: 'auto', key: 'commonProcessingAuto' }, { value: 'segments', key: 'commonProcessingSegments' }, { value: 'stitch', key: 'commonProcessingStitch' }])); processing.value = value.processing || 'auto';
       var addressing = h('select', { 'aria-describedby': 'common-dash-addressing-help' }, options([{ value: 'template', key: 'commonDashTemplate' }, { value: 'template-timeline', key: 'commonDashTimeline' }, { value: 'list', key: 'commonDashList' }, { value: 'base', key: 'commonDashBase' }])); addressing.value = value.dash_addressing || 'template';
-      var conformance = h('select', null, options([{ value: 'none', key: 'commonNone' }, { value: 'required', key: 'commonRequired' }])); conformance.value = value.conformance;
+      var external = h('input', { type: 'checkbox' }); external.checked = value.external_manifest_check === true;
+      var profile = h('select', null, options([{ value: 'base', key: 'commonManifestBase' }, { value: 'apple-vod', key: 'commonManifestAppleVod' }])); profile.value = value.manifest_profile || 'base';
       row.drms = [{ value: 'widevine', label: 'Widevine' }, { value: 'playready', label: 'PlayReady' }, { value: 'fairplay', label: 'FairPlay' }].map(function (drm) {
         drm.control = h('input', { type: 'checkbox', 'data-common-drm': drm.value, checked: value.drms.indexOf(drm.value) !== -1, onchange: dirty });
         return drm;
@@ -178,7 +181,9 @@
       });
       var packagingCell = control('processing', processing); packagingCell.className = 'common-output-packaging';
       control('dash-addressing', addressing, packagingCell);
-      row.node = h('tr', { dataset: { outputRow: String(serial) } }, control('id', id), control('format', format), control('target', target), packagingCell, drmCell, control('conformance', conformance), h('td', null, remove));
+      var checksCell = control('manifest-profile', profile);
+      control('external-manifest-check', external, checksCell);
+      row.node = h('tr', { dataset: { outputRow: String(serial) } }, control('id', id), control('format', format), control('target', target), packagingCell, drmCell, checksCell, h('td', null, remove));
       row.cells = cells; row.remove = remove;
       rows.push(row); outputBody.appendChild(row.node); rowLabels();
     }
@@ -222,12 +227,13 @@
         UI.replace(planOutputs, value ? h('ul', { className: 'common-plan-outputs' }, value.outputs.map(function (output) {
           var choices = Array.isArray(value.processing) ? value.processing : [];
           var match = choices.find(function (row) { return row.id === output.id; });
-          var choice = [5, 7, 9].indexOf(value.plan_schema_version) !== -1 ? value.processing : [6, 8, 10].indexOf(value.plan_schema_version) !== -1 && match && match.selection;
+          var choice = [5, 7, 9, 11].indexOf(value.plan_schema_version) !== -1 ? value.processing : [6, 8, 10, 12].indexOf(value.plan_schema_version) !== -1 && match && match.selection;
           var frozen = Array.isArray(value.output_options) ? value.output_options.find(function (row) { return row.id === output.id; }) : null;
-          var selected = [7, 9].indexOf(value.plan_schema_version) !== -1 ? value.output_options : frozen && frozen.options;
-          var layout = selected ? selected.layout : output.format === 'mp4' ? 'not-applicable' : 'previous-saved';
+          var selected = [7, 9, 11].indexOf(value.plan_schema_version) !== -1 ? value.output_options : frozen && frozen.options;
+          var layout = selected ? selected.layout : output.output_format === 'mp4' ? 'not-applicable' : 'previous-saved';
           if (!choice || ['segments', 'stitch'].indexOf(choice.resolved) === -1 || ['preserve', 'resegment', 'not-applicable'].indexOf(choice.boundaries) === -1) choice = null;
-          return h('li', null, output.id === null ? word('span', 'commonSingleOutput') : h('code', { text: output.id }), h('span', { text: output.format + ' · ' + output.target }), [2, 4, 6, 8, 10].indexOf(value.plan_schema_version) !== -1 ? h('span', null, word('span', 'commonDrms'), ': ', (output.drms || []).length ? h('span', { text: output.drms.join(', ') }) : word('span', 'commonNotRequested')) : null, [2, 4, 6, 8, 10].indexOf(value.plan_schema_version) !== -1 ? h('span', null, word('span', 'commonConformance'), ': ', word('span', output.conformance === 'required' ? 'commonRequired' : 'commonNotRequested')) : null,
+          return h('li', null, output.id === null ? word('span', 'commonSingleOutput') : h('code', { text: output.id }), h('span', { text: output.output_format + ' · ' + output.encryption }), [2, 4, 6, 8, 10, 12].indexOf(value.plan_schema_version) !== -1 ? h('span', null, word('span', 'commonDrms'), ': ', (output.drms || []).length ? h('span', { text: output.drms.join(', ') }) : word('span', 'commonNotRequested')) : null, h('span', null, word('span', 'commonConformance'), ': ', word('span', output.external_manifest_check === true ? 'commonRequired' : 'commonNotRequested')),
+            output.manifest_profile ? h('span', null, word('span', 'commonManifestProfile'), ': ', word('span', output.manifest_profile === 'apple-vod' ? 'commonManifestAppleVod' : 'commonManifestBase')) : null,
             word('span', { source: 'commonLayoutSource', 'previous-saved': 'commonLayoutPrevious', 'not-applicable': 'commonBoundaryNotApplicable' }[layout] || 'commonUnknown'),
             selected && selected.dash_addressing ? word('span', { template: 'commonDashTemplate', 'template-timeline': 'commonDashTimeline', list: 'commonDashList', base: 'commonDashBase' }[selected.dash_addressing] || 'commonUnknown') : null,
             choice ? h('span', null, word('span', 'commonRequestedProcessing'), ': ', word('span', ['auto', 'segments', 'stitch'].indexOf(choice.requested) !== -1 ? { auto: 'commonProcessingAuto', segments: 'commonProcessingSegments', stitch: 'commonProcessingStitch' }[choice.requested] : 'commonUnknown')) : null,

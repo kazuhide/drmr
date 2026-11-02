@@ -717,7 +717,7 @@ impl CommonService {
             .origin_analysis
             .as_ref()
             .and_then(|id| self.lock().analyses.get(id).map(|a| a.source_ref.clone()));
-        if payload["plan_id"] != plan.id || plan.schema != 10 {
+        if payload["plan_id"] != plan.id || !matches!(plan.schema, 10 | 12) {
             return Err(Error::new(503, "result-invalid"));
         }
         projection::bind_plan(&plan, c.operation, self.requested_depth(c)?, payload)?;
@@ -740,7 +740,15 @@ impl CommonService {
         let actual_outputs: Vec<drmr_core::conversion::plan::bundle::BundleOutputIntent> =
             serde_json::from_value(plan.outputs.clone())
                 .map_err(|_| Error::new(503, "result-invalid"))?;
-        if actual_outputs != expected_outputs {
+        let expected_schema = if expected_outputs
+            .iter()
+            .any(|output| output.manifest_profile.is_some())
+        {
+            12
+        } else {
+            10
+        };
+        if actual_outputs != expected_outputs || plan.schema != expected_schema {
             return Err(Error::new(503, "result-invalid"));
         }
         let expected_options: Vec<_> = expected_outputs.iter().map(|output| {
@@ -751,7 +759,7 @@ impl CommonService {
             return Err(Error::new(503, "result-invalid"));
         }
         // Common jobs set no global mode, so an omitted output mode requests Auto.
-        if plan.schema == 10 {
+        if matches!(plan.schema, 10 | 12) {
             let choices: Vec<OutputProcessing> = serde_json::from_value(
                 plan.processing
                     .clone()
@@ -977,7 +985,7 @@ impl CommonService {
         let s = self.lock();
         let p = s.plans.get(id).ok_or_else(unavailable)?;
         p.read()?;
-        Ok(self.envelope(p.view()))
+        Ok(self.envelope(p.view()?))
     }
     pub(super) fn export(&self, id: &str) -> Result<Reply> {
         let p = self.lock().plans.get(id).cloned().ok_or_else(unavailable)?;

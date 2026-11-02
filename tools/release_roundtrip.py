@@ -220,11 +220,11 @@ class Executor:
                 raise CONTRACT.Failure("roundtrip-decoder-guard-invalid")
 
     def key_file(self, root, profile):
-        value = {"schema_version": 1, "input": {"keys": [{"kid": self.kid, "key": self.key}],
-                 "hls_keys": [{"uri": self.uri, "key": self.key, "iv": self.iv}]}}
+        value = {"schema_version": 2, "input": {"keys": [{"kid": self.kid, "key": self.key}],
+                 "hls_keys": [{"uri": self.uri, "key": self.key, "iv": self.iv}]}, "outputs": {}}
         output = keys(profile, self.kid, self.key, self.iv, self.uri)
         if output is not None:
-            value["output"] = output
+            value["outputs"]["default"] = output
         path = root / "keys.json"
         SUPPORT.private_write(path, json.dumps(value).encode("ascii"))
         return path
@@ -244,9 +244,10 @@ class Executor:
             destination = output / "asset.mp4"
         else:
             destination = output
-        value = runner.json([self.cli, "convert", source, "--to", profile[1], "--format",
-                             "hls" if profile[0] == "hls-fmp4" else profile[0], "--processing", "auto",
-                             "--output", destination, "--keys-file", key_file, "--packager-bin", self.packager,
+        value = runner.json([self.cli, "convert", source, "--encryption", profile[1], "--output-format",
+                             profile[0], "--processing", "auto",
+                             "--output-file" if profile[0] == "mp4" else "--output-dir", destination,
+                             "--keys-file", key_file, "--packager-bin", self.packager,
                              "--max-workers", "1", "--json"], "convert")
         path = destination if profile[0] == "mp4" else output / ("manifest.mpd" if profile[0] == "dash" else "master.m3u8")
         inspection = value.get("output", {})

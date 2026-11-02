@@ -2,6 +2,7 @@
 mod child;
 mod files;
 mod jobs;
+mod output_config;
 mod plans;
 mod projection;
 mod wire;

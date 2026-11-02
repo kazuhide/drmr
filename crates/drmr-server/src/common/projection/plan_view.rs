@@ -15,18 +15,20 @@ fn single(v: &Value, schema: u64, source: OutputFormat) -> Result<Value> {
             "required_depth",
             "processing",
             "output_options",
+            "manifest_profile",
+            "external_manifest_check",
         ],
     )?;
     object(&v["intent"], &["format", "target", "output"])?;
     let intent: drmr_core::conversion::plan::OutputIntent = typed(&v["intent"])?;
     let mut out = select(v, &["kind", "schema_version", "plan_id", "source_format"]);
     out["intent"] = select(&v["intent"], &["format", "target"]);
-    if matches!(schema, 5 | 7 | 9) {
+    if matches!(schema, 5 | 7 | 9 | 11) {
         out["processing"] = processing_view::selection(&v["processing"], source, intent.format)?;
     } else if v.get("processing").is_some() {
         return Err(bad());
     }
-    if matches!(schema, 7 | 9) {
+    if matches!(schema, 7 | 9 | 11) {
         out["output_options"] = super::output_options_view::single(
             &v["output_options"],
             intent.format,
@@ -34,6 +36,15 @@ fn single(v: &Value, schema: u64, source: OutputFormat) -> Result<Value> {
             schema >= 9,
         )?;
     } else if v.get("output_options").is_some() {
+        return Err(bad());
+    }
+    if schema == 11 {
+        let _: drmr_core::conversion::manifest_lint::ManifestProfile =
+            typed(&v["manifest_profile"])?;
+        let _: bool = typed(&v["external_manifest_check"])?;
+        out["manifest_profile"] = v["manifest_profile"].clone();
+        out["external_manifest_check"] = v["external_manifest_check"].clone();
+    } else if v.get("manifest_profile").is_some() || v.get("external_manifest_check").is_some() {
         return Err(bad());
     }
     Ok(out)
@@ -69,12 +80,16 @@ fn bundle(v: &Value, schema: u64, source: OutputFormat) -> Result<Value> {
                 "conformance",
                 "processing",
                 "dash_addressing",
+                "manifest_profile",
             ],
         )?;
-        if !matches!(schema, 6 | 8 | 10) && output.get("processing").is_some() {
+        if !matches!(schema, 6 | 8 | 10 | 12) && output.get("processing").is_some() {
             return Err(bad());
         }
-        if !matches!(schema, 8 | 10) && output.get("dash_addressing").is_some() {
+        if !matches!(schema, 8 | 10 | 12) && output.get("dash_addressing").is_some() {
+            return Err(bad());
+        }
+        if schema != 12 && output.get("manifest_profile").is_some() {
             return Err(bad());
         }
     }
@@ -88,12 +103,19 @@ fn bundle(v: &Value, schema: u64, source: OutputFormat) -> Result<Value> {
             "outputs",
         ],
     );
-    if matches!(schema, 6 | 8 | 10) {
+    if (schema == 12)
+        != outputs
+            .iter()
+            .any(|output| output.manifest_profile.is_some())
+    {
+        return Err(bad());
+    }
+    if matches!(schema, 6 | 8 | 10 | 12) {
         out["processing"] = processing_view::bundle(&v["processing"], source, &outputs)?;
     } else if v.get("processing").is_some() {
         return Err(bad());
     }
-    if matches!(schema, 8 | 10) {
+    if matches!(schema, 8 | 10 | 12) {
         out["output_options"] = super::output_options_view::bundle(
             &v["output_options"],
             &outputs,
@@ -113,8 +135,8 @@ pub(super) fn project(v: &Value) -> Result<(Value, &'static str, bool)> {
     let schema = integer(&v["schema_version"])?;
     let source = typed(&v["source_format"])?;
     let mut out = match schema {
-        1 | 3 | 5 | 7 | 9 => single(v, schema, source)?,
-        2 | 4 | 6 | 8 | 10 => bundle(v, schema, source)?,
+        1 | 3 | 5 | 7 | 9 | 11 => single(v, schema, source)?,
+        2 | 4 | 6 | 8 | 10 | 12 => bundle(v, schema, source)?,
         _ => return Err(bad()),
     };
     if schema >= 3 {

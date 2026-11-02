@@ -409,7 +409,7 @@ def benchmark(args, report):
                        "external_tools": "not-queried"}
     for command in ("convert", "verify"):
         help_text = query(binary, [command, "--help"], environment)
-        if "--max-workers" not in help_text or "--measure" not in help_text:
+        if "--max-workers" not in help_text or "--stats" not in help_text:
             raise Failure("measurement-option-unavailable")
 
     def run_case(mode, index, warmup):
@@ -424,8 +424,10 @@ def benchmark(args, report):
         with tempfile.TemporaryDirectory(prefix="drmr-measure-") as directory:
             output = Path(directory) / ("result.mp4" if args.format == "mp4" else "result")
             converted, payload = measured_run(
-                [binary, "convert", *decode_args, source, "--to", args.to, "--format", args.format,
-                 "--output", output, *key_args, *workers, "--measure", "--json"],
+                [binary, "convert", *decode_args, source, "--encryption", args.to, "--output-format",
+                 "hls-fmp4" if args.format == "hls" else args.format,
+                 "--output-file" if args.format == "mp4" else "--output-dir", output,
+                 *key_args, *workers, "--stats", "--json"],
                 environment, args.timeout, args.sample_interval)
             if not warmup:
                 row["convert"] = converted
@@ -443,7 +445,7 @@ def benchmark(args, report):
             if not stat.S_ISREG(candidate.lstat().st_mode) or not candidate.resolve().is_relative_to(Path(directory).resolve()):
                 raise Failure("conversion-output-invalid")
             verified, proof = measured_run(
-                [binary, "verify", *decode_args, candidate, "--source", source, *key_args, *workers, "--measure", "--json"],
+                [binary, "verify", *decode_args, candidate, "--source", source, *key_args, *workers, "--stats", "--json"],
                 environment, args.timeout, args.sample_interval)
             if not warmup:
                 row["verify"] = verified

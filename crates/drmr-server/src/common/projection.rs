@@ -413,6 +413,7 @@ fn verification(v: &Value) -> Result<Value> {
         "failure",
         "license_playback_verified",
         "native_manifest",
+        "external_manifest",
     ];
     if v["schema_version"] == 1 {
         return legacy_verification(v);
@@ -433,12 +434,20 @@ fn verification(v: &Value) -> Result<Value> {
     if let Some(manifest) = v.get("native_manifest") {
         out["native_manifest"] = native(manifest)?;
     }
+    if let Some(manifest) = v.get("external_manifest") {
+        if manifest.is_null() {
+            return Err(bad());
+        }
+        out["external_manifest"] = conformance(manifest)?;
+    }
     let expected = checks.is_pass()
         && decode.satisfies(depth, scope)
         && v.get("failure").is_none()
         && v.get("native_manifest").is_none_or(|n| {
             n["errors"] == 0 && n["truncated"] == false && n["incomplete"] == false
-        });
+        })
+        && v.get("external_manifest")
+            .is_none_or(|report| report["passed"] == true);
     if boolean(&v["passed"])? != expected {
         return Err(bad());
     }

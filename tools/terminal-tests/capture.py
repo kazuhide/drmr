@@ -65,7 +65,7 @@ def capture(owner, binary, source, keys, outputs, directory, environment, outcom
     output = directory / "output"
     plan = directory / "plan.json"
     planning_environment = owner.environment(environment, directory / "planning")
-    execute([binary, "plan", source, "--outputs", outputs, "--output", output, "--save", plan,
+    execute([binary, "plan", source, "--output-config", outputs, "--output-dir", output, "--save", plan,
              "--json", "--progress", "off"], planning_environment, owner=owner)
     plan_before = plan.read_bytes()
     conversion_environment = owner.environment(environment, directory / "conversion", outcome)
@@ -104,7 +104,7 @@ def capture(owner, binary, source, keys, outputs, directory, environment, outcom
     started = time.monotonic()
     try:
         with tempfile.TemporaryFile() as stdout:
-            process = owner.spawn([str(binary), "convert", "--plan", str(plan),
+            process = owner.spawn([str(binary), "convert", "--plan-file", str(plan),
                 "--keys-file", str(keys), "--max-workers", str(workers), "--json",
                 "--progress", "text", "--packager-bin", str(owner.proxies / "packager")], env=conversion_environment,
                 stdin=stdin, stdout=stdout, stderr=slave)
@@ -160,7 +160,7 @@ def capture(owner, binary, source, keys, outputs, directory, environment, outcom
             processing["bundle_result_valid"] = (result.get("kind") == "bundle-conversion"
                 and {row["id"] for row in result.get("outputs", [])} == {"dash", "hls"})
             verification_environment = owner.environment(environment, directory / "verification")
-            verified = json.loads(execute([binary, "verify", "--decode", "--plan", plan,
+            verified = json.loads(execute([binary, "verify", "--decode", "--plan-file", plan,
                                          "--keys-file", keys, "--max-workers", "2", "--json"], verification_environment, owner=owner))
             for row in verified["outputs"]:
                 require_media_verification(row["verification"])
@@ -262,9 +262,9 @@ def main():
         verify_fixture()
         source = prepare_source(root / "source")
         before = source_fingerprints(source.parent)
-        outputs = private_json(root / "outputs.json", {"schema_version": 2, "outputs": [
-            {"id": "dash", "format": "dash", "target": "cenc", "drms": [], "processing": "stitch"},
-            {"id": "hls", "format": "hls", "target": "clear", "drms": [], "processing": "stitch"}]})
+        outputs = private_json(root / "outputs.json", {"schema_version": 4, "outputs": [
+            {"id": "dash", "output_format": "dash", "encryption": "cenc", "drms": [], "processing": "stitch"},
+            {"id": "hls", "output_format": "hls-fmp4", "encryption": "clear", "drms": [], "processing": "stitch"}]})
         keys = private_json(root / "keys.json", {"schema_version": 2, "outputs": {"dash": {
             "kid": "000102030405060708090a0b0c0d0e0f", "key": "10101010101010101010101010101010"}}})
         for name, outcome, no_color, tty_input in [("success", "success", False, True),

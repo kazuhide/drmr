@@ -44,6 +44,7 @@ pub enum Operation {
         analysis_ref: String,
         output_parent_ref: String,
         destination_name: String,
+        #[serde(with = "super::output_config")]
         outputs: Vec<BundleOutputIntent>,
     },
     Convert {
@@ -143,12 +144,18 @@ mod tests {
     fn plan_outputs_keep_independent_modes_and_reject_malformed_or_frozen_overrides() {
         let value = json!({"kind":"plan","analysis_ref":"analysis","output_parent_ref":"parent",
             "destination_name":"output","outputs":[
-                {"id":"hls","format":"hls-ts","target":"clear","drms":[],"processing":"segments"},
-                {"id":"dash","format":"dash","target":"clear","drms":[],"processing":"stitch"}]});
+                {"id":"hls","output_format":"hls-ts","encryption":"clear","drms":[],"processing":"segments"},
+                {"id":"dash","output_format":"dash","encryption":"clear","drms":[],"processing":"stitch"}]});
         let operation: Operation = serde_json::from_value(value.clone()).unwrap();
         let projected = serde_json::to_value(operation).unwrap();
         assert_eq!(projected["outputs"][0]["processing"], "segments");
         assert_eq!(projected["outputs"][1]["processing"], "stitch");
+        assert_eq!(projected["outputs"][0]["output_format"], "hls-ts");
+        assert_eq!(projected["outputs"][0]["encryption"], "clear");
+        assert_eq!(projected["outputs"][0]["external_manifest_check"], false);
+        assert!(projected["outputs"][0].get("format").is_none());
+        assert!(projected["outputs"][0].get("target").is_none());
+        assert!(projected["outputs"][0].get("conformance").is_none());
         for invalid in [
             Value::Null,
             json!("tracks"),
@@ -167,6 +174,31 @@ mod tests {
                 .is_err()
             );
         }
+    }
+
+    #[test]
+    fn output_requests_share_the_current_configuration_vocabulary_without_native_paths() {
+        let value = json!({"kind":"plan","analysis_ref":"analysis","output_parent_ref":"parent",
+            "destination_name":"output","outputs":[
+                {"id":"hls","output_format":"hls-fmp4","encryption":"clear","drms":[],
+                 "manifest_profile":"apple-vod","external_manifest_check":true}]});
+        let operation: Operation = serde_json::from_value(value.clone()).unwrap();
+        let encoded = serde_json::to_value(operation).unwrap();
+        assert_eq!(encoded["outputs"][0]["manifest_profile"], "apple-vod");
+        assert_eq!(encoded["outputs"][0]["external_manifest_check"], true);
+        for (field, supplied) in [
+            ("format", json!("hls")),
+            ("target", json!("clear")),
+            ("conformance", json!("required")),
+            ("output_dir", json!("/private-output")),
+        ] {
+            let mut changed = value.clone();
+            changed["outputs"][0][field] = supplied;
+            assert!(serde_json::from_value::<Operation>(changed).is_err());
+        }
+        let mut changed = value;
+        changed["outputs"][0]["output_format"] = json!("hls");
+        assert!(serde_json::from_value::<Operation>(changed).is_err());
     }
 
     #[test]

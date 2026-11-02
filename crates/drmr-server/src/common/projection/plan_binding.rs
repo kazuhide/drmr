@@ -29,7 +29,7 @@ pub(in crate::common) fn bind_plan(
             .ok_or_else(bad);
     }
     let outputs = plan.outputs.as_array().ok_or_else(bad)?;
-    let bundle = matches!(plan.schema, 2 | 4 | 6 | 8 | 10);
+    let bundle = matches!(plan.schema, 2 | 4 | 6 | 8 | 10 | 12);
     let rows = if bundle {
         let rows = report["outputs"].as_array().ok_or_else(bad)?;
         if rows.len() != outputs.len()
@@ -55,6 +55,7 @@ pub(in crate::common) fn bind_plan(
             row
         };
         bind_depth(&media["verification"], requested.max(plan.required_depth))?;
+        bind_manifest_policy(output, row, &media["verification"], bundle)?;
         if operation == OperationName::Convert || media.get("processing").is_some() {
             bind_actual(
                 media.get("processing"),
@@ -92,10 +93,10 @@ fn bind_depth(proof: &Value, minimum: ValidationDepth) -> Result<()> {
 
 fn saved_selections(plan: &Plan, count: usize) -> Result<Vec<Option<ProcessingSelection>>> {
     match plan.schema {
-        5 | 7 | 9 => Ok(vec![Some(typed(
+        5 | 7 | 9 | 11 => Ok(vec![Some(typed(
             plan.processing.as_ref().ok_or_else(bad)?,
         )?)]),
-        6 | 8 | 10 => Ok(typed::<Vec<OutputProcessing>>(
+        6 | 8 | 10 | 12 => Ok(typed::<Vec<OutputProcessing>>(
             plan.processing.as_ref().ok_or_else(bad)?,
         )?
         .into_iter()
@@ -104,6 +105,46 @@ fn saved_selections(plan: &Plan, count: usize) -> Result<Vec<Option<ProcessingSe
         1..=4 => Ok(vec![None; count]),
         _ => Err(bad()),
     }
+}
+
+fn bind_manifest_policy(output: &Value, row: &Value, proof: &Value, bundle: bool) -> Result<()> {
+    if let Some(profile) = output.get("manifest_profile") {
+        let profile: drmr_core::conversion::manifest_lint::ManifestProfile = typed(profile)?;
+        let format: OutputFormat = typed(&output["format"])?;
+        let expected = match (profile, format) {
+            (
+                drmr_core::conversion::manifest_lint::ManifestProfile::AppleVod,
+                OutputFormat::Hls | OutputFormat::HlsTs,
+            ) => "apple-vod-manifest",
+            (
+                drmr_core::conversion::manifest_lint::ManifestProfile::Base,
+                OutputFormat::Hls | OutputFormat::HlsTs,
+            ) => "hls-base-manifest",
+            (drmr_core::conversion::manifest_lint::ManifestProfile::Base, OutputFormat::Dash) => {
+                "dash-static-manifest"
+            }
+            _ => return Err(bad()),
+        };
+        if proof["native_manifest"]["profile"] != expected {
+            return Err(bad());
+        }
+    }
+    let required = if bundle {
+        output["conformance"] == "required"
+    } else {
+        output["external_manifest_check"] == true
+    };
+    if required {
+        let external = if bundle {
+            &row["conformance"]
+        } else {
+            &proof["external_manifest"]
+        };
+        if external["passed"] != true || external["checks"].as_array().is_none_or(Vec::is_empty) {
+            return Err(bad());
+        }
+    }
+    Ok(())
 }
 
 fn bind_actual(

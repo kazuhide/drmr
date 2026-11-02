@@ -44,7 +44,7 @@ class Executor(BASE.Executor):
                    for row in self.material]
         hls = [{"uri": uri, "key": row[1] if input_policy == "correct" else secrets.token_hex(16), "iv": row[2]}
                for row, uri in zip(self.material, self.uris)]
-        value = {"schema_version": 1, "input": {"keys": content, "hls_keys": hls}}
+        value = {"schema_version": 2, "input": {"keys": content, "hls_keys": hls}, "outputs": {}}
         if input_policy == "missing":
             value["input"] = {"keys": [], "hls_keys": []}
         output = BASE.keys(profile, *self.material[index], self.uris[index])
@@ -53,7 +53,7 @@ class Executor(BASE.Executor):
         if input_policy == "missing":
             output = None
         if output is not None:
-            value["output"] = output
+            value["outputs"]["default"] = output
         path = root / "keys.json"
         SUPPORT.private_write(path, json.dumps(value).encode("ascii"))
         return path
@@ -83,8 +83,8 @@ class Executor(BASE.Executor):
         else:
             destination = output
         plan_path = root / "plan.json"
-        planned = runner.json([self.cli, "plan", source, "--to", profile[1], "--format",
-                               "hls" if profile[0] == "hls-fmp4" else profile[0], "--output", destination,
+        planned = runner.json([self.cli, "plan", source, "--encryption", profile[1], "--output-format",
+                               profile[0], "--output-file" if profile[0] == "mp4" else "--output-dir", destination,
                                "--processing", processing, "--save", plan_path, *arguments], "codec-plan")
         plan_bytes = SUPPORT.read_regular(plan_path, 1024 * 1024)
         require(planned == SUPPORT.load_json(plan_bytes) and planned.get("kind") == "execution-plan"
@@ -97,7 +97,7 @@ class Executor(BASE.Executor):
                 and intent.get("format") == ("hls" if profile[0] == "hls-fmp4" else profile[0])
                 and intended.is_absolute() and intended.name == destination.name
                 and intended.parent.samefile(destination.parent), "codec-plan-intent-invalid")
-        converted = runner.json([self.cli, "convert", "--plan", plan_path, *arguments], "codec-convert")
+        converted = runner.json([self.cli, "convert", "--plan-file", plan_path, *arguments], "codec-convert")
         path = destination if profile[0] == "mp4" else output / ("manifest.mpd" if profile[0] == "dash" else "master.m3u8")
         inspection = converted.get("output", {})
         tracks = inspection.get("tracks", [])
@@ -109,7 +109,7 @@ class Executor(BASE.Executor):
         codec = tracks[0].get("codec")
         require(isinstance(codec, str) and codec.startswith(("hvc1", "hev1") if fixture["codec"] == "hevc" else ("vp09",)),
                 "codec-conversion-codec-invalid")
-        verified = runner.json([self.cli, "verify", "--plan", plan_path, *arguments], "codec-independent-verify")
+        verified = runner.json([self.cli, "verify", "--plan-file", plan_path, *arguments], "codec-independent-verify")
         require(verified.get("plan_id") == planned["plan_id"] and verified.get("source_unchanged") is True
                 and verified.get("output_matches_plan") is True, "codec-independent-plan-invalid")
         require(before == BASE.graph(source) and SUPPORT.read_regular(plan_path, 1024 * 1024) == plan_bytes,
@@ -133,13 +133,13 @@ class Executor(BASE.Executor):
         key_file = self.key_file(root, ("mp4", "cenc"), input_policy={
             "missing-key": "missing", "wrong-key": "wrong"}.get(kind, "correct"))
         private = SUPPORT.load_json(SUPPORT.read_regular(key_file, 65536))
-        materials = [*private["input"]["keys"], *private["input"]["hls_keys"], private.get("output", {})]
+        materials = [*private["input"]["keys"], *private["input"]["hls_keys"], private["outputs"].get("default", {})]
         runner.secrets += tuple(item[field].encode("ascii") for item in materials for field in ("key", "iv") if field in item)
         options = ["--keys-file", key_file, "--packager-bin", self.packager, "--max-workers", "1", "--json"]
         if kind in ("ts-output", "cbcs-output"):
             command = "plan"
-            arguments = [command, seed, "--to", "clear" if kind == "ts-output" else "cbcs",
-                         "--format", "hls-ts" if kind == "ts-output" else "dash", "--output", output,
+            arguments = [command, seed, "--encryption", "clear" if kind == "ts-output" else "cbcs",
+                         "--output-format", "hls-ts" if kind == "ts-output" else "dash", "--output-dir", output,
                          "--save", plan_path, *options]
         else:
             command = "verify"
