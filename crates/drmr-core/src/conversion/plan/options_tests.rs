@@ -6,6 +6,48 @@ use crate::conversion::{
 };
 use crate::inspection::TrackKind;
 
+#[test]
+fn version_eleven_binds_both_manifest_choices_without_changing_legacy_identity() {
+    use crate::conversion::manifest_lint::ManifestProfile;
+    let root = crate::native::private_tempdir().unwrap();
+    let mut plan: ExecutionPlan = serde_json::from_value(value(root.path())).unwrap();
+    plan.schema_version = 9;
+    plan.output_options = Some(current_options(&plan.source));
+    plan.plan_id = identity(&plan).unwrap();
+    validate(&plan).unwrap();
+    let legacy = serde_json::to_vec(&plan).unwrap();
+    plan.schema_version = 11;
+    plan.manifest_profile = Some(ManifestProfile::Base);
+    plan.external_manifest_check = Some(false);
+    plan.plan_id = identity(&plan).unwrap();
+    validate(&plan).unwrap();
+    let saved = root.path().join("checked-plan.json");
+    write_new(&saved, &plan).unwrap();
+    assert_eq!(read_saved(&saved).unwrap(), SavedPlan::Single(plan.clone()));
+    let mut edited = plan.clone();
+    edited.external_manifest_check = Some(true);
+    assert_eq!(validate(&edited), Err(INVALID));
+    edited.plan_id = identity(&edited).unwrap();
+    validate(&edited).unwrap();
+    for field in ["manifest_profile", "external_manifest_check"] {
+        let mut absent = serde_json::to_value(&plan).unwrap();
+        absent.as_object_mut().unwrap().remove(field);
+        assert!(validate(&serde_json::from_value(absent).unwrap()).is_err());
+        let mut null = serde_json::to_value(&plan).unwrap();
+        null[field] = serde_json::Value::Null;
+        assert!(serde_json::from_value::<ExecutionPlan>(null).is_err());
+    }
+    let mut unsupported = plan.clone();
+    unsupported.manifest_profile = Some(ManifestProfile::AppleVod);
+    unsupported.plan_id = identity(&unsupported).unwrap();
+    assert_eq!(validate(&unsupported), Err(INVALID));
+    plan.schema_version = 9;
+    plan.manifest_profile = None;
+    plan.external_manifest_check = None;
+    plan.plan_id = identity(&plan).unwrap();
+    assert_eq!(serde_json::to_vec(&plan).unwrap(), legacy);
+}
+
 pub(super) fn options(source: &SourceInventory) -> OutputOptions {
     selected_options(source, false)
 }

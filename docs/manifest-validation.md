@@ -57,17 +57,16 @@ drmr verify ./result/dash/manifest.mpd --manifest-only --json
 
 These results explicitly contain `scope: "manifest-only"`, `media_verified: false`,
 and `license_playback_verified: false`. This mode cannot be combined with
-`--source`, `--keys-file`, or `--plan`. `--max-workers` sets an upper bound for
+`--source`, `--keys-file`, or `--plan-file`. `--max-workers` sets an upper bound for
 native work; omitting it selects concurrency automatically. No external
 validator installation is needed for the native check.
 
 `--manifest-profile base` is the default: the base manifest rules for HLS and
 the static-presentation profile for DASH. Select
-`--manifest-profile apple-vod` with `--manifest-only` to add the supported
+`--manifest-profile apple-vod` to add the supported
 Apple VOD authoring rules to HLS. This selection is invalid for DASH. The chosen
 profile appears in `native_manifest.profile`; it does not change the external
-validator's mode or settings. Conversion and complete source/result verification
-use the base profile.
+validator's mode or settings. Conversion and complete verification default to `base`; the same profile option can select HLS Apple rules for their final manifests. Saved plans bind that choice.
 
 For example, `drmr verify ./result/hls/master.m3u8 --manifest-only
 --manifest-profile apple-vod --json` checks the Apple profile. A single video
@@ -78,8 +77,8 @@ additional bitrates to satisfy that requirement. Even a clean Apple manifest
 report does not establish the media, delivery or device requirements outside
 the report's declared scope.
 
-Add `--external-validator` to either command to run the native check and the
-corresponding Apple or DASH-IF adapter. The JSON result separates
+Add `--external-manifest-check` to run the corresponding Apple or DASH-IF adapter
+alongside the native check. The JSON result separates
 `native_manifest` and `external_manifest`.
 Apple's adapter uses parse-only mode. It does not have the same authoring-rule
 coverage as the native Apple profile; a successful parse is separate evidence.
@@ -88,20 +87,20 @@ Conversion already performs complete native source/result media comparison,
 native manifest checks and the requested DRM declaration checks. No additional
 flag or `verify` command is needed to perform those checks during conversion.
 
-To additionally require external manifest validation during conversion, choose
-`conformance: "required"` for each applicable output in the
-[output list](multiple-outputs.md). This applies both to direct
-`convert --outputs` and to saved plans. Every required check must pass before the
-result directory is published. A separate `verify --plan` reads the current
+To additionally require external manifest validation, use CLI
+`--external-manifest-check` or choose
+`external_manifest_check: true` for each applicable output in the
+[output list](multiple-outputs.md). Explicit CLI manifest settings override every configured output and refuse incompatible formats. Saving a plan fixes the resolved requirement; execution cannot override it. Every required check must pass before the
+result directory is published. A separate `verify --plan-file` reads the current
 originals and results again and repeats the required checks, complete source/result
 media comparison and the plan's DRM selections.
-`conformance: "none"` leaves the external check unrequested; it does not mark it
+`external_manifest_check: false` leaves the external check unrequested; it does not mark it
 as passed or disable native manifest or complete media verification. Saved
 version-2 plans retain this external-engine requirement: a native result does
-not substitute for `conformance: "required"`.
+not substitute for `external_manifest_check: true`.
 
 `convert` and `verify` accept `--hls-validator-bin` (default
-`mediastreamvalidator`) and `--dash-validator-bin` (default `php`). These options
+`mediastreamvalidator`) and `--php-bin` (default `php`). These options
 select executables for requested checks; they do not enable a check on their
 own. Runtime executable locations are not saved in a plan.
 

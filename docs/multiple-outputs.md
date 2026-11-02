@@ -11,7 +11,7 @@ transport-stream presentation can produce:
 Prepare `outputs.json` and a private `keys.json`, then run `convert` once. The
 same format works for one to eight outputs. See the [configuration reference](configuration.md)
 for required fields, defaults, input-key variants and single-output examples.
-The optional `plan --save` and `verify --plan` workflow is described below.
+The optional `plan --save` and `verify --plan-file` workflow is described below.
 Native checks cover every selected sample, configuration, clock and supported
 playback window. Add `--decode` for complete decoding as an additional condition.
 See [verification depth](verification.md).
@@ -22,40 +22,49 @@ Save this as `outputs.json`:
 
 ```json
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "outputs": [
     {
       "id": "dash",
-      "format": "dash",
-      "target": "cbcs",
-      "drms": ["widevine", "playready"]
+      "drms": [
+        "widevine",
+        "playready"
+      ],
+      "output_format": "dash",
+      "encryption": "cbcs"
     },
     {
       "id": "hls",
-      "format": "hls",
-      "target": "cbcs",
-      "drms": ["widevine", "playready", "fairplay"]
+      "drms": [
+        "widevine",
+        "playready",
+        "fairplay"
+      ],
+      "output_format": "hls-fmp4",
+      "encryption": "cbcs"
     }
   ]
 }
 ```
 
-`format: "hls"` means fragmented MP4 HLS. For FairPlay with transport streams,
+`output_format: "hls-fmp4"` means fragmented MP4 HLS. For FairPlay with transport streams,
 replace that output with:
 
 ```json
 {
   "id": "hls-ts",
-  "format": "hls-ts",
-  "target": "hls-sample-aes",
-  "drms": ["fairplay"]
+  "output_format": "hls-ts",
+  "encryption": "hls-sample-aes",
+  "drms": [
+    "fairplay"
+  ]
 }
 ```
 
 These examples use native media and manifest checks by default. Add
-`conformance: "required"` to request an external check of the final output
+`external_manifest_check: true` to request an external check of the final output
 manifests. Install the [manifest validation tools](manifest-validation.md) first.
-Use `"none"`, or omit this field, when you do not request those external checks.
+Use `false`, or omit this field, when you do not request those external checks.
 Native manifest linting and complete internal media verification run in either case. A requested tool
 that is missing, interrupted, or unable to produce a complete result causes
 failure; the check is never silently skipped.
@@ -68,14 +77,31 @@ unsupported combinations, and arbitrary child paths are refused.
 ### Select processing for each output
 
 `--processing` supplies one default for the output list. To choose different
-modes, set `processing` on individual outputs in the schema-3 file:
+modes, set `processing` on individual outputs in the schema-4 file:
 
 ```json
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "outputs": [
-    {"id":"hls-ts","format":"hls-ts","target":"hls-sample-aes","drms":["fairplay"],"processing":"segments"},
-    {"id":"dash","format":"dash","target":"cbcs","drms":["widevine","playready"],"processing":"stitch"}
+    {
+      "id": "hls-ts",
+      "drms": [
+        "fairplay"
+      ],
+      "processing": "segments",
+      "output_format": "hls-ts",
+      "encryption": "hls-sample-aes"
+    },
+    {
+      "id": "dash",
+      "drms": [
+        "widevine",
+        "playready"
+      ],
+      "processing": "stitch",
+      "output_format": "dash",
+      "encryption": "cbcs"
+    }
   ]
 }
 ```
@@ -84,28 +110,44 @@ For a qualified clear TS source, this requests HLS TS at its original segment
 boundaries and DASH fMP4 with new segmentation. `segments` preserves sample
 membership and clocks; `stitch` joins when needed and packages the selected
 format. `auto` selects a qualified route. Omitted per-output values use the CLI
-default. Earlier recipe versions remain accepted: schema 1 has no per-output
-processing field, while schemas 2 and 3 accept it. These recipe versions are
-separate from the private key-file versions.
+default. New output configurations use schema 4, independently of the key-file and saved-plan schemas.
 
 ### Select DASH references for each output
 
-Use recipe schema 3 to select `dash_addressing` on a DASH output:
+Use output-configuration schema 4 to select `dash_addressing` on a DASH output:
 
 ```json
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "outputs": [
-    {"id":"dash","format":"dash","target":"cbcs","drms":["widevine","playready"],"processing":"stitch","dash_addressing":"template"},
-    {"id":"hls","format":"hls","target":"cbcs","drms":["fairplay"],"processing":"stitch"}
+    {
+      "id": "dash",
+      "drms": [
+        "widevine",
+        "playready"
+      ],
+      "processing": "stitch",
+      "dash_addressing": "template",
+      "output_format": "dash",
+      "encryption": "cbcs"
+    },
+    {
+      "id": "hls",
+      "drms": [
+        "fairplay"
+      ],
+      "processing": "stitch",
+      "output_format": "hls-fmp4",
+      "encryption": "cbcs"
+    }
   ]
 }
 ```
 
 The four choices are `template` (default), `template-timeline`, `list` and `base`.
 The CLI's `--dash-addressing` supplies a default for DASH outputs; a value in the
-recipe takes precedence. Other formats refuse this field, and recipes 1/2 refuse
-it. Schema 3 also accepts per-output `processing`. See [DASH references](dash-addressing.md)
+configuration takes precedence. Other formats refuse this field. Schema 4 also
+accepts per-output `processing`. See [DASH references](dash-addressing.md)
 for the generated structure and timing conditions. Directory placement follows
 the [source layout](source-layout.md); no layout selector is needed.
 
@@ -194,8 +236,8 @@ then run:
 ```sh
 drmr convert "https://example.com/vod/master.m3u8" \
   --download-dir source \
-  --outputs outputs.json --keys-file keys.json \
-  --output result
+  --output-config outputs.json --keys-file keys.json \
+  --output-dir result
 ```
 
 The source is downloaded once and retained. Direct `convert` checks and plans the
@@ -224,8 +266,8 @@ For an already downloaded or local source, replace the URL with its entrypoint
 and omit `--download-dir`:
 
 ```sh
-drmr convert source/input.m3u8 --outputs outputs.json \
-  --keys-file keys.json --output result
+drmr convert source/input.m3u8 --output-config outputs.json \
+  --keys-file keys.json --output-dir result
 ```
 
 Use a new result path. For encrypted input, add its shared source mappings to
@@ -235,13 +277,12 @@ Use a new result path. For encrypted input, add its shared source mappings to
 ## Analyze, save, execute, and verify
 
 Use this alternative when the original fingerprints and conversion conditions
-need to be saved before execution. New named-output plans use schema 10 and bind
-source filenames, resource placement and DASH addressing. Older plans retain
+need to be saved before execution. Saved named-output plans bind source filenames, resource placement, DASH addressing and any selected manifest profile. Older plans retain
 their recorded minimum verification depth and processing behavior.
 
 ```sh
 drmr analyze "https://example.com/vod/master.m3u8" --download-dir ./source --json
-drmr plan ./source/input.m3u8 --outputs ./outputs.json --output ./result --save ./conversion.plan.json --json
+drmr plan ./source/input.m3u8 --output-config ./outputs.json --output-dir ./result --save ./conversion.plan.json --json
 ```
 
 The same acquisition command accepts a supported MP4 or static DASH URL; use
@@ -261,21 +302,26 @@ After preparing the key file, run:
 
 ```sh
 chmod 600 keys.json
-drmr convert --plan ./conversion.plan.json --keys-file ./keys.json --json
-drmr verify --plan ./conversion.plan.json --keys-file ./keys.json --json
+drmr convert --plan-file ./conversion.plan.json --keys-file ./keys.json --json
+drmr verify --plan-file ./conversion.plan.json --keys-file ./keys.json --json
 ```
 
 For Windows, use the [protected-file instructions](windows.md) instead of
 the Unix permission command. Both commands also accept `--hls-validator-bin` for
-the Apple executable and `--dash-validator-bin` for the PHP executable used by
+the Apple executable and `--php-bin` for the PHP executable used by
 the local DASH-IF adapter. Runtime executable locations are not saved in a plan.
 
-This optional workflow reads the source again at each command boundary. Use it
-when saved conditions or a fresh independent comparison are useful, rather than
-repeating it after every direct conversion. `verify` has no `--outputs` option;
-named-output verification uses the generated plan and the matching version-2 key
-file. `verify OUTPUT --source INPUT` is the separate direct interface and uses a
-version-1 key file.
+This optional workflow reads the source again at each command boundary. Direct
+conversion also supports a later independent comparison without saving a plan:
+
+```sh
+drmr verify result --source source/input.m3u8 \
+  --output-config outputs.json --keys-file keys.json
+```
+
+The positional root selects the actual result and takes precedence over the
+configuration's `output_dir`. Quick `verify OUTPUT --source INPUT` selects the
+`default` key domain. All key files use schema 2.
 
 ## Publication and verification
 
@@ -285,7 +331,7 @@ native manifest linting, the requested DRM checks, and any required external man
 cancellation does not publish a subset of the outputs. Existing destinations
 are never replaced. Retained source files remain available.
 
-Independent `verify --plan` reads the current original and result files again.
+Independent `verify --plan-file` reads the current original and result files again.
 For each output, it reports media correspondence, actual format and protection,
 DRM information, native lint coverage, and the external manifest result separately. Changed PSSH,
 PlayReady data, key identifiers, or FairPlay declarations can fail even when the
@@ -317,7 +363,7 @@ drmr verify ./result/hls/master.m3u8 --manifest-only --json
 drmr verify ./result/dash/manifest.mpd --manifest-only --json
 ```
 
-These commands use the built-in Rust linter. Add `--external-validator` for
+These commands use the built-in Rust linter. Add `--external-manifest-check` for
 Apple or DASH-IF checks as well. These reports have `scope: "manifest-only"`
 and `media_verified: false`.
-Use ordinary `verify --plan` for the complete source-to-result proof.
+Use ordinary `verify --plan-file` for the complete source-to-result proof.

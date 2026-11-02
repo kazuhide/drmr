@@ -18,6 +18,8 @@ pub(super) fn sample(root: &Path) -> ExecutionPlan {
             target: TargetProtection::Cbcs,
             output: root.canonicalize().unwrap().join("result"),
         },
+        manifest_profile: None,
+        external_manifest_check: None,
     };
     plan.plan_id = identity(&plan).unwrap();
     plan

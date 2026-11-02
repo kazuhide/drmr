@@ -15,9 +15,9 @@ const fontFiles = ['ibm-plex-sans-latin-400-normal.woff2', 'ibm-plex-sans-latin-
   'ibm-plex-mono-latin-400-normal.woff2'];
 const codeExamples = [
   ['Analyze command', 'drmr analyze \\ "https://example.com/vod/master.m3u8" \\ --download-dir source --json'],
-  ['Plan command', 'drmr plan source/input.m3u8 \\ --to cbcs --format dash \\ --output converted \\ --save conversion.plan.json'],
-  ['Convert command', 'drmr convert \\ --plan conversion.plan.json \\ --keys-file keys.json'],
-  ['Verify command', 'drmr verify \\ --plan conversion.plan.json \\ --keys-file keys.json --json'],
+  ['Plan command', 'drmr plan source/input.m3u8 \\ --encryption cbcs --output-format dash \\ --output-dir converted \\ --save conversion.plan.json'],
+  ['Convert command', 'drmr convert \\ --plan-file conversion.plan.json \\ --keys-file keys.json'],
+  ['Verify command', 'drmr verify \\ --plan-file conversion.plan.json \\ --keys-file keys.json --json'],
   ['Build and check the CLI', 'cargo install --path crates/drmr --locked drmr --version drmr doctor --probe'],
 ];
 const monitors = new WeakMap();

@@ -69,6 +69,7 @@ fn saved_refusals(command: &Converter, input: &Path, root: &Path) {
         drms: Vec::new(),
         conformance: ManifestValidation::None,
         processing: None,
+        manifest_profile: None,
     };
     assert_eq!(
         command

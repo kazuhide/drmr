@@ -276,12 +276,18 @@ impl Converter {
             Vec::new(),
         );
         self.backend.checkpoint(&[work, stage]);
-        let native_manifest = if let Some(destination) = destination {
-            Some(self.publish_manifest_output(stage, &destination, &manifest, request.format)?)
+        if let Some(destination) = destination {
+            self.publish_manifest_output(
+                stage,
+                &destination,
+                &manifest,
+                request.format,
+                &mut verification,
+            )?;
         } else {
-            None
-        };
-        verification.native_manifest = native_manifest;
+            verification.native_manifest = None;
+            verification.external_manifest = None;
+        }
         verification.refresh_passed();
         Ok(ConversionReport {
             schema_version: 2,
@@ -1294,8 +1300,10 @@ impl Converter {
         if self.backend.validation_depth == super::ValidationDepth::Native {
             return Ok(native);
         }
-        let mut decoded =
-            self.verify_presentation(request, Some((format, super::ProcessingMode::Segments)))?;
+        let mut baseline = self.with_processing_clone(self.processing_mode);
+        baseline.output_manifest.checking_final_result = false;
+        let mut decoded = baseline
+            .verify_presentation(request, Some((format, super::ProcessingMode::Segments)))?;
         decoded.require_native(&native)?;
         Ok(decoded)
     }
@@ -1367,8 +1375,7 @@ impl Converter {
         )?;
         if let Some(checked) = checked {
             checked.check(self)?;
-            report.passed &= checked.report.is_clean_for_scope();
-            report.native_manifest = Some(checked.report);
+            checked.apply_to(&mut report);
         }
         self.backend.checkpoint(&[&work]);
         Ok(report)
@@ -2668,6 +2675,7 @@ impl Converter {
         &self,
         request: ConversionRequest<'_>,
     ) -> Result<ConversionReport, ConversionError> {
+        self.validate_output_manifest_policy(request.format)?;
         if self
             .output_signaling
             .as_ref()
@@ -2823,12 +2831,13 @@ impl Converter {
             } else {
                 "master.m3u8"
             });
-            report.verification.native_manifest = Some(self.publish_manifest_output(
+            self.publish_manifest_output(
                 stage,
                 destination,
                 &manifest,
                 request.format,
-            )?);
+                &mut report.verification,
+            )?;
         }
         self.backend.checkpoint(&[&work]);
         report.input = input_report;

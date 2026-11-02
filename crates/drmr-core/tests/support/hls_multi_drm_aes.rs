@@ -200,6 +200,7 @@ fn refused(input: &Path, root: &Path, format: OutputFormat, decode: bool, mode: 
         conformance: ManifestValidation::None,
         processing: None,
         dash_addressing: None,
+        manifest_profile: None,
     }];
     assert_eq!(
         command

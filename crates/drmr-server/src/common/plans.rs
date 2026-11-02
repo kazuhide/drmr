@@ -44,15 +44,16 @@ impl Plan {
         }
         Ok(b)
     }
-    pub fn view(&self) -> Value {
-        let mut view = json!({"plan_ref":self.reference,"session_id":self.session,"plan_id":self.id,"plan_schema_version":self.schema,"required_depth":self.required_depth,"outputs":self.outputs,"destination_state":destination_state(&self.destination,&self.destinations),"export_url":format!("/api/common/plans/{}/export",self.reference)});
+    pub fn view(&self) -> Result<Value> {
+        let outputs = super::output_config::plan_view(&self.outputs, self.schema % 2 == 1)?;
+        let mut view = json!({"plan_ref":self.reference,"session_id":self.session,"plan_id":self.id,"plan_schema_version":self.schema,"required_depth":self.required_depth,"outputs":outputs,"destination_state":destination_state(&self.destination,&self.destinations),"export_url":format!("/api/common/plans/{}/export",self.reference)});
         if let Some(processing) = &self.processing {
             view["processing"] = processing.clone();
         }
         if let Some(options) = &self.output_options {
             view["output_options"] = options.clone();
         }
-        view
+        Ok(view)
     }
 }
 pub fn digest(bytes: &[u8]) -> String {
@@ -61,10 +62,10 @@ pub fn digest(bytes: &[u8]) -> String {
 pub fn load(path: &Path, files: &Files, session: &str, reference: String) -> Result<Plan> {
     let binding = BoundPath::capture(path)?;
     let bytes = read_private(&binding, LIMIT)?;
-    crate::common_protocol::decode::<Value>(&bytes, LIMIT)
+    let saved_value = crate::common_protocol::decode::<Value>(&bytes, LIMIT)
         .map_err(|_| Error::new(422, "execution-plan-invalid"))?;
     let saved = plan::read_saved(path).map_err(|_| Error::new(422, "execution-plan-invalid"))?;
-    let (source, destination, id, schema, outputs) = match &saved {
+    let (source, destination, id, schema, mut outputs) = match &saved {
         SavedPlan::Single(p) => (
             &p.source,
             p.intent.output.clone(),
@@ -80,6 +81,10 @@ pub fn load(path: &Path, files: &Files, session: &str, reference: String) -> Res
             json!(p.outputs),
         ),
     };
+    if schema == 11 {
+        outputs[0]["manifest_profile"] = saved_value["manifest_profile"].clone();
+        outputs[0]["external_manifest_check"] = saved_value["external_manifest_check"].clone();
+    }
     let required_depth = match &saved {
         SavedPlan::Single(p) => p.minimum_depth(),
         SavedPlan::Bundle(p) => p.minimum_depth(),

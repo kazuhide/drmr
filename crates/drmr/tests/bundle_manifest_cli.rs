@@ -52,7 +52,7 @@ fn manifest_only_checks_all_33_playlists_without_media_or_keys() {
             "verify",
             input.to_str().unwrap(),
             "--manifest-only",
-            "--external-validator",
+            "--external-manifest-check",
             "--hls-validator-bin",
             script.to_str().unwrap(),
             "--json",

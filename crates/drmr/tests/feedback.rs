@@ -15,7 +15,18 @@ fn invoke(command: &str, source: &Path, output: &Path, extra: &[&str]) -> Output
     if command == "convert" {
         process
             .arg(source)
-            .args(["--to", "clear", "--output"])
+            .args([
+                "--encryption",
+                "clear",
+                if extra
+                    .windows(2)
+                    .any(|pair| pair[0] == "--output-format" && pair[1] != "mp4")
+                {
+                    "--output-dir"
+                } else {
+                    "--output-file"
+                },
+            ])
             .arg(output);
     } else {
         process.arg(output).arg("--source").arg(source);
@@ -132,7 +143,7 @@ fn an_unavailable_real_tool_has_structured_failure_and_safe_last_activity() {
         &output,
         &[
             "--json",
-            "--format",
+            "--output-format",
             "dash",
             "--packager-bin",
             missing.to_str().unwrap(),
@@ -234,7 +245,7 @@ fn completion_summaries_cover_direct_and_saved_single_and_named_outputs() {
     let recipe = root.path().join("outputs.json");
     drmr_core::native::create_private_new(&recipe)
         .unwrap()
-        .write_all(br#"{"schema_version":1,"outputs":[{"id":"first","format":"mp4","target":"clear","drms":[]},{"id":"second","format":"mp4","target":"clear","drms":[]}]}"#)
+        .write_all(br#"{"schema_version":4,"outputs":[{"id":"first","output_format":"mp4","encryption":"clear","drms":[]},{"id":"second","output_format":"mp4","encryption":"clear","drms":[]}]}"#)
         .unwrap();
     for saved in [false, true] {
         for bundle in [false, true] {
@@ -246,11 +257,18 @@ fn completion_summaries_cover_direct_and_saved_single_and_named_outputs() {
             } else {
                 command.arg("convert");
             }
-            command.arg(&input).arg("--output").arg(&destination);
+            command
+                .arg(&input)
+                .arg(if bundle {
+                    "--output-dir"
+                } else {
+                    "--output-file"
+                })
+                .arg(&destination);
             if bundle {
-                command.arg("--outputs").arg(&recipe);
+                command.arg("--output-config").arg(&recipe);
             } else {
-                command.args(["--format", "mp4", "--to", "clear"]);
+                command.args(["--output-format", "mp4", "--encryption", "clear"]);
             }
             let actual_destination = if saved {
                 command.arg("--save").arg(&plan).arg("--json");
@@ -262,7 +280,7 @@ fn completion_summaries_cover_direct_and_saved_single_and_named_outputs() {
                     &value["intent"]["output"]
                 };
                 command = Command::new(env!("CARGO_BIN_EXE_drmr"));
-                command.args(["convert", "--plan"]).arg(&plan);
+                command.args(["convert", "--plan-file"]).arg(&plan);
                 PathBuf::from(path.as_str().unwrap())
             } else {
                 destination.clone()
@@ -305,7 +323,7 @@ fn completion_summaries_cover_direct_and_saved_single_and_named_outputs() {
         }
     }
     let output = root.path().join("measured.mp4");
-    let json = invoke("convert", &input, &output, &["--json", "--measure"]);
+    let json = invoke("convert", &input, &output, &["--json", "--stats"]);
     assert!(json.status.success());
     let value: Value = serde_json::from_slice(&json.stdout).unwrap();
     assert_eq!(value["schema_version"], 2);
@@ -342,11 +360,11 @@ fn remote_completion_names_retained_originals_without_url_or_credentials() {
         Command::new(env!("CARGO_BIN_EXE_drmr"))
             .arg("convert")
             .arg(&url)
-            .args(["--to", "clear", "--download-dir"])
+            .args(["--encryption", "clear", "--download-dir"])
             .arg(&download)
-            .arg("--fetch-policy")
+            .arg("--fetch-config")
             .arg(&policy)
-            .arg("--output")
+            .arg("--output-file")
             .arg(&output),
     );
     let text = String::from_utf8_lossy(&result.stdout);
@@ -423,7 +441,14 @@ fn observed_capacity_refusal_is_structured_without_launching_packaging() {
         .arg("convert")
         .arg("--decode")
         .arg(&source)
-        .args(["--to", "clear", "--format", "mp4", "--json", "--output"])
+        .args([
+            "--encryption",
+            "clear",
+            "--output-format",
+            "mp4",
+            "--json",
+            "--output-file",
+        ])
         .arg(&output)
         .env("PATH", tools)
         .output()
@@ -572,7 +597,13 @@ fn a_closed_conversion_result_stream_never_reports_finished_first() {
     let result = Command::new(env!("CARGO_BIN_EXE_drmr"))
         .arg("convert")
         .arg(clip())
-        .args(["--to", "clear", "--format", "mp4", "--output"])
+        .args([
+            "--encryption",
+            "clear",
+            "--output-format",
+            "mp4",
+            "--output-file",
+        ])
         .arg(&output)
         .args(["--progress", "json", "--json"])
         .stdout(Stdio::from(writer))
@@ -610,17 +641,25 @@ fn saved_plan_result_streams_never_report_finished_before_a_write_failure() {
         vec![
             "plan".into(),
             clip().as_os_str().into(),
-            "--to".into(),
+            "--encryption".into(),
             "clear".into(),
-            "--format".into(),
+            "--output-format".into(),
             "mp4".into(),
-            "--output".into(),
+            "--output-file".into(),
             output.as_os_str().into(),
             "--save".into(),
             plan.as_os_str().into(),
         ],
-        vec!["convert".into(), "--plan".into(), plan.as_os_str().into()],
-        vec!["verify".into(), "--plan".into(), plan.as_os_str().into()],
+        vec![
+            "convert".into(),
+            "--plan-file".into(),
+            plan.as_os_str().into(),
+        ],
+        vec![
+            "verify".into(),
+            "--plan-file".into(),
+            plan.as_os_str().into(),
+        ],
         vec![
             "verify".into(),
             output.as_os_str().into(),

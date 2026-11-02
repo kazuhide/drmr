@@ -20,6 +20,18 @@ fn private_json(path: &Path, value: &serde_json::Value) {
         .unwrap();
 }
 
+fn authenticated_policy(root: &Path, origin: &str) -> PathBuf {
+    let policy = root.join("private/fetch.json");
+    private_json(
+        &policy,
+        &serde_json::json!({
+            "allowed_origins": [origin], "allow_http": true, "allow_private_network": true,
+            "headers_by_origin": { origin: { "Authorization": download_http::AUTH } }
+        }),
+    );
+    policy
+}
+
 fn snapshot(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     let mut result = BTreeMap::new();
     let mut pending = vec![root.to_path_buf()];
@@ -200,7 +212,13 @@ fn convert(input: &Path, output: &Path, keys: &Path) -> Command {
         .arg("convert")
         .arg("--decode")
         .arg(input)
-        .args(["--to", "cbcs", "--format", "hls", "--output"])
+        .args([
+            "--encryption",
+            "cbcs",
+            "--output-format",
+            "hls-fmp4",
+            "--output-dir",
+        ])
         .arg(output)
         .arg("--keys-file")
         .arg(keys)
@@ -226,13 +244,34 @@ fn verify(output: &Path, source: &Path, keys: &Path) {
 fn saved_plan_command(operation: &str, plan: &Path, keys: Option<&Path>) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_drmr"));
     command
-        .args([operation, "--plan"])
+        .args([operation, "--plan-file"])
         .arg(plan)
         .args(["--max-workers", "1", "--json"]);
     if let Some(keys) = keys {
         command.arg("--keys-file").arg(keys);
     }
     command
+}
+
+fn save_cbcs_dash_plan(source: &Path, output: &Path, plan: &Path) -> serde_json::Value {
+    json_success(
+        &Command::new(env!("CARGO_BIN_EXE_drmr"))
+            .args(["plan", "--decode"])
+            .arg(source)
+            .args([
+                "--encryption",
+                "cbcs",
+                "--output-format",
+                "dash",
+                "--output-dir",
+            ])
+            .arg(output)
+            .arg("--save")
+            .arg(plan)
+            .args(["--max-workers", "1", "--json"])
+            .output()
+            .unwrap(),
+    )
 }
 
 fn preserves_raw(download: &Path, responses: &BTreeMap<String, Vec<u8>>) {
@@ -328,8 +367,8 @@ fn download_and_reconvert(fragmented: bool) {
     let keys = root.join("private/keys.json");
     private_json(
         &keys,
-        &serde_json::json!({"schema_version":1,
-            "output":{"kid":KID,"key":KEY,"hls_key_uri":"https://operator.invalid/output"}}),
+        &serde_json::json!({"schema_version":2,
+            "outputs":{"default":{"kid":KID,"key":KEY,"hls_key_uri":"https://operator.invalid/output"}}}),
     );
     let download = root.join("download");
     let output = root.join("converted");
@@ -342,10 +381,10 @@ fn download_and_reconvert(fragmented: bool) {
     command
         .arg("--download-dir")
         .arg(&download)
-        .arg("--fetch-policy")
+        .arg("--fetch-config")
         .arg(&policy);
     if fragmented {
-        command.arg("--measure");
+        command.arg("--stats");
     }
     let result = command.output().unwrap();
     let report = json_success(&result);
@@ -426,8 +465,8 @@ fn completed_download_survives_a_later_media_tool_failure_without_published_outp
     let keys = root.join("private/keys.json");
     private_json(
         &keys,
-        &serde_json::json!({"schema_version":1,
-        "output":{"kid":KID,"key":KEY,"hls_key_uri":"https://operator.invalid/output"}}),
+        &serde_json::json!({"schema_version":2,
+        "outputs":{"default":{"kid":KID,"key":KEY,"hls_key_uri":"https://operator.invalid/output"}}}),
     );
     let download = root.join("download");
     let output = root.join("must-not-exist");
@@ -439,7 +478,7 @@ fn completed_download_survives_a_later_media_tool_failure_without_published_outp
     let result = convert(Path::new(&url), &output, &keys)
         .arg("--download-dir")
         .arg(&download)
-        .arg("--fetch-policy")
+        .arg("--fetch-config")
         .arg(&policy)
         .arg("--packager-bin")
         .arg(root.join("missing-packager"))
@@ -463,14 +502,7 @@ fn url_analysis_saved_plan_execution_and_verification_use_the_retained_original_
     let original = snapshot(source.parent().unwrap());
     let responses = remote_files(&original);
     let server = download_http::Server::start(responses.clone());
-    let policy = root.join("private/fetch.json");
-    private_json(
-        &policy,
-        &serde_json::json!({
-            "allowed_origins": [server.origin], "allow_http": true, "allow_private_network": true,
-            "headers_by_origin": { &server.origin: { "Authorization": download_http::AUTH } }
-        }),
-    );
+    let policy = authenticated_policy(root, &server.origin);
     let download = root.join("download");
     let url = format!(
         "{}/master.m3u8?token={}",
@@ -481,9 +513,9 @@ fn url_analysis_saved_plan_execution_and_verification_use_the_retained_original_
         &Command::new(env!("CARGO_BIN_EXE_drmr"))
             .args(["analyze", "--decode", &url, "--download-dir"])
             .arg(&download)
-            .arg("--fetch-policy")
+            .arg("--fetch-config")
             .arg(&policy)
-            .args(["--max-workers", "1", "--json", "--measure"])
+            .args(["--max-workers", "1", "--json", "--stats"])
             .output()
             .unwrap(),
     );
@@ -500,19 +532,7 @@ fn url_analysis_saved_plan_execution_and_verification_use_the_retained_original_
 
     let plan = root.join("conversion.plan.json");
     let output = root.join("converted");
-    let planned = json_success(
-        &Command::new(env!("CARGO_BIN_EXE_drmr"))
-            .arg("plan")
-            .arg("--decode")
-            .arg(download.join("input.m3u8"))
-            .args(["--to", "cbcs", "--format", "dash", "--output"])
-            .arg(&output)
-            .arg("--save")
-            .arg(&plan)
-            .args(["--max-workers", "1", "--json"])
-            .output()
-            .unwrap(),
-    );
+    let planned = save_cbcs_dash_plan(&download.join("input.m3u8"), &output, &plan);
     let saved = std::fs::read(&plan).unwrap();
     let on_disk: serde_json::Value = serde_json::from_slice(&saved).unwrap();
     assert_eq!(planned, on_disk);
@@ -537,8 +557,8 @@ fn url_analysis_saved_plan_execution_and_verification_use_the_retained_original_
     private_json(
         &keys,
         &serde_json::json!({
-            "schema_version": 1, "output": {"kid": KID, "key": KEY}
-        }),
+            "schema_version": 2, "outputs": {"default":{"kid": KID, "key": KEY}
+        }}),
     );
     let converted = json_success(
         &saved_plan_command("convert", &plan, Some(&keys))

@@ -99,9 +99,9 @@ fn failed_commands_keep_structured_progress_secret_free() {
             "json",
             "convert",
             "https://example.invalid/private-sentinel.m3u8?secret-sentinel",
-            "--to",
+            "--encryption",
             "clear",
-            "--output",
+            "--output-file",
         ])
         .arg(root.path().join("output-sentinel"))
         .arg("--json")
@@ -134,10 +134,10 @@ fn multiple_output_configuration_uses_one_command_observer() {
             "--progress",
             "json",
             "--json",
-            "--outputs",
+            "--output-config",
         ])
         .arg(root.path().join("missing-sentinel.json"))
-        .arg("--output")
+        .arg("--output-dir")
         .arg(root.path().join("result"))
         .output()
         .unwrap();

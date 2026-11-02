@@ -51,7 +51,13 @@ fn cancelled_command(signal: rustix::process::Signal, command: &str) {
     if command == "convert" {
         invocation
             .arg(&clip)
-            .args(["--to", "clear", "--format", "dash", "--output"])
+            .args([
+                "--encryption",
+                "clear",
+                "--output-format",
+                "dash",
+                "--output-dir",
+            ])
             .arg(&output);
     } else {
         invocation.arg(&clip).arg("--source").arg(&clip);

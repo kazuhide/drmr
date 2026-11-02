@@ -20,7 +20,7 @@ function harness(imported = false, localized = false) {
     getAttribute(k) { return this.attrs.get(k) || null; }
     removeAttribute(k) { this.attrs.delete(k); }
     addEventListener(k, v) { this.listeners.set(k, v); }
-    dispatch(k) { if (!(k === 'click' && this.disabled)) this.listeners.get(k)?.({ target: this, preventDefault() {} }); }
+    dispatch(k) { if (!(k === 'click' && this.disabled)) this.listeners.get(k)?.({ encryption: this, preventDefault() {} }); }
     showModal() { this.open = true; }
     close() { this.open = false; }
     focus() { document.activeElement = this; }
@@ -29,7 +29,7 @@ function harness(imported = false, localized = false) {
   const host = new Element('article'), nav = new Element('ul'), global = new Element('div');
   document = { activeElement: null, createElement: tag => new Element(tag), createTextNode: text => ({ nodeType: 3, textContent: text, children: [] }) };
   const session = { session_id: 'session_1', source: { kind: imported ? 'saved-plan' : 'local', label: 'input.mp4' }, requests_used: 0, plan_refs: [] };
-  const plan = imported ? { plan_ref: 'plan_1', plan_id: 'b'.repeat(64), plan_schema_version: 1, outputs: [{ id: null, format: 'mp4', target: 'clear' }], destination_state: 'present', export_url: '/api/common/plans/plan_1/export' } : null;
+  const plan = imported ? { plan_ref: 'plan_1', plan_id: 'b'.repeat(64), plan_schema_version: 1, outputs: [{ id: null, output_format: 'mp4', encryption: 'clear' }], destination_state: 'present', export_url: '/api/common/plans/plan_1/export' } : null;
   const record = { session, plan, plans: new Map(plan ? [['plan_1', plan]] : []), reports: new Map(), analysis: { analysis_ref: 'analysis_1' }, error: null, lastJob: null, outcome: null };
   const data = { serverId: 'server_1', capabilities: { server_id: 'server_1', roots: [], worker_policy: { maximum: 8 }, execution: { availability: 'idle' } }, sessions: new Map([['session_1', record]]), selectedId: 'session_1', owner: null, creation: null, error: null };
   const sent = [], opened = [];
@@ -71,6 +71,24 @@ test('the decode choice defaults off and survives polling before media submissio
   assert.equal(h.sent[0].runtime.decode, true);
 });
 
+test('output controls use explicit fMP4 profiles and separate native and external manifest checks', () => {
+  const h = harness(false, true), format = h.find('common-output-1-format');
+  assert.ok(format.children.some(option => option.value === 'hls-fmp4'));
+  assert.equal(format.children.some(option => option.value === 'hls'), false);
+  const external = h.find('common-output-1-external-manifest-check');
+  const profile = h.find('common-output-1-manifest-profile');
+  assert.ok(external); assert.equal(external.getAttribute('type'), 'checkbox'); assert.equal(external.checked, false);
+  assert.ok(profile); assert.equal(profile.value, 'base');
+  assert.deepEqual(profile.children.map(option => option.value), ['base', 'apple-vod']);
+  format.value = 'hls-fmp4'; format.dispatch('change');
+  profile.value = 'apple-vod'; profile.focus(); profile.dispatch('change');
+  external.checked = true; external.dispatch('change');
+  h.view.update(); h.setLanguage('ja'); h.view.translate();
+  assert.equal(h.find('common-output-1-manifest-profile'), profile);
+  assert.equal(profile.value, 'apple-vod'); assert.equal(h.document.activeElement, profile);
+  assert.equal(h.find('common-output-1-external-manifest-check').checked, true);
+});
+
 test('each output processing selector survives polling, translates and invalidates the saved plan', () => {
   const h = harness(false, true), select = h.find('common-output-1-processing');
   assert.ok(select); assert.equal(select.tagName, 'select'); assert.equal(select.value, 'auto');
@@ -94,7 +112,7 @@ test('a saved processing choice is displayed without adding conversion overrides
   h.record.plan.plan_schema_version = 6;
   h.record.plan.required_depth = 'native';
   h.record.plan.destination_state = 'absent';
-  h.record.plan.outputs = [{ id: 'hls', format: 'hls-ts', target: 'clear', drms: [], conformance: 'none', processing: 'segments' }];
+  h.record.plan.outputs = [{ id: 'hls', output_format: 'hls-ts', encryption: 'clear', drms: [], external_manifest_check: false, processing: 'segments' }];
   h.record.plan.processing = [{ id: 'hls', selection: { requested: 'segments', resolved: 'segments', boundaries: 'preserve', segment_duration_ms: null } }];
   h.view.update();
   const text = h.descendants(h.host).map(node => node.textContent).join(' ');
@@ -266,7 +284,7 @@ test('DASH addressing is a per-output choice with a nominal default and no layou
   h.record.plan = { plan_ref: 'saved-choice' };
   select.value = 'list'; select.dispatch('change');
   assert.equal(h.record.plan, null);
-  format.value = 'hls'; format.dispatch('change');
+  format.value = 'hls-fmp4'; format.dispatch('change');
   assert.equal(select.hidden, true); assert.equal(select.disabled, true);
   format.value = 'dash'; format.dispatch('change');
   assert.equal(select.value, 'list');
@@ -279,7 +297,7 @@ test('saved source layout and DASH addressing are read-only and never sent as ex
     const selection = { requested: 'stitch', resolved: 'stitch', boundaries: 'resegment', segment_duration_ms: 6000 };
     const options = { layout: 'source', dash_addressing: 'list' };
     Object.assign(h.record.plan, { plan_schema_version: schema, required_depth: 'native', destination_state: 'absent',
-      outputs: [{ id: single ? null : 'dash', format: 'dash', target: 'cbcs', drms: ['widevine', 'playready'], conformance: 'none', processing: 'stitch', dash_addressing: 'list' }],
+      outputs: [{ id: single ? null : 'dash', output_format: 'dash', encryption: 'cbcs', drms: ['widevine', 'playready'], external_manifest_check: false, processing: 'stitch', dash_addressing: 'list' }],
       processing: single ? selection : [{ id: 'dash', selection }],
       output_options: single ? options : [{ id: 'dash', options }] });
     h.view.update();

@@ -95,3 +95,31 @@ test('new saved options remain current while real older fixtures retain their or
     assert.throws(() => planMinimumDepth(missing));
   }
 });
+
+test('pinned manifest checks require complete external evidence and exact policy plan versions', () => {
+  const base = native();
+  const checked = { ...base, external_manifest: { passed: true, checks: [{ passed: true }] } };
+  assert.doesNotThrow(() => assertVerification(checked, { depth: 'native' }));
+  for (const external_manifest of [null, {}, { passed: true, checks: [] },
+    { passed: false, checks: [{ passed: true }] }, { passed: true, checks: [{ passed: false }] }]) {
+    assert.throws(() => assertVerification({ ...base, external_manifest }, { depth: 'native' }));
+  }
+  const selection = { requested: 'auto', resolved: 'stitch', boundaries: 'not-applicable' };
+  const single = { kind: 'execution-plan', schema_version: 11, required_depth: 'native',
+    intent: { format: 'mp4' }, processing: selection, output_options: {},
+    manifest_profile: 'base', external_manifest_check: false };
+  assert.equal(planMinimumDepth(single), 'native');
+  const bundle = { kind: 'execution-plan', schema_version: 12, required_depth: 'native',
+    outputs: [{ id: 'hls', format: 'hls', manifest_profile: 'apple-vod' }],
+    processing: [{ selection }], output_options: [{ id: 'hls', options: {} }] };
+  assert.equal(planMinimumDepth(bundle), 'native');
+  for (const invalid of [{ ...single, schema_version: 9 }, { ...single, manifest_profile: null },
+    { ...single, external_manifest_check: null }, { ...bundle, schema_version: 10 },
+    { ...bundle, outputs: [{ id: 'hls', format: 'hls' }] },
+    { ...bundle, outputs: [{ id: 'hls', format: 'hls', manifest_profile: 'unknown' }] }]) {
+    assert.throws(() => planMinimumDepth(invalid));
+  }
+  // Compatibility fixtures cannot discard a newly pinned validation minimum.
+  assert.throws(() => compatibilityPlan(single, 5));
+  assert.throws(() => compatibilityPlan(bundle, 6));
+});

@@ -1,5 +1,6 @@
 //! One byte-bound source and one atomic destination for several independently checked outputs.
 mod execution;
+mod output_config;
 mod outputs;
 use super::{EXISTS, INVALID, KIND, LIMIT, UNSAFE, UNSUPPORTED, absolute, destination};
 use crate::conversion::FrozenSource;
@@ -16,6 +17,9 @@ use crate::{
         processing::{ProcessingMode, ProcessingSelection, segment_target::HlsTargetPolicy},
     },
     inspection::{OutputFormat, TargetProtection},
+};
+pub use output_config::{
+    OutputConfig, parse_output_config_diagnostic, read_output_config_diagnostic,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -66,6 +70,18 @@ pub struct BundleOutputIntent {
         skip_serializing_if = "Option::is_none"
     )]
     pub dash_addressing: Option<DashAddressing>,
+    #[serde(
+        default,
+        deserialize_with = "present_profile",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub manifest_profile: Option<crate::conversion::manifest_lint::ManifestProfile>,
+}
+
+fn present_profile<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<crate::conversion::manifest_lint::ManifestProfile>, D::Error> {
+    crate::conversion::manifest_lint::ManifestProfile::deserialize(deserializer).map(Some)
 }
 
 fn present_addressing<'de, D: serde::Deserializer<'de>>(
@@ -262,14 +278,22 @@ impl Converter {
         &self,
         request: BundlePlanRequest<'_>,
     ) -> Result<PreparedPlan, ConversionError> {
+        self.prepare_bundle_plan_for(request, false)
+    }
+
+    fn prepare_bundle_plan_for(
+        &self,
+        request: BundlePlanRequest<'_>,
+        verification: bool,
+    ) -> Result<PreparedPlan, ConversionError> {
         self.backend.check_cancelled()?;
-        let outputs = normalized(request.outputs)?;
-        let output_root = super::super::destination(request.output_root).map_err(|_| UNSAFE)?;
-        let destination = destination::OutputGuard::new(&output_root)?;
+        let outputs = selected_outputs(self, request.outputs)?;
+        let (output_root, destination) = output_location(request.output_root, verification)?;
         let frozen = self.capture_source(request.input.input)?;
         self.check_downloaded_inventory(frozen.inventory())?;
         let command = self
             .using_frozen_source(&frozen)
+            .with_decode(!verification && self.backend.validation_depth == ValidationDepth::Decoded)
             .with_processing(source_processing(
                 outputs
                     .iter()
@@ -333,7 +357,14 @@ impl Converter {
         )?;
         let mut plan = BundlePlan {
             kind: KIND.into(),
-            schema_version: 10,
+            schema_version: if outputs
+                .iter()
+                .any(|output| output.manifest_profile.is_some())
+            {
+                12
+            } else {
+                10
+            },
             plan_id: String::new(),
             source: frozen.inventory().clone(),
             source_format: qualified.actual_format,
@@ -346,7 +377,9 @@ impl Converter {
         plan.plan_id = identity(&plan)?;
         validate(&plan)?;
         frozen.check_original().map_err(super::source_error)?;
-        destination.check()?;
+        if let Some(destination) = destination {
+            destination.check()?;
+        }
         Ok(PreparedPlan {
             plan,
             frozen,
@@ -379,6 +412,7 @@ impl Converter {
         let source_phase = source_phase
             .unwrap_or_else(|| self.pipeline_phase(crate::conversion::pipeline::Phase::Source));
         validate(plan)?;
+        self.check_saved_bundle_manifest_policy(&plan.outputs)?;
         for output in &plan.outputs {
             self.check_saved_processing(plan.processing_mode(&output.id))?;
         }
@@ -573,7 +607,46 @@ impl Converter {
         tools: &ManifestValidationTools,
     ) -> Result<BundleVerificationReport, ConversionError> {
         self.bundle_cohort()
-            .verify_bundle_plan_inner(plan, keys, tools)
+            .verify_bundle_plan_inner(plan, keys, tools, None)
+    }
+
+    /// Independently compare existing named outputs with a fresh source and explicit settings.
+    /// No saved plan or conversion receipt is trusted, and existing outputs grant no write authority.
+    pub fn verify_bundle_config(
+        &self,
+        input: &Path,
+        outputs: &[BundleOutputIntent],
+        output_root: &Path,
+        keys: &BundleOperatorKeys,
+        tools: &ManifestValidationTools,
+    ) -> Result<BundleVerificationReport, ConversionError> {
+        let result_root = destination::ExistingDirectoryGuard::new(output_root)?;
+        let command = self.bundle_cohort();
+        let PreparedPlan {
+            plan,
+            frozen,
+            qualified: _,
+        } = {
+            let _phase = command.pipeline_phase(crate::conversion::pipeline::Phase::Source);
+            command.prepare_bundle_plan_for(
+                BundlePlanRequest {
+                    input: VerificationSource {
+                        input,
+                        input_keys: &keys.input,
+                        hls_keys: &keys.hls_input,
+                    },
+                    output_root: result_root.path(),
+                    outputs,
+                },
+                true,
+            )?
+        };
+        result_root.check()?;
+        let report = command
+            .with_processing_clone(ProcessingMode::Auto)
+            .verify_bundle_plan_inner(&plan, keys, tools, Some(frozen))?;
+        result_root.check()?;
+        Ok(report)
     }
 
     fn verify_bundle_plan_inner(
@@ -581,18 +654,25 @@ impl Converter {
         plan: &BundlePlan,
         keys: &BundleOperatorKeys,
         tools: &ManifestValidationTools,
+        prepared: Option<FrozenSource>,
     ) -> Result<BundleVerificationReport, ConversionError> {
         let _retained;
         validate(plan)?;
+        self.check_saved_bundle_manifest_policy(&plan.outputs)?;
         for output in &plan.outputs {
             self.check_saved_processing(plan.processing_mode(&output.id))?;
         }
         validate_keys(plan, keys)?;
         self.backend.check_cancelled()?;
         self.refuse_bundle_signaling()?;
-        let original = self
-            .reopen_source(&plan.source)
-            .map_err(super::source_error)?;
+        let admitted = prepared.is_some();
+        let original = match prepared {
+            Some(source) if source.inventory() == &plan.source => source,
+            Some(_) => return Err(INVALID),
+            None => self
+                .reopen_source(&plan.source)
+                .map_err(super::source_error)?,
+        };
         let command = self.using_frozen_source(&original).with_decode(
             self.backend.validation_depth.max(plan.minimum_depth()) == ValidationDepth::Decoded,
         );
@@ -604,10 +684,12 @@ impl Converter {
         // Source admission uses the same saved generation as execution. Final
         // outputs retain their separate strict verification admission below.
         // Native pre-admission does not add another complete decode.
-        command
-            .with_processing_clone(command.processing_mode)
-            .with_decode(false)
-            .validate_bundle_source(plan, source)?;
+        if !admitted {
+            command
+                .with_processing_clone(command.processing_mode)
+                .with_decode(false)
+                .validate_bundle_source(plan, source)?;
+        }
         let manifests = outputs::ManifestDemands::capture(&command, plan)?;
         let (execution, retained) =
             execution::Execution::new(&command)
@@ -703,7 +785,8 @@ impl Converter {
                 .track_protection
                 .iter()
                 .all(|value| value.matches_target(intent.target));
-        let verification = self.verify(VerificationRequest { source, output })?;
+        let verification =
+            self.verify_with_output_checks(VerificationRequest { source, output })?;
         Ok((matches, verification))
     }
 
@@ -768,7 +851,9 @@ pub fn read_output_spec_diagnostic(
         return Err(at(vec![F::SchemaVersion.into()]));
     }
     for (index, output) in spec.outputs.iter().enumerate() {
-        let field = if spec.schema_version == 1 && output.processing.is_some() {
+        let field = if output.manifest_profile.is_some() {
+            Some(F::ManifestProfile)
+        } else if spec.schema_version == 1 && output.processing.is_some() {
             Some(F::Processing)
         } else if spec.schema_version < 3 && output.dash_addressing.is_some() {
             Some(F::DashAddressing)
@@ -853,6 +938,23 @@ fn source_processing(modes: impl Iterator<Item = ProcessingMode>) -> ProcessingM
     }
 }
 
+fn output_location(
+    path: &Path,
+    verification: bool,
+) -> Result<(PathBuf, Option<destination::OutputGuard>), ConversionError> {
+    if verification {
+        let metadata = std::fs::symlink_metadata(path).map_err(|_| UNSAFE)?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(UNSAFE);
+        }
+        Ok((path.canonicalize().map_err(|_| UNSAFE)?, None))
+    } else {
+        let path = super::super::destination(path).map_err(|_| UNSAFE)?;
+        let guard = destination::OutputGuard::new(&path)?;
+        Ok((path, Some(guard)))
+    }
+}
+
 fn shares_preparation(plan: &BundlePlan, qualified: &SourceQualification) -> bool {
     plan.outputs.len() > 1
         && qualified.actual_format == OutputFormat::HlsTs
@@ -934,6 +1036,16 @@ fn normalized(outputs: &[BundleOutputIntent]) -> Result<Vec<BundleOutputIntent>,
     Ok(outputs)
 }
 
+fn selected_outputs(
+    command: &Converter,
+    outputs: &[BundleOutputIntent],
+) -> Result<Vec<BundleOutputIntent>, ConversionError> {
+    let mut outputs = normalized(outputs)?;
+    command.resolve_bundle_output_policy(&mut outputs);
+    validate_outputs(&outputs)?;
+    Ok(outputs)
+}
+
 fn validate_outputs(outputs: &[BundleOutputIntent]) -> Result<(), ConversionError> {
     if outputs.is_empty() || outputs.len() > MAX_OUTPUTS {
         return Err(INVALID);
@@ -949,6 +1061,11 @@ fn validate_outputs(outputs: &[BundleOutputIntent]) -> Result<(), ConversionErro
                 && output.format == OutputFormat::Mp4)
             || !drm_profile(output)
             || output.format != OutputFormat::Dash && output.dash_addressing.is_some()
+            || output.manifest_profile.is_some_and(|profile| {
+                output.format == OutputFormat::Mp4
+                    || profile == crate::conversion::manifest_lint::ManifestProfile::AppleVod
+                        && !matches!(output.format, OutputFormat::Hls | OutputFormat::HlsTs)
+            })
         {
             return Err(INVALID);
         }
@@ -1053,7 +1170,7 @@ pub(super) fn validate(plan: &BundlePlan) -> Result<(), ConversionError> {
             (2, None, false, false)
                 | (4, Some(_), false, false)
                 | (6, Some(_), true, false)
-                | (8 | 10, Some(_), true, true)
+                | (8 | 10 | 12, Some(_), true, true)
         )
         || plan.plan_id.len() != 64
         || !plan
@@ -1071,6 +1188,22 @@ pub(super) fn validate(plan: &BundlePlan) -> Result<(), ConversionError> {
             .outputs
             .iter()
             .any(|output| output.dash_addressing.is_some())
+    {
+        return Err(INVALID);
+    }
+    if plan.schema_version < 12
+        && plan
+            .outputs
+            .iter()
+            .any(|output| output.manifest_profile.is_some())
+    {
+        return Err(INVALID);
+    }
+    if plan.schema_version == 12
+        && !plan
+            .outputs
+            .iter()
+            .any(|output| output.manifest_profile.is_some())
     {
         return Err(INVALID);
     }

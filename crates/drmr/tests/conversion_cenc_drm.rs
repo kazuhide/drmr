@@ -71,13 +71,18 @@ fn stage(
         &[
             "plan".into(),
             path(input),
-            "--to".into(),
+            "--encryption".into(),
             target.into(),
-            "--format".into(),
-            format.into(),
+            "--output-format".into(),
+            (if format == "hls" { "hls-fmp4" } else { format }).into(),
             "--processing".into(),
             processing.into(),
-            "--output".into(),
+            (if format == "mp4" {
+                "--output-file"
+            } else {
+                "--output-dir"
+            })
+            .into(),
             path(&destination),
             "--save".into(),
             path(&saved),
@@ -94,7 +99,7 @@ fn stage(
     let converted = cli(
         &[
             "convert".into(),
-            "--plan".into(),
+            "--plan-file".into(),
             path(&saved),
             "--keys-file".into(),
             path(&key_file),
@@ -105,7 +110,7 @@ fn stage(
     let verified = cli(
         &[
             "verify".into(),
-            "--plan".into(),
+            "--plan-file".into(),
             path(&saved),
             "--keys-file".into(),
             path(&key_file),
@@ -197,7 +202,7 @@ fn saved_cenc_cbcs_and_clear_outputs_verify_against_the_previous_stage_and_origi
         "cenc",
         "dash",
         "stitch",
-        &json!({"schema_version":1,"output":output}),
+        &json!({"schema_version":2,"outputs":{"default":output}}),
     );
     let input_keys = json!({"keys":[{"kid":KID,"key":KEY}]});
     let second = stage(
@@ -207,7 +212,7 @@ fn saved_cenc_cbcs_and_clear_outputs_verify_against_the_previous_stage_and_origi
         "cbcs",
         "dash",
         "segments",
-        &json!({"schema_version":1,"input":input_keys,"output":output}),
+        &json!({"schema_version":2,"input":input_keys,"outputs":{"default":output}}),
     );
     let third = stage(
         root.path(),
@@ -216,7 +221,7 @@ fn saved_cenc_cbcs_and_clear_outputs_verify_against_the_previous_stage_and_origi
         "clear",
         "hls",
         "segments",
-        &json!({"schema_version":1,"input":input_keys}),
+        &json!({"schema_version":2,"input":input_keys,"outputs":{}}),
     );
     let final_comparison = cli(
         &[
@@ -239,11 +244,10 @@ fn named_outputs(root: &Path, input: &Path, output_settings: &Value) {
     serde_json::to_writer(
         drmr_core::native::create_private_new(&recipe).unwrap(),
         &json!({
-            "schema_version":1,"outputs":[
-                {"id":"ctr","format":"dash","target":"cenc","drms":["widevine","playready"]},
-                {"id":"cbc","format":"dash","target":"cbcs","drms":["widevine","playready"]}
-            ]
-        }),
+        "schema_version":4,"outputs":[
+            {"id":"ctr","output_format":"dash","encryption":"cenc","drms":["widevine","playready"]},
+            {"id":"cbc","output_format":"dash","encryption":"cbcs","drms":["widevine","playready"]}
+        ]}),
     )
     .unwrap();
     let keys = root.join("bundle.keys.json");
@@ -260,9 +264,9 @@ fn named_outputs(root: &Path, input: &Path, output_settings: &Value) {
         &[
             "plan".into(),
             path(input),
-            "--outputs".into(),
+            "--output-config".into(),
             path(&recipe),
-            "--output".into(),
+            "--output-dir".into(),
             path(&destination),
             "--save".into(),
             path(&plan),
@@ -273,7 +277,7 @@ fn named_outputs(root: &Path, input: &Path, output_settings: &Value) {
     let converted = cli(
         &[
             "convert".into(),
-            "--plan".into(),
+            "--plan-file".into(),
             path(&plan),
             "--keys-file".into(),
             path(&keys),
@@ -292,7 +296,7 @@ fn named_outputs(root: &Path, input: &Path, output_settings: &Value) {
     let verified = cli(
         &[
             "verify".into(),
-            "--plan".into(),
+            "--plan-file".into(),
             path(&plan),
             "--keys-file".into(),
             path(&keys),
@@ -310,11 +314,11 @@ fn named_outputs(root: &Path, input: &Path, output_settings: &Value) {
         &[
             "convert".into(),
             path(input),
-            "--outputs".into(),
+            "--output-config".into(),
             path(&recipe),
             "--keys-file".into(),
             path(&keys),
-            "--output".into(),
+            "--output-dir".into(),
             path(&root.join("bundle-direct")),
         ],
         false,

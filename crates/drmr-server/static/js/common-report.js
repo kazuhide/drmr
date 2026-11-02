@@ -22,7 +22,7 @@
     return report.warnings > 0 ? 'warning' : 'pass';
   }
   function verificationPassed(report) {
-    if (report && report.schema_version === 2) return report.passed === true && report.failure == null && report.license_playback_verified === false && nativeChecksPassed(report.checks) && decodeSatisfied(report) && (!report.native_manifest || nativeState(report.native_manifest) === 'pass' || nativeState(report.native_manifest) === 'warning');
+    if (report && report.schema_version === 2) return report.passed === true && report.failure == null && report.license_playback_verified === false && nativeChecksPassed(report.checks) && decodeSatisfied(report) && (!report.native_manifest || nativeState(report.native_manifest) === 'pass' || nativeState(report.native_manifest) === 'warning') && (!Object.prototype.hasOwnProperty.call(report, 'external_manifest') || conformanceState(report.external_manifest) === 'pass');
     return !!report && report.schema_version === 1 && report.passed === true && report.media_verified === true && report.license_playback_verified === false && checksPassed(report.checks) && (!report.native_manifest || nativeState(report.native_manifest) === 'pass' || nativeState(report.native_manifest) === 'warning');
   }
   function signalingState(report) {
@@ -45,7 +45,7 @@
     if (report.error || report.status === 'failed' || report.status === 'cancelled') return false;
     if (envelope.report_kind === 'plan') {
       var legacy = (report.schema_version === 1 || report.schema_version === 2) && !Object.prototype.hasOwnProperty.call(report, 'required_depth');
-      var current = [3, 4, 5, 6, 7, 8, 9, 10].indexOf(report.schema_version) !== -1 && ['native', 'decoded'].indexOf(report.required_depth) !== -1;
+      var current = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12].indexOf(report.schema_version) !== -1 && ['native', 'decoded'].indexOf(report.required_depth) !== -1;
       return (legacy || current) && typeof report.plan_id === 'string' && /^[a-f0-9]{64}$/.test(report.plan_id);
     }
     if (report.schema_version !== 1 && report.schema_version !== 2) return false;
@@ -180,7 +180,7 @@
   // Every transition is a public schema name. Output map IDs use only the '*' token.
   var CONFIGURATION_NODES = {
     keys: { expected: 'keys-object', fields: { schema_version: 'schema-version', input: 'input', output: 'output-key', outputs: 'output-domains' } },
-    outputs: { expected: 'outputs-object', fields: { schema_version: 'schema-version', outputs: 'outputs-array' } },
+    outputs: { expected: 'outputs-object', fields: { schema_version: 'schema-version', output_dir: 'output-directory', outputs: 'outputs-array' } },
     input: { expected: 'input-object', fields: { keys: 'input-keys', hls_keys: 'hls-keys' } },
     'input-keys': { expected: 'input-keys', item: 'key-object' },
     'key-object': { expected: 'key-object', fields: { kid: 'hex-16-bytes', key: 'hex-16-bytes' } },
@@ -190,7 +190,7 @@
     'output-key': { expected: 'output-key', fields: { kid: 'hex-16-bytes', key: 'hex-16-bytes', hls_key_uri: 'uri', iv: 'segment-iv', signaling: 'signaling' } },
     signaling: { expected: 'signaling', fields: { system: 'signaling-system', license_url: 'license-url', widevine_pssh: 'pssh', playready_license_url: 'license-url', fairplay: 'boolean' } },
     'outputs-array': { expected: 'outputs-array', item: 'output-object' },
-    'output-object': { expected: 'output-object', fields: { id: 'output-id', format: 'output-format', target: 'target-protection', drms: 'drms', conformance: 'conformance', processing: 'processing', dash_addressing: 'dash-addressing' } },
+    'output-object': { expected: 'output-object', fields: { id: 'output-id', format: 'output-format', output_format: 'output-format', target: 'target-protection', encryption: 'target-protection', drms: 'drms', conformance: 'conformance', external_manifest_check: 'boolean', manifest_profile: 'manifest-profile', processing: 'processing', dash_addressing: 'dash-addressing' } },
     drms: { expected: 'drms', item: 'drm-system' }
   };
   function configurationInfo(error) {
@@ -310,6 +310,13 @@
       var coverageOmission = omitted(coverage, 1000); if (coverageOmission) body.appendChild(coverageOmission);
       details.appendChild(body); result.appendChild(details); return result;
     }
+    function externalManifest(report) {
+      var state = conformanceState(report);
+      return [h('div', Object.assign({ className: 'evidence' }, checkState('external_manifest', state)), word('span', 'commonConformance'), badge(state)),
+        report && Array.isArray(report.checks) ? table(['commonRule', 'commonStatus', 'commonCheckedManifests', 'commonWarnings', 'commonVersion'], report.checks.map(function (check) {
+          return h('tr', null, h('td', null, code(check.tool)), h('td', null, flag(check.passed)), h('td', { text: Number.isSafeInteger(check.checked_manifest_count) ? String(check.checked_manifest_count) : t('commonUnknown') }), h('td', { text: Number.isSafeInteger(check.warning_count) ? String(check.warning_count) : t('commonUnknown') }), h('td', null, check.observed_version ? code(check.observed_version) : word('span', 'commonNotChecked')));
+        })) : null];
+    }
     function verify(report) {
       var checks = report && report.checks || {};
       var license = report && report.license_playback_verified === false ? 'not-checked' : 'unknown';
@@ -325,7 +332,7 @@
             check('commonTiming', checks.packet_timing_equal, 'packet_timing_equal'),
             h('li', checkState('decode_evidence', state), word('span', decodedKey), badge(state)),
             h('li', checkState('license_playback_verified', license), word('span', 'commonLicensePlayback'), badge(license))),
-          native(report.native_manifest));
+          native(report.native_manifest), Object.prototype.hasOwnProperty.call(report, 'external_manifest') ? externalManifest(report.external_manifest) : null);
       }
       return h('div', { className: 'common-result-block' },
         h('ul', { className: 'checks' },

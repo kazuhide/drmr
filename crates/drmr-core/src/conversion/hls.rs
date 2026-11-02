@@ -1065,12 +1065,13 @@ impl Converter {
         }
         let output_report = inspection::inspect(&staged.path().join("media.m3u8"))
             .map_err(|_| ConversionError("hls-inspection-failed"))?;
-        verification.native_manifest = Some(self.publish_manifest_output(
+        self.publish_manifest_output(
             &staged,
             &destination,
             &staged.path().join("media.m3u8"),
             crate::inspection::OutputFormat::Hls,
-        )?);
+            &mut verification,
+        )?;
         Ok(ConversionReport {
             schema_version: 2,
             input: input_report,

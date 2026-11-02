@@ -368,9 +368,9 @@ fn settings(root: &Path) -> (PathBuf, PathBuf) {
     let spec = root.join("outputs.json");
     private_json(
         &spec,
-        &json!({"schema_version":1,"outputs":[
-            {"id":"dash","format":"dash","target":"cbcs","drms":["widevine","playready"]},
-            {"id":"hls","format":"hls","target":"cbcs","drms":["fairplay"]}
+        &json!({"schema_version":4,"outputs":[
+            {"id":"dash","output_format":"dash","encryption":"cbcs","drms":["widevine","playready"]},
+            {"id":"hls","output_format":"hls-fmp4","encryption":"cbcs","drms":["fairplay"]}
         ]}),
     );
     let keys = root.join("keys.json");
@@ -419,9 +419,9 @@ fn saved_plan(
         &[
             "plan",
             &path(input),
-            "--outputs",
+            "--output-config",
             &path(spec),
-            "--output",
+            "--output-dir",
             &path(output),
             "--save",
             &path(plan),
@@ -471,7 +471,7 @@ fn partial_aac_tail_saved_bundle_preserves_complete_audio_and_three_drm_declarat
     let converted = cli(
         &[
             "convert",
-            "--plan",
+            "--plan-file",
             &path(&plan),
             "--keys-file",
             &path(&keys),
@@ -491,7 +491,7 @@ fn partial_aac_tail_saved_bundle_preserves_complete_audio_and_three_drm_declarat
     let verified = cli(
         &[
             "verify",
-            "--plan",
+            "--plan-file",
             &path(&plan),
             "--keys-file",
             &path(&keys),

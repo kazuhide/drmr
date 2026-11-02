@@ -224,6 +224,7 @@ impl super::Converter {
             frozen_source: self.frozen_source.clone(),
             planned_destination: self.planned_destination.clone(),
             output_signaling: self.output_signaling.clone(),
+            output_manifest: self.output_manifest.clone(),
         }
     }
     pub(in crate::conversion) fn check_saved_processing(

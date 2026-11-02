@@ -490,7 +490,10 @@ class AudioMediaFlowTests(unittest.TestCase):
         self.assertEqual(result["input_format"], "hls-ts")
         self.assertEqual(result["source_audio"]["frame_count"], 432)
         self.assertTrue(result["saved_original_and_plan_unchanged"])
-        key = json.loads((runner.workspace / "aac44100-keys.json").read_text())["output"]["key"]
+        configuration = json.loads((runner.workspace / "aac44100-keys.json").read_text())
+        self.assertEqual(configuration["schema_version"], 2)
+        self.assertEqual(set(configuration["outputs"]), {"default"})
+        key = configuration["outputs"]["default"]["key"]
         self.assertIn(key.encode("ascii"), runner.secrets)
         self.assertIn(b"previous-secret-marker", runner.secrets)
         shown = json.dumps(result)

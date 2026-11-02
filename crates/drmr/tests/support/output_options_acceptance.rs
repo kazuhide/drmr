@@ -56,11 +56,11 @@ fn current_single_intent_keeps_source_layout_and_each_dash_choice_through_execut
         let mut args = vec![
             "plan",
             input.to_str().unwrap(),
-            "--to",
+            "--encryption",
             "clear",
-            "--format",
+            "--output-format",
             "dash",
-            "--output",
+            "--output-dir",
             output.to_str().unwrap(),
             "--save",
             saved.to_str().unwrap(),
@@ -76,7 +76,7 @@ fn current_single_intent_keeps_source_layout_and_each_dash_choice_through_execut
             plan["output_options"]["dash_addressing"],
             mode.unwrap_or("template")
         );
-        let converted = report(&["convert", "--plan", saved.to_str().unwrap(), "--json"]);
+        let converted = report(&["convert", "--plan-file", saved.to_str().unwrap(), "--json"]);
         assert_eq!(converted["verification"]["passed"], true);
         let manifest = std::fs::read_to_string(output.join("manifest.mpd")).unwrap();
         match mode.unwrap_or("template") {
@@ -92,7 +92,7 @@ fn current_single_intent_keeps_source_layout_and_each_dash_choice_through_execut
             "base" => assert!(manifest.contains("<SegmentBase")),
             _ => unreachable!(),
         }
-        let verified = report(&["verify", "--plan", saved.to_str().unwrap(), "--json"]);
+        let verified = report(&["verify", "--plan-file", saved.to_str().unwrap(), "--json"]);
         assert_eq!(verified["verification"]["passed"], true);
         assert_eq!(verified["output_matches_plan"], true);
     }
@@ -107,9 +107,9 @@ fn bundle_dash_overrides_take_precedence_and_never_reach_other_formats() {
     let specification = root.path().join("outputs.json");
     std::fs::write(
         &specification,
-        serde_json::to_vec(&json!({"schema_version":3,"outputs":[
-            {"id":"dash","format":"dash","target":"clear","drms":[],"dash_addressing":"list"},
-            {"id":"hls","format":"hls","target":"clear","drms":[]}
+        serde_json::to_vec(&json!({"schema_version":4,"outputs":[
+            {"id":"dash","output_format":"dash","encryption":"clear","drms":[],"dash_addressing":"list"},
+            {"id":"hls","output_format":"hls-fmp4","encryption":"clear","drms":[]}
         ]}))
         .unwrap(),
     )
@@ -119,11 +119,11 @@ fn bundle_dash_overrides_take_precedence_and_never_reach_other_formats() {
     let plan = report(&[
         "plan",
         input.to_str().unwrap(),
-        "--outputs",
+        "--output-config",
         specification.to_str().unwrap(),
         "--dash-addressing",
         "base",
-        "--output",
+        "--output-dir",
         output.to_str().unwrap(),
         "--save",
         saved.to_str().unwrap(),
@@ -142,7 +142,7 @@ fn bundle_dash_overrides_take_precedence_and_never_reach_other_formats() {
     for options in plan["output_options"].as_array().unwrap() {
         assert_eq!(options["options"]["layout"]["mode"], "source");
     }
-    let converted = report(&["convert", "--plan", saved.to_str().unwrap(), "--json"]);
+    let converted = report(&["convert", "--plan-file", saved.to_str().unwrap(), "--json"]);
     assert!(
         converted["outputs"]
             .as_array()
@@ -150,7 +150,7 @@ fn bundle_dash_overrides_take_precedence_and_never_reach_other_formats() {
             .iter()
             .all(|row| row["conversion"]["verification"]["passed"] == true)
     );
-    let verified = report(&["verify", "--plan", saved.to_str().unwrap(), "--json"]);
+    let verified = report(&["verify", "--plan-file", saved.to_str().unwrap(), "--json"]);
     assert_eq!(verified["passed"], true);
 }
 
@@ -158,16 +158,16 @@ fn bundle_dash_overrides_take_precedence_and_never_reach_other_formats() {
 fn an_explicit_dash_choice_requires_at_least_one_dash_output() {
     let root = drmr_core::native::private_tempdir().unwrap();
     let specification = root.path().join("outputs.json");
-    std::fs::write(&specification, br#"{"schema_version":3,"outputs":[{"id":"mp4","format":"mp4","target":"clear","drms":[]}]}"#).unwrap();
+    std::fs::write(&specification, br#"{"schema_version":4,"outputs":[{"id":"mp4","output_format":"mp4","encryption":"clear","drms":[]}]}"#).unwrap();
     for args in [
         vec![
             "convert",
             "missing.mp4",
-            "--to",
+            "--encryption",
             "clear",
-            "--format",
-            "hls",
-            "--output",
+            "--output-format",
+            "hls-fmp4",
+            "--output-dir",
             "result",
             "--dash-addressing",
             "template",
@@ -176,11 +176,11 @@ fn an_explicit_dash_choice_requires_at_least_one_dash_output() {
         vec![
             "plan",
             "missing.mp4",
-            "--to",
+            "--encryption",
             "clear",
-            "--format",
+            "--output-format",
             "mp4",
-            "--output",
+            "--output-file",
             "result",
             "--save",
             "plan.json",
@@ -191,9 +191,9 @@ fn an_explicit_dash_choice_requires_at_least_one_dash_output() {
         vec![
             "plan",
             "missing.mp4",
-            "--outputs",
+            "--output-config",
             specification.to_str().unwrap(),
-            "--output",
+            "--output-dir",
             "result",
             "--save",
             "plan.json",

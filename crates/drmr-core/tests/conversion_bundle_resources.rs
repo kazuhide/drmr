@@ -135,6 +135,7 @@ fn fresh_public_bundle_verifications_queue_for_a_large_valid_control_manifest() 
                 drms: Vec::new(),
                 conformance: ManifestValidation::None,
                 processing: None,
+                manifest_profile: None,
             }],
         })
         .unwrap();

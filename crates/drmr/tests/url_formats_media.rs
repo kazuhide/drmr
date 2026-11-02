@@ -187,9 +187,9 @@ fn refuse_missing_and_wrong_keys(root: &Path, input: &Path) {
     let wrong = root.join("wrong-keys.json");
     private_json(
         &wrong,
-        &json!({"schema_version":1,"input":{"keys":[{
+        &json!({"schema_version":2,"input":{"keys":[{
             "kid":KID,"key":"404142434445464748494a4b4c4d4e4f"
-        }]}}),
+        }]},"outputs":{}}),
     );
     let rejected = command("analyze", &wrong).arg(input).output().unwrap();
     assert!(
@@ -218,7 +218,13 @@ fn saved_plan_workflow(root: &Path, input: &Path, keys: &Path, target: &str) {
     let planned = success(
         &command("plan", keys)
             .arg(input)
-            .args(["--to", target, "--format", "dash", "--output"])
+            .args([
+                "--encryption",
+                target,
+                "--output-format",
+                "dash",
+                "--output-dir",
+            ])
             .arg(&output)
             .arg("--save")
             .arg(&plan)
@@ -235,7 +241,7 @@ fn saved_plan_workflow(root: &Path, input: &Path, keys: &Path, target: &str) {
     }
     let converted = success(
         &command("convert", keys)
-            .arg("--plan")
+            .arg("--plan-file")
             .arg(&plan)
             .output()
             .unwrap(),
@@ -244,7 +250,7 @@ fn saved_plan_workflow(root: &Path, input: &Path, keys: &Path, target: &str) {
     verified(&converted["verification"]);
     let checked = success(
         &command("verify", keys)
-            .arg("--plan")
+            .arg("--plan-file")
             .arg(&plan)
             .output()
             .unwrap(),
@@ -292,9 +298,9 @@ fn offline_workflow(format: &str, scheme: &str, prefix: &[u8]) {
     } else {
         json!([{ "kid": KID, "key": KEY }])
     };
-    let mut key_config = json!({"schema_version":1,"input":{"keys":input_keys}});
+    let mut key_config = json!({"schema_version":2,"input":{"keys":input_keys},"outputs":{}});
     let target = if scheme == "clear" {
-        key_config["output"] = json!({"kid":KID,"key":KEY});
+        key_config["outputs"]["default"] = json!({"kid":KID,"key":KEY});
         "cbcs"
     } else {
         "clear"
@@ -313,7 +319,7 @@ fn offline_workflow(format: &str, scheme: &str, prefix: &[u8]) {
             .arg(&url)
             .arg("--download-dir")
             .arg(&download)
-            .arg("--fetch-policy")
+            .arg("--fetch-config")
             .arg(&policy)
             .output()
             .unwrap(),
@@ -391,6 +397,18 @@ fn mp4_urls_with_supported_leading_boxes_keep_the_complete_offline_workflow() {
     }
 }
 
+fn clear_presentation_outputs(root: &Path) -> PathBuf {
+    let outputs = root.join("outputs.json");
+    private_json(
+        &outputs,
+        &json!({"schema_version":4,"outputs":[
+            {"id":"dash","output_format":"dash","encryption":"clear","drms":[]},
+            {"id":"hls","output_format":"hls-fmp4","encryption":"clear","drms":[]}
+        ]}),
+    );
+    outputs
+}
+
 #[test]
 fn mp4_and_dash_urls_share_direct_single_and_multiple_output_conversion() {
     for format in ["mp4", "dash"] {
@@ -400,7 +418,7 @@ fn mp4_and_dash_urls_share_direct_single_and_multiple_output_conversion() {
         let responses = remote_files(&original);
         let server = download_http::Server::start(responses.clone());
         let keys = root.path().join("keys.json");
-        private_json(&keys, &json!({"schema_version":1}));
+        private_json(&keys, &json!({"schema_version":2,"outputs":{}}));
         let bundle_keys = root.path().join("bundle-keys.json");
         private_json(&bundle_keys, &json!({"schema_version":2,"outputs":{}}));
         let policy = authenticated_policy(root.path(), &server.origin);
@@ -415,11 +433,17 @@ fn mp4_and_dash_urls_share_direct_single_and_multiple_output_conversion() {
         let single = success(
             &command("convert", &keys)
                 .arg(&url)
-                .args(["--to", "clear", "--format", "dash", "--output"])
+                .args([
+                    "--encryption",
+                    "clear",
+                    "--output-format",
+                    "dash",
+                    "--output-dir",
+                ])
                 .arg(&single_output)
                 .arg("--download-dir")
                 .arg(&single_download)
-                .arg("--fetch-policy")
+                .arg("--fetch-config")
                 .arg(&policy)
                 .output()
                 .unwrap(),
@@ -432,25 +456,18 @@ fn mp4_and_dash_urls_share_direct_single_and_multiple_output_conversion() {
         };
         assert_eq!(single["download"]["entrypoint_relative"], entrypoint);
         let retained_single = snapshot(&single_download);
-        let outputs = root.path().join("outputs.json");
-        private_json(
-            &outputs,
-            &json!({"schema_version":1,"outputs":[
-                {"id":"dash","format":"dash","target":"clear","drms":[]},
-                {"id":"hls","format":"hls","target":"clear","drms":[]}
-            ]}),
-        );
+        let outputs = clear_presentation_outputs(root.path());
         let bundle_download = root.path().join("bundle-original");
         let bundle_output = root.path().join("bundle-output");
         let bundle_result = command("convert", &bundle_keys)
             .arg(&url)
-            .arg("--outputs")
+            .arg("--output-config")
             .arg(&outputs)
-            .arg("--output")
+            .arg("--output-dir")
             .arg(&bundle_output)
             .arg("--download-dir")
             .arg(&bundle_download)
-            .arg("--fetch-policy")
+            .arg("--fetch-config")
             .arg(&policy)
             .args(["--progress", "json"])
             .output()

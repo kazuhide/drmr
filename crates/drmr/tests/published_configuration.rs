@@ -3,7 +3,7 @@ use drmr_core::{
     conversion::{
         ConversionError, DrmSystem,
         key_file::{self, BundleOperatorKeys},
-        plan::bundle::{BundleOutputIntent, ManifestValidation, read_output_spec},
+        plan::bundle::{BundleOutputIntent, ManifestValidation, read_output_config_diagnostic},
     },
     inspection::{OutputFormat, TargetProtection},
     native,
@@ -76,7 +76,11 @@ fn private_copy<T>(bytes: &[u8], read: impl FnOnce(&Path) -> T) -> T {
 }
 
 fn read_spec(value: &Value) -> Result<Vec<BundleOutputIntent>, ConversionError> {
-    private_copy(&serde_json::to_vec(value).unwrap(), read_output_spec)
+    private_copy(&serde_json::to_vec(value).unwrap(), |path| {
+        read_output_config_diagnostic(path)
+            .map(|config| config.outputs)
+            .map_err(|failure| failure.cause)
+    })
 }
 
 fn read_keys(value: &Value) -> Result<BundleOperatorKeys, ConversionError> {
@@ -95,8 +99,21 @@ fn every_published_output_recipe_has_the_named_typed_profile() {
         .collect();
     assert_eq!(json_files("outputs"), expected);
     for (name, format, target) in PROFILES {
-        let outputs = read_output_spec(&example("outputs", name))
-            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        let config = read_output_config_diagnostic(&example("outputs", name))
+            .unwrap_or_else(|error| panic!("{name}: {}", error.cause));
+        assert_eq!(
+            config.output_dir,
+            Some(
+                example("outputs", name)
+                    .parent()
+                    .unwrap()
+                    .canonicalize()
+                    .unwrap()
+                    .join("result")
+            ),
+            "{name}"
+        );
+        let outputs = config.outputs;
         assert_eq!(outputs.len(), 1, "{name}");
         let output = &outputs[0];
         assert_eq!(output.format, format, "{name}");
@@ -163,7 +180,9 @@ fn every_published_key_bundle_matches_its_source_role_and_named_output() {
             .unwrap_or_else(|error| panic!("{name}: {error}"));
         let value: Value = serde_json::from_slice(&bytes).unwrap();
         assert_input_role(&value, mode, name);
-        let outputs = read_output_spec(&example("outputs", profile)).unwrap();
+        let outputs = read_output_config_diagnostic(&example("outputs", profile))
+            .unwrap()
+            .outputs;
         let output = &outputs[0];
         if output.target == TargetProtection::Clear {
             assert!(keys.outputs.is_empty(), "{name}");
@@ -254,7 +273,7 @@ fn documented_multi_drm_profiles_normalize_and_bind_named_keys() {
         .iter()
         .find(|value| value.get("signaling").is_some())
         .unwrap();
-    let ts_outputs = read_spec(&json!({"schema_version": 3, "outputs": [ts]})).unwrap();
+    let ts_outputs = read_spec(&json!({"schema_version": 4, "outputs": [ts]})).unwrap();
     let ts_keys = read_keys(&json!({"schema_version": 2, "outputs": {"hls-ts": ts_key}})).unwrap();
     assert_drm_bindings(&ts_outputs, &ts_keys);
     assert_eq!(ts_outputs[0].target, TargetProtection::HlsSampleAes);
@@ -268,11 +287,11 @@ fn documented_multi_drm_profiles_normalize_and_bind_named_keys() {
 fn malformed_public_recipe_settings_are_refused_by_the_real_reader() {
     let valid = public_json("outputs", "dash-cenc");
     for (label, pointer, replacement) in [
-        ("schema", "/schema_version", json!(4)),
+        ("schema", "/schema_version", json!(3)),
         ("path ID", "/outputs/0/id", json!("../dash")),
         (
             "unsupported target",
-            "/outputs/0/target",
+            "/outputs/0/encryption",
             json!("hls-sample-aes"),
         ),
         (

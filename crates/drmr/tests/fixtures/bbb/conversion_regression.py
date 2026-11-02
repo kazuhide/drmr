@@ -55,20 +55,20 @@ def output_options(protection, kid, key, uri):
 
 
 def convert(binary, source, protection, destination, keys, environment):
-    format_name = "hls" if protection == "hls-aes128" else "dash"
+    format_name = "hls-fmp4" if protection == "hls-aes128" else "dash"
     processing = {}
 
     def inspect_result(stdout):
         actual = json.loads(stdout)["processing"]
-        assert actual["route"] == ("fmp4-hls-presentation" if format_name == "hls" else "dash-presentation")
+        assert actual["route"] == ("fmp4-hls-presentation" if format_name == "hls-fmp4" else "dash-presentation")
         assert actual["input_preparation"] == ("local-hls-resources" if source.suffix == ".m3u8" else "local-dash-resources")
         assert actual["required_tools"] == ["ffmpeg", "ffprobe", "shaka-packager"]
         processing.update({name: actual[name] for name in ("route", "input_preparation", "required_tools")})
 
     seconds, memory = measured_run(
-        [binary, "convert", "--decode", source, "--to", protection, "--format", format_name,
-         "--output", destination, "--keys-file", keys, "--json"], environment, inspect_result)
-    manifest = destination / ("master.m3u8" if format_name == "hls" else "manifest.mpd")
+        [binary, "convert", "--decode", source, "--encryption", protection, "--output-format", format_name,
+         "--output-dir", destination, "--keys-file", keys, "--json"], environment, inspect_result)
+    manifest = destination / ("master.m3u8" if format_name == "hls-fmp4" else "manifest.mpd")
     assert manifest.is_file(), "conversion must publish a usable entry manifest"
     return manifest, seconds, memory, processing
 
@@ -82,8 +82,8 @@ def regression(binary, destination):
     clear = prepare_source(destination / "clear-source")
     sources = {"clear": clear}
     for protection in PROTECTIONS[1:]:
-        config = {"schema_version": 1,
-                  "output": output_options(protection, SOURCE_KID, SOURCE_KEY, SOURCE_URI)}
+        config = {"schema_version": 2, "outputs": {
+                  "default": output_options(protection, SOURCE_KID, SOURCE_KEY, SOURCE_URI)}}
         keys = private_json(destination / f"prepare-{protection}.json", config)
         milestone("preparing source", target=protection)
         sources[protection], _, _, _ = convert(binary, clear, protection,
@@ -91,14 +91,14 @@ def regression(binary, destination):
     rows = []
     for source_protection, source in sources.items():
         for target in PROTECTIONS:
-            config = {"schema_version": 1, "input": {}}
+            config = {"schema_version": 2, "input": {}, "outputs": {}}
             if source_protection == "hls-aes128":
                 config["input"]["hls_keys"] = [{"uri": SOURCE_URI, "key": SOURCE_KEY}]
             elif source_protection != "clear":
                 config["input"]["keys"] = [{"kid": SOURCE_KID, "key": SOURCE_KEY}]
             output = output_options(target, RESULT_KID, RESULT_KEY, RESULT_URI)
             if output is not None:
-                config["output"] = output
+                config["outputs"] = {"default": output}
             name = f"{source_protection}-to-{target}"
             keys = private_json(destination / f"{name}.json", config)
             milestone("converting", source_protection, target)

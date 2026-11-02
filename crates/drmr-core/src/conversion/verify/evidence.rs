@@ -113,6 +113,8 @@ pub struct VerificationReport {
     pub license_playback_verified: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_manifest: Option<super::super::manifest_lint::NativeManifestReport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_manifest: Option<super::super::conformance::ManifestValidationReport>,
 }
 impl VerificationReport {
     pub fn new(
@@ -132,6 +134,7 @@ impl VerificationReport {
                 .then_some(VerificationFailure::EvidenceScopeMismatch),
             license_playback_verified: false,
             native_manifest: None,
+            external_manifest: None,
         };
         report.refresh_passed();
         report
@@ -145,7 +148,11 @@ impl VerificationReport {
                 .satisfies(self.required_depth, self.scope)
             && self.native_manifest.as_ref().is_none_or(|manifest| {
                 manifest.errors == 0 && !manifest.truncated && !manifest.incomplete
-            });
+            })
+            && self
+                .external_manifest
+                .as_ref()
+                .is_none_or(|manifest| manifest.passed);
     }
 
     /// Complete decoding adds evidence to the mandatory native checks.

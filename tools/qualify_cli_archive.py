@@ -682,7 +682,7 @@ def media(cli, runner, source):
             "analysis-proof-invalid")
     plan_path = root / "conversion.plan.json"
     output = root / "converted"
-    planned = runner.json([cli, "plan", "--decode", source_path, "--to", "cbcs", "--format", "dash", "--output", output,
+    planned = runner.json([cli, "plan", "--decode", source_path, "--encryption", "cbcs", "--output-format", "dash", "--output-dir", output,
                            "--save", plan_path, "--max-workers", "1", "--json"], "plan")
     plan_bytes = read_regular(plan_path, 1024 * 1024)
     require(isinstance(planned, dict) and planned == load_json(plan_bytes)
@@ -694,11 +694,11 @@ def media(cli, runner, source):
     key = secrets.token_hex(16)
     runner.secrets = (key.encode("ascii"),)
     key_path = root / "keys.json"
-    private_write(key_path, json.dumps({"schema_version": 1, "output": {"kid": secrets.token_hex(16), "key": key}}).encode("utf-8"))
-    converted = runner.json([cli, "convert", "--decode", "--plan", plan_path, "--keys-file", key_path,
+    private_write(key_path, json.dumps({"schema_version": 2, "outputs": {"default": {"kid": secrets.token_hex(16), "key": key}}}).encode("utf-8"))
+    converted = runner.json([cli, "convert", "--decode", "--plan-file", plan_path, "--keys-file", key_path,
                              "--max-workers", "1", "--json"], "convert")
     converted_proof = conversion_proof(converted, planned["plan_id"])
-    verified = runner.json([cli, "verify", "--decode", "--plan", plan_path, "--keys-file", key_path,
+    verified = runner.json([cli, "verify", "--decode", "--plan-file", plan_path, "--keys-file", key_path,
                             "--max-workers", "1", "--json"], "independent-verify")
     require(isinstance(verified, dict) and verified.get("plan_id") == planned["plan_id"]
             and verified.get("source_unchanged") is True and verified.get("output_matches_plan") is True,
@@ -773,7 +773,7 @@ def audio_media(cli, runner, source):
             "aac44100-analysis-proof-invalid")
     plan_path = root / "aac44100.plan.json"
     output = root / "aac44100-converted"
-    planned = runner.json([cli, "plan", "--decode", source_path, "--to", "cbcs", "--format", "dash", "--output", output,
+    planned = runner.json([cli, "plan", "--decode", source_path, "--encryption", "cbcs", "--output-format", "dash", "--output-dir", output,
                            "--save", plan_path, "--max-workers", "1", "--json"], "aac44100-plan")
     plan_bytes = read_regular(plan_path, 1024 * 1024)
     require(isinstance(planned, dict) and planned == load_json(plan_bytes)
@@ -786,12 +786,12 @@ def audio_media(cli, runner, source):
     key = secrets.token_hex(16)
     runner.secrets += (key.encode("ascii"),)
     key_path = root / "aac44100-keys.json"
-    private_write(key_path, json.dumps({"schema_version": 1, "output": {
-        "kid": secrets.token_hex(16), "key": key}}).encode("utf-8"))
-    converted = runner.json([cli, "convert", "--decode", "--plan", plan_path, "--keys-file", key_path,
+    private_write(key_path, json.dumps({"schema_version": 2, "outputs": {"default": {
+        "kid": secrets.token_hex(16), "key": key}}}).encode("utf-8"))
+    converted = runner.json([cli, "convert", "--decode", "--plan-file", plan_path, "--keys-file", key_path,
                              "--max-workers", "1", "--json"], "aac44100-convert")
     converted_proof = audio_conversion_proof(converted, planned["plan_id"])
-    verified = runner.json([cli, "verify", "--decode", "--plan", plan_path, "--keys-file", key_path,
+    verified = runner.json([cli, "verify", "--decode", "--plan-file", plan_path, "--keys-file", key_path,
                             "--max-workers", "1", "--json"], "aac44100-independent-verify")
     require(isinstance(verified, dict) and verified.get("plan_id") == planned["plan_id"]
             and verified.get("source_unchanged") is True and verified.get("output_matches_plan") is True,

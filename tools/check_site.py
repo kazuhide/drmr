@@ -496,8 +496,9 @@ def validate_output_examples(repository):
     for output_format, protections in zip(MATRIX_FORMATS, STANDARD_OUTPUTS):
         for protection in protections:
             target = MATRIX_TARGETS[protection]
-            expected[f"{output_format}-{target}.json"] = {"schema_version": 3, "outputs": [
-                {"id": output_format, "format": output_format, "target": target, "drms": []}]}
+            expected[f"{output_format}-{target}.json"] = {"schema_version": 4, "output_dir": "result", "outputs": [
+                {"id": output_format, "output_format": "hls-fmp4" if output_format == "hls" else output_format,
+                 "encryption": target, "drms": []}]}
     return validate_example_files(repository, "outputs", expected)
 
 
@@ -515,10 +516,9 @@ def validate_recipe_commands(code, row, output_format, target, encrypted_input=F
     token = "site-guide-recipe-command"
     require(row in RECIPE_KEY_MODES and output_format in MATRIX_FORMATS, token)
     extension = "mp4" if row == "mp4" else "mpd" if row == "dash" else "m3u8"
-    keys = " --keys-file keys.json" if encrypted_input or target != "clear" else ""
+    keys = " \\\n  --keys-file keys.json" if encrypted_input or target != "clear" else ""
     expected = (f'drmr convert "https://example.com/input.{extension}" \\\n'
-                '  --download-dir src --outputs outputs.json \\\n'
-                f'  --output result{keys}\n')
+                f'  --download-dir src --output-config outputs.json{keys}\n')
     require(all(len(line) <= 64 for line in code.splitlines()), token)
     require(code.replace("\r\n", "\n") == expected, token)
 

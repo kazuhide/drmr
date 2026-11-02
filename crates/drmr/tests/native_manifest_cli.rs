@@ -135,7 +135,7 @@ fn native_manifest_workers_are_bounded_and_media_arguments_stay_disallowed() {
         vec!["--max-workers", "65"],
         vec!["--source", "private-source"],
         vec!["--keys-file", "private-key-file"],
-        vec!["--plan", "private-plan"],
+        vec!["--plan-file", "private-plan"],
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_drmr"))
             .arg("verify")
@@ -173,7 +173,7 @@ fn external_validation_requires_its_explicit_flag_and_failure_retains_native_evi
         .arg(&input)
         .args([
             "--manifest-only",
-            "--external-validator",
+            "--external-manifest-check",
             "--json",
             "--hls-validator-bin",
         ])
@@ -194,7 +194,7 @@ fn external_validation_requires_its_explicit_flag_and_failure_retains_native_evi
     let output = Command::new(env!("CARGO_BIN_EXE_drmr"))
         .arg("verify")
         .arg(&input)
-        .args(["--external-validator", "--json"])
+        .args(["--external-manifest-check", "--json"])
         .env("PATH", &empty_path)
         .output()
         .unwrap();
@@ -202,13 +202,17 @@ fn external_validation_requires_its_explicit_flag_and_failure_retains_native_evi
     let output = Command::new(env!("CARGO_BIN_EXE_drmr"))
         .arg("verify")
         .arg(&input)
-        .args(["--external-validator", "--source"])
+        .args(["--external-manifest-check", "--source"])
         .arg(&input)
         .args(["--json"])
         .env("PATH", &empty_path)
         .output()
         .unwrap();
-    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.status.code(), Some(1));
+    let report = safe_report(&output);
+    assert_eq!(report["status"], "failed");
+    assert_eq!(report["error"]["code"], "hls-drm-signaling-invalid");
+    assert_ne!(report["passed"], true);
 }
 
 const DASH: &str = r#"<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static" profiles="urn:mpeg:dash:profile:isoff-live:2011" minBufferTime="PT1S" mediaPresentationDuration="PT2S"><Period><AdaptationSet mimeType="video/mp4" codecs="avc1.4d401f"><SegmentTemplate timescale="1000" media="seg-$Number$.m4s" initialization="init.mp4"><SegmentTimeline><S t="0" d="2000"/></SegmentTimeline></SegmentTemplate><Representation id="v1" bandwidth="1000000"/></AdaptationSet></Period></MPD>"#;
@@ -474,7 +478,7 @@ fn apple_authoring_profile_is_explicit_and_preserves_the_multiple_video_bitrate_
 }
 
 #[test]
-fn apple_profile_rejects_dash_and_profiles_require_manifest_only_scope() {
+fn apple_profile_rejects_dash_and_full_checks_still_require_source_media() {
     let root = drmr_core::native::private_tempdir().unwrap();
     let empty_path = root.path().join("empty-path");
     std::fs::create_dir(&empty_path).unwrap();
@@ -494,9 +498,14 @@ fn apple_profile_rejects_dash_and_profiles_require_manifest_only_scope() {
             .arg(&input)
             .args(["--manifest-profile", profile, "--source"])
             .arg(&input)
+            .arg("--json")
             .output()
             .unwrap();
-        assert_eq!(result.status.code(), Some(2));
+        assert_eq!(result.status.code(), Some(1));
+        let report = safe_report(&result);
+        assert_eq!(report["status"], "failed");
+        assert_eq!(report["error"]["code"], "dash-resource-unreadable");
+        assert_ne!(report["passed"], true);
     }
 }
 
@@ -522,7 +531,7 @@ fn apple_profile_and_explicit_external_evidence_are_reported_separately() {
     std::fs::write(&validator, format!("#!/bin/sh\nprintf '.\\n' >> '{quoted}'\ncase \"$6\" in\n*/master.m3u8) printf '{parent}' \"$6\";;\n*) printf '{child}' \"$6\";;\nesac\n")).unwrap();
     std::fs::set_permissions(&validator, std::fs::Permissions::from_mode(0o700)).unwrap();
     let result = profile_command(&input, &empty_path, "apple-vod")
-        .args(["--external-validator", "--hls-validator-bin"])
+        .args(["--external-manifest-check", "--hls-validator-bin"])
         .arg(&validator)
         .output()
         .unwrap();

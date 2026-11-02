@@ -103,6 +103,7 @@ fn private_plan_bytes(input: &std::path::Path, output: &std::path::Path, schema:
                         target: TargetProtection::Clear,
                         drms: Vec::new(),
                         conformance: ManifestValidation::None,
+                        manifest_profile: None,
                     }],
                 })
                 .unwrap();

@@ -96,8 +96,8 @@ fn qualified_profile(audio: bool) {
     let source_before = std::fs::read(&input).unwrap();
     // Operator secrets require the strict parent, not the inheritable media ACL.
     let keys = owner.path().join("keys.json");
-    let config = serde_json::json!({"schema_version":1,"input":{"keys":[{"kid":"ffeeddccbbaa99887766554433221100","key":SOURCE_KEY}]},"output":{"kid":KID,"key":KEY,
-        "signaling":{"system":"playready","license_url":LICENSE}}})
+    let config = serde_json::json!({"schema_version":2,"input":{"keys":[{"kid":"ffeeddccbbaa99887766554433221100","key":SOURCE_KEY}]},"outputs":{"default":{"kid":KID,"key":KEY,
+        "signaling":{"system":"playready","license_url":LICENSE}}}})
     .to_string();
     drmr_core::native::create_private_new(&keys)
         .unwrap()
@@ -108,11 +108,11 @@ fn qualified_profile(audio: bool) {
     let result = cli(&[
         "convert",
         &path(&input),
-        "--to",
+        "--encryption",
         "cbcs",
-        "--format",
+        "--output-format",
         "dash",
-        "--output",
+        "--output-dir",
         &path(&output),
         "--keys-file",
         &path(&keys),
@@ -432,8 +432,8 @@ fn open_ended_joint_dash_preserves_complete_audio_tail_and_rejects_shortened_per
     let before = std::fs::read(&input).unwrap();
     // Operator secrets require the strict parent, not the inheritable media ACL.
     let keys = owner.path().join("keys.json");
-    let body = serde_json::json!({"schema_version":1,"output":{"kid":KID,"key":KEY,
-        "signaling":{"system":"playready","license_url":LICENSE}}});
+    let body = serde_json::json!({"schema_version":2,"outputs":{"default":{"kid":KID,"key":KEY,
+        "signaling":{"system":"playready","license_url":LICENSE}}}});
     drmr_core::native::create_private_new(&keys)
         .unwrap()
         .write_all(body.to_string().as_bytes())
@@ -443,11 +443,11 @@ fn open_ended_joint_dash_preserves_complete_audio_tail_and_rejects_shortened_per
     let result = cli(&[
         "convert",
         &path(&input),
-        "--to",
+        "--encryption",
         "cbcs",
-        "--format",
+        "--output-format",
         "dash",
-        "--output",
+        "--output-dir",
         &path(&output),
         "--keys-file",
         &path(&keys),
@@ -485,8 +485,8 @@ fn explicit_signaling_rejects_unknown_profiles_and_existing_metadata() {
     let before = std::fs::read(&input).unwrap();
     // Operator secrets require the strict parent, not the inheritable media ACL.
     let keys = owner.path().join("keys.json");
-    let mut config = serde_json::json!({"schema_version":1,"output":{"kid":KID,"key":KEY,
-        "signaling":{"system":"playready","license_url":LICENSE}}});
+    let mut config = serde_json::json!({"schema_version":2,"outputs":{"default":{"kid":KID,"key":KEY,
+        "signaling":{"system":"playready","license_url":LICENSE}}}});
     drmr_core::native::create_private_new(&keys)
         .unwrap()
         .write_all(config.to_string().as_bytes())
@@ -503,11 +503,15 @@ fn explicit_signaling_rejects_unknown_profiles_and_existing_metadata() {
         let result = cli(&[
             "convert",
             &path(&input),
-            "--to",
+            "--encryption",
             target,
-            "--format",
-            format,
-            "--output",
+            "--output-format",
+            if format == "hls" { "hls-fmp4" } else { format },
+            if format == "mp4" {
+                "--output-file"
+            } else {
+                "--output-dir"
+            },
             &path(&output),
             "--keys-file",
             &path(&keys),
@@ -521,16 +525,16 @@ fn explicit_signaling_rejects_unknown_profiles_and_existing_metadata() {
         );
         assert!(!output.exists());
     }
-    config["output"]["signaling"]["system"] = "unknown".into();
+    config["outputs"]["default"]["signaling"]["system"] = "unknown".into();
     std::fs::write(&keys, config.to_string()).unwrap();
     let invalid = cli(&[
         "convert",
         &path(&input),
-        "--to",
+        "--encryption",
         "cbcs",
-        "--format",
+        "--output-format",
         "dash",
-        "--output",
+        "--output-dir",
         &path(&output),
         "--keys-file",
         &path(&keys),
@@ -538,7 +542,7 @@ fn explicit_signaling_rejects_unknown_profiles_and_existing_metadata() {
     ]);
     assert_eq!(invalid.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&invalid.stderr).contains("key-file-invalid"));
-    config["output"]["signaling"]["system"] = "playready".into();
+    config["outputs"]["default"]["signaling"]["system"] = "playready".into();
     std::fs::write(&keys, config.to_string()).unwrap();
     let pssh = drmr_core::playready::build_playready_v43(KID, LICENSE)
         .unwrap()
@@ -553,11 +557,11 @@ fn explicit_signaling_rejects_unknown_profiles_and_existing_metadata() {
     let invalid = cli(&[
         "convert",
         &path(&input),
-        "--to",
+        "--encryption",
         "cbcs",
-        "--format",
+        "--output-format",
         "dash",
-        "--output",
+        "--output-dir",
         &path(&output),
         "--keys-file",
         &path(&keys),

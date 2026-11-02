@@ -82,21 +82,21 @@ fn direct(root: &Path, input: &str, policy: Option<&Path>, default: &str) {
     let recipe = root.join("outputs.json");
     private_json(
         &recipe,
-        &json!({"schema_version":2,"outputs":[
-            {"id":"default","format":"hls-ts","target":"clear","drms":[]},
-            {"id":"explicit","format":"hls-ts","target":"clear","drms":[],"processing":explicit}
+        &json!({"schema_version":4,"outputs":[
+            {"id":"default","output_format":"hls-ts","encryption":"clear","drms":[]},
+            {"id":"explicit","output_format":"hls-ts","encryption":"clear","drms":[],"processing":explicit}
         ]}),
     );
     let mut command = Command::new(env!("CARGO_BIN_EXE_drmr"));
     command
-        .args(["convert", input, "--outputs"])
+        .args(["convert", input, "--output-config"])
         .arg(recipe)
-        .arg("--output")
+        .arg("--output-dir")
         .arg(root.join("result"))
         .args(["--processing", default, "--json"]);
     if let Some(policy) = policy {
         command
-            .arg("--fetch-policy")
+            .arg("--fetch-config")
             .arg(policy)
             .arg("--download-dir")
             .arg(root.join("retained"));

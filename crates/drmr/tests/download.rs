@@ -82,11 +82,11 @@ fn run(server: &Server, output: &Path, extra: &[&std::ffi::OsStr]) -> Output {
         .args([
             "convert",
             &server.url,
-            "--to",
+            "--encryption",
             "clear",
-            "--format",
-            "hls",
-            "--output",
+            "--output-format",
+            "hls-fmp4",
+            "--output-dir",
         ])
         .arg(output)
         .args(extra)
@@ -212,7 +212,7 @@ fn fetch_policy_is_strict_private_configuration_and_never_echoes_values() {
             &[
                 "--download-dir".as_ref(),
                 download.as_os_str(),
-                "--fetch-policy".as_ref(),
+                "--fetch-config".as_ref(),
                 config.as_os_str(),
             ],
         );
@@ -226,7 +226,13 @@ fn fetch_policy_is_strict_private_configuration_and_never_echoes_values() {
 fn local_inputs_do_not_silently_accept_download_options() {
     let root = drmr_core::native::private_tempdir().unwrap();
     let result = Command::new(env!("CARGO_BIN_EXE_drmr"))
-        .args(["convert", "local.m3u8", "--to", "clear", "--output"])
+        .args([
+            "convert",
+            "local.m3u8",
+            "--encryption",
+            "clear",
+            "--output-file",
+        ])
         .arg(root.path().join("output"))
         .arg("--download-dir")
         .arg(root.path().join("source"))
@@ -253,7 +259,7 @@ fn output_parent_components_are_refused_before_any_network_request() {
         &[
             "--download-dir".as_ref(),
             download.as_os_str(),
-            "--fetch-policy".as_ref(),
+            "--fetch-config".as_ref(),
             config.as_os_str(),
         ],
     );
@@ -284,7 +290,7 @@ fn output_final_parent_symlink_is_refused_before_any_network_request() {
         &[
             "--download-dir".as_ref(),
             download.as_os_str(),
-            "--fetch-policy".as_ref(),
+            "--fetch-config".as_ref(),
             config.as_os_str(),
         ],
     );

@@ -170,12 +170,13 @@ impl Converter {
             .map_err(|_| ConversionError("invalid-output-media"))?;
         secure_tree(stage.path())?;
         self.backend.checkpoint(&[work, &stage]);
-        verification.native_manifest = Some(self.publish_manifest_output(
+        self.publish_manifest_output(
             &stage,
             &destination,
             &stage.path().join("master.m3u8"),
             request.format,
-        )?);
+            &mut verification,
+        )?;
         let input_format = input.format;
         Ok(ConversionReport {
             schema_version: 2,

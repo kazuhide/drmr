@@ -69,6 +69,7 @@ fn outputs() -> Vec<BundleOutputIntent> {
             target: TargetProtection::Clear,
             drms: Vec::new(),
             conformance: ManifestValidation::None,
+            manifest_profile: None,
         })
         .collect()
 }
@@ -97,6 +98,122 @@ fn assert_no_stages(root: &Path) {
                 .starts_with(".drmr-convert-")
         );
     }
+}
+
+#[test]
+fn direct_settings_verify_existing_outputs_and_refuse_wrong_protection_without_a_saved_plan() {
+    use drmr_core::conversion::{
+        OutputKey, key_file::OperatorKeys, manifest_lint::ManifestProfile,
+    };
+    let root = drmr_core::native::private_tempdir().unwrap();
+    let input = root.path().join("source.mp4");
+    video(&input);
+    let original = std::fs::read(&input).unwrap();
+    let output = root.path().join("result");
+    let mut intents = outputs();
+    intents[1].manifest_profile = Some(ManifestProfile::Base);
+    let command = converter().with_decode(false).with_new_output_defaults();
+    let keys = BundleOperatorKeys::default();
+    let tools = ManifestValidationTools::default();
+    let created = command
+        .convert_bundle(&input, &intents, &output, &keys, &tools)
+        .unwrap();
+    assert_eq!(created.outputs.len(), 2);
+    let verified = command
+        .verify_bundle_config(&input, &intents, &output, &keys, &tools)
+        .unwrap();
+    assert!(verified.passed && verified.source_unchanged);
+    assert!(verified.outputs.iter().all(|row| row.output_matches_plan
+        && row.verification.passed
+        && row.verification.external_manifest.is_none()));
+    let mut wrong = intents.clone();
+    wrong[1].target = TargetProtection::Cenc;
+    let mut wrong_keys = BundleOperatorKeys::default();
+    let mut output_keys = OperatorKeys::default();
+    output_keys.output = Some(
+        OutputKey::from_hex(
+            "000102030405060708090a0b0c0d0e0f",
+            "00112233445566778899aabbccddeeff",
+        )
+        .unwrap(),
+    );
+    wrong_keys.outputs.insert("hls".into(), output_keys);
+    let mismatched = command
+        .verify_bundle_config(&input, &wrong, &output, &wrong_keys, &tools)
+        .unwrap();
+    assert!(!mismatched.passed);
+    assert!(!mismatched.outputs[1].output_matches_plan);
+    assert_eq!(std::fs::read(&input).unwrap(), original);
+    assert_no_stages(root.path());
+}
+
+#[test]
+fn required_external_check_refuses_publication_and_single_profile_is_saved_and_reused() {
+    use drmr_core::conversion::{
+        ConversionRequest, key_file::OperatorKeys, manifest_lint::ManifestProfile,
+        plan::ExecutionPlanRequest,
+    };
+    let root = drmr_core::native::private_tempdir().unwrap();
+    let input = root.path().join("source.mp4");
+    video(&input);
+    let output = root.path().join("checked-hls");
+    let input_keys = InputKeys::default();
+    let hls_keys = HlsInputKeys::default();
+    let source = VerificationSource {
+        input: &input,
+        input_keys: &input_keys,
+        hls_keys: &hls_keys,
+    };
+    let selected = converter()
+        .with_decode(false)
+        .with_manifest_profile(ManifestProfile::Base);
+    let planned = selected
+        .create_execution_plan(ExecutionPlanRequest {
+            input: source,
+            output: &output,
+            format: Some(OutputFormat::Hls),
+            target: TargetProtection::Clear,
+        })
+        .unwrap();
+    assert_eq!(planned.schema_version, 11);
+    assert_eq!(planned.manifest_profile, Some(ManifestProfile::Base));
+    assert_eq!(planned.external_manifest_check, Some(false));
+    let saved = root.path().join("single.plan.json");
+    plan::write_new(&saved, &planned).unwrap();
+    let plan::SavedPlan::Single(loaded) = plan::read_saved(&saved).unwrap() else {
+        panic!("single profile plan expected")
+    };
+    let command = converter().with_decode(false);
+    let converted = command
+        .execute_plan(&loaded, &OperatorKeys::default())
+        .unwrap();
+    assert!(converted.verification.passed);
+    assert!(
+        command
+            .verify_plan(&loaded, &OperatorKeys::default())
+            .unwrap()
+            .verification
+            .passed
+    );
+    let rejected = root.path().join("not-published");
+    let error = converter()
+        .with_decode(false)
+        .with_external_manifest_check(ManifestValidationTools::default())
+        .convert(ConversionRequest {
+            input: &input,
+            output: &rejected,
+            format: OutputFormat::Hls,
+            target: TargetProtection::Clear,
+            input_keys: &input_keys,
+            hls_input_keys: &hls_keys,
+            output_key: None,
+            hls_key_uri: None,
+            hls_output_key: None,
+        })
+        .unwrap_err();
+    assert_eq!(error.0, "manifest-validator-not-configured");
+    assert!(!rejected.exists());
+    assert_no_stages(root.path());
 }
 
 enum AfterFirstPublication {

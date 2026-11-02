@@ -85,14 +85,20 @@ fn a_long_bbb_presentation_converts_and_independently_verifies_every_packet() {
     let counted: serde_json::Value = serde_json::from_slice(&counted.stdout).unwrap();
     assert_eq!(counted["streams"][0]["nb_read_packets"], "100080");
     drmr_core::native::create_private_new(&keys).unwrap().write_all(
-        br#"{"schema_version":1,"output":{"kid":"00000000000000000000000000000002","key":"22222222222222222222222222222222"}}"#,
+        br#"{"schema_version":2,"outputs":{"default":{"kid":"00000000000000000000000000000002","key":"22222222222222222222222222222222"}}}"#,
     ).unwrap();
     let converted = success(
         Command::new(env!("CARGO_BIN_EXE_drmr"))
             .arg("convert")
             .arg("--decode")
             .arg(&source)
-            .args(["--to", "cbcs", "--format", "mp4", "--output"])
+            .args([
+                "--encryption",
+                "cbcs",
+                "--output-format",
+                "mp4",
+                "--output-file",
+            ])
             .arg(&target)
             .arg("--keys-file")
             .arg(&keys)

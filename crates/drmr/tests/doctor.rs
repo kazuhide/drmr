@@ -649,7 +649,7 @@ fn root_help_shows_getting_started_examples_and_command_help_is_available() {
     for example in [
         "drmr doctor",
         "drmr analyze media.mp4 --metadata-only",
-        "drmr plan media.mp4 --to cbcs",
+        "drmr plan media.mp4 --encryption cbcs",
         "drmr convert",
         "drmr verify",
         "--download-dir",

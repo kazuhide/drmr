@@ -24,6 +24,7 @@ pub(crate) enum Field {
     Iv,
     Output,
     Outputs,
+    OutputDir,
     HlsKeyUri,
     Signaling,
     System,
@@ -34,8 +35,12 @@ pub(crate) enum Field {
     Id,
     Format,
     Target,
+    OutputFormat,
+    Encryption,
     Drms,
     Conformance,
+    ExternalManifestCheck,
+    ManifestProfile,
     Processing,
     DashAddressing,
     #[serde(rename = "*")]
@@ -54,6 +59,7 @@ impl Field {
             Self::Iv => "iv",
             Self::Output => "output",
             Self::Outputs => "outputs",
+            Self::OutputDir => "output_dir",
             Self::HlsKeyUri => "hls_key_uri",
             Self::Signaling => "signaling",
             Self::System => "system",
@@ -64,8 +70,12 @@ impl Field {
             Self::Id => "id",
             Self::Format => "format",
             Self::Target => "target",
+            Self::OutputFormat => "output_format",
+            Self::Encryption => "encryption",
             Self::Drms => "drms",
             Self::Conformance => "conformance",
+            Self::ExternalManifestCheck => "external_manifest_check",
+            Self::ManifestProfile => "manifest_profile",
             Self::Processing => "processing",
             Self::DashAddressing => "dash_addressing",
             Self::Entry => "*",
@@ -90,6 +100,7 @@ impl From<Field> for Segment {
 enum Expected {
     KeysObject,
     OutputsObject,
+    OutputDirectory,
     SchemaVersion,
     InputObject,
     InputKeys,
@@ -117,18 +128,22 @@ enum Expected {
     Conformance,
     Processing,
     DashAddressing,
+    ManifestProfile,
 }
 impl Expected {
     fn hint(self) -> &'static str {
         match self {
             Self::KeysObject => {
-                "Use an owner-only regular key file of at most 64 KiB, with schema_version 1 (single output) or 2 (named outputs). Remove unknown or duplicate fields."
+                "Use an owner-only regular key file of at most 64 KiB, with schema_version 2 and named outputs. Remove unknown or duplicate fields."
             }
             Self::OutputsObject => {
-                "Use a readable regular output-list file of at most 64 KiB, with schema_version 1, 2 or 3 and an outputs array. Remove unknown or duplicate fields."
+                "Use a readable regular output-configuration file of at most 64 KiB, with schema_version 4 and an outputs array. Remove unknown or duplicate fields."
+            }
+            Self::OutputDirectory => {
+                "Use a nonempty local directory path without parent-directory components; relative paths refer to the configuration file directory."
             }
             Self::SchemaVersion => {
-                "Use a supported integer schema_version for this operation: keys 1 or 2; output lists 1 through 3."
+                "Use schema_version 2 for current key files or 4 for current output configurations."
             }
             Self::InputObject => "Use an input object containing only keys and hls_keys arrays.",
             Self::InputKeys => "Use an array of at most 64 keys with distinct key identifiers.",
@@ -167,27 +182,30 @@ impl Expected {
                 "Use an array of one to eight output objects with distinct safe IDs."
             }
             Self::OutputObject => {
-                "Use a supported combination of format, target, DRM systems, processing and manifest checks."
+                "Use a supported combination of output_format, encryption, DRM systems, processing and manifest checks."
             }
             Self::OutputId => {
                 "Use a unique ID of 1 to 32 characters: a lowercase ASCII letter, followed by lowercase letters, digits or hyphens. Reserved device names are refused."
             }
-            Self::OutputFormat => "Use the string mp4, dash, hls or hls-ts.",
+            Self::OutputFormat => {
+                "Use the string mp4, dash, hls-fmp4 or hls-ts in current output configurations."
+            }
             Self::TargetProtection => {
-                "Use a supported target: clear, cenc, cbcs, hls-aes128 or hls-sample-aes."
+                "Use supported encryption: clear, cenc, cbcs, hls-aes128 or hls-sample-aes."
             }
             Self::Drms => {
-                "Use an array of at most three distinct DRM systems compatible with format and target; use [] for no DRM declarations."
+                "Use an array of at most three distinct DRM systems compatible with output_format and encryption; use [] for no DRM declarations."
             }
             Self::DrmSystem => "Use the string widevine, playready or fairplay.",
             Self::Conformance => {
                 "Use none or required. External manifest checks are not supported for MP4 output."
             }
-            Self::Processing => {
-                "Use auto, segments or stitch; omit this field for output-list schema version 1."
-            }
+            Self::Processing => "Use auto, segments or stitch in the output configuration.",
             Self::DashAddressing => {
-                "Use template, template-timeline, list or base for DASH only, with output-list schema version 3."
+                "Use template, template-timeline, list or base for DASH outputs only."
+            }
+            Self::ManifestProfile => {
+                "Use base for HLS or DASH, or apple-vod for HLS only. Manifest profiles are not supported for MP4 output."
             }
         }
     }
@@ -257,13 +275,17 @@ impl Node {
                 Self::Leaf(Expected::LicenseUrl)
             }
             (Self::Signaling, F::WidevinePssh) => Self::Leaf(Expected::Pssh),
-            (Self::Signaling, F::Fairplay) => Self::Leaf(Expected::Boolean),
+            (Self::Signaling, F::Fairplay) | (Self::Intent, F::ExternalManifestCheck) => {
+                Self::Leaf(Expected::Boolean)
+            }
             (Self::OutputsRoot, F::Outputs) => Self::Outputs,
+            (Self::OutputsRoot, F::OutputDir) => Self::Leaf(Expected::OutputDirectory),
             (Self::Intent, F::Id) => Self::Leaf(Expected::OutputId),
-            (Self::Intent, F::Format) => Self::Leaf(Expected::OutputFormat),
-            (Self::Intent, F::Target) => Self::Leaf(Expected::TargetProtection),
+            (Self::Intent, F::Format | F::OutputFormat) => Self::Leaf(Expected::OutputFormat),
+            (Self::Intent, F::Target | F::Encryption) => Self::Leaf(Expected::TargetProtection),
             (Self::Intent, F::Drms) => Self::Drms,
             (Self::Intent, F::Conformance) => Self::Leaf(Expected::Conformance),
+            (Self::Intent, F::ManifestProfile) => Self::Leaf(Expected::ManifestProfile),
             (Self::Intent, F::Processing) => Self::Leaf(Expected::Processing),
             (Self::Intent, F::DashAddressing) => Self::Leaf(Expected::DashAddressing),
             _ => return None,
@@ -450,6 +472,7 @@ fn known_field(name: &str) -> Option<Field> {
         Field::Iv,
         Field::Output,
         Field::Outputs,
+        Field::OutputDir,
         Field::HlsKeyUri,
         Field::Signaling,
         Field::System,
@@ -460,8 +483,12 @@ fn known_field(name: &str) -> Option<Field> {
         Field::Id,
         Field::Format,
         Field::Target,
+        Field::OutputFormat,
+        Field::Encryption,
         Field::Drms,
         Field::Conformance,
+        Field::ExternalManifestCheck,
+        Field::ManifestProfile,
         Field::Processing,
         Field::DashAddressing,
     ]

@@ -189,7 +189,7 @@ async function requestDecode(page) {
   await page.locator('#common-decode').check();
   pages.get(page).decode = true;
 }
-async function outputRow(page, index, { name, format, target = 'clear', drms = [], conformance = 'none', dash_addressing = 'template' }) {
+async function outputRow(page, index, { name, format, target = 'clear', drms = [], conformance = 'none', dash_addressing = 'template', manifest_profile = 'base' }) {
   const row = page.locator('tr[data-output-row]').nth(index);
   await row.locator('input[id$="-id"]').fill(name);
   await row.locator('select[id$="-format"]').selectOption(format);
@@ -197,13 +197,14 @@ async function outputRow(page, index, { name, format, target = 'clear', drms = [
   await row.locator('select[id$="-target"]').selectOption(target);
   const labels = { widevine: 'Widevine', playready: 'PlayReady', fairplay: 'FairPlay' };
   for (const drm of drms) await row.getByRole('checkbox', { name: new RegExp(labels[drm]) }).check();
-  await row.locator('select[id$="-conformance"]').selectOption(conformance);
+  await row.locator('input[id$="-external-manifest-check"]').setChecked(conformance === 'required');
+  await row.locator('select[id$="-manifest-profile"]').selectOption(manifest_profile);
 }
 async function configure(page, destination, encrypted = false, conformance = 'none') {
   await outputRow(page, 0, { name: 'dash', format: 'dash', target: encrypted ? 'cbcs' : 'clear',
     drms: encrypted ? ['widevine', 'playready'] : [], conformance });
   await page.locator('#common-add-output').click();
-  await outputRow(page, 1, { name: 'hls', format: 'hls', target: encrypted ? 'cbcs' : 'clear', drms: encrypted ? ['fairplay'] : [] });
+  await outputRow(page, 1, { name: 'hls', format: 'hls-fmp4', target: encrypted ? 'cbcs' : 'clear', drms: encrypted ? ['fairplay'] : [] });
   await pick(page, 'output-parent', null); await page.locator('#common-destination').fill(destination);
 }
 async function plan(page) {
@@ -228,7 +229,7 @@ async function retainedPlanBytes(planId, expectedBytes) {
       else if (metadata.isFile() && name.endsWith('.json') && metadata.size < 32 * 1024 * 1024) {
         const bytes = await readFile(path);
         let value; try { value = JSON.parse(bytes.toString('utf8')); } catch { continue; }
-        if (value.plan_id === planId && value.source && [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].includes(value.schema_version)) {
+        if (value.plan_id === planId && value.source && [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].includes(value.schema_version)) {
           planMinimumDepth(value);
           expect(bytes.equals(expectedBytes)).toBe(true); matches.push(digest(bytes));
         }
@@ -245,27 +246,27 @@ test.beforeAll(async ({ request }, info) => {
   const worker = 'worker-' + info.workerIndex;
   importedPlans = Object.fromEntries([1, 2, 3, 4, 5, 6, 9, 10].map(version => ['v' + version, 'cli-v' + version + '-' + worker + '.plan.json']));
   const saved = join(fixture.input, importedPlans.v9), destination = join(fixture.output, 'cli-v9-' + worker + '.mp4');
-  const planned = await cli(['plan', fixture.progressive, '--to', 'clear', '--format', 'mp4', '--output', destination, '--save', saved, '--json']);
+  const planned = await cli(['plan', fixture.progressive, '--encryption', 'clear', '--output-format', 'mp4', '--output-file', destination, '--save', saved, '--json']);
   expect(planned.report.schema_version).toBe(9); expect(planMinimumDepth(planned.report)).toBe('native');
   const legacySingle = legacyPlan(planned.report);
   await writeFile(join(fixture.input, importedPlans.v1), JSON.stringify(legacySingle), { flag: 'wx', mode: 0o600 });
   await writeFile(join(fixture.input, importedPlans.v3), JSON.stringify(compatibilityPlan(planned.report, 3)), { flag: 'wx', mode: 0o600 });
   await writeFile(join(fixture.input, importedPlans.v5), JSON.stringify(compatibilityPlan(planned.report, 5)), { flag: 'wx', mode: 0o600 });
-  const converted = await cli(['convert', '--decode', '--plan', saved, '--json']); checks(converted.report.verification);
+  const converted = await cli(['convert', '--decode', '--plan-file', saved, '--json']); checks(converted.report.verification);
   const named = join(fixture.root, 'cli-v10-' + worker + '.outputs.json'), savedBundle = join(fixture.input, importedPlans.v10);
-  await writeFile(named, JSON.stringify({ schema_version: 1, outputs: [
-    { id: 'dash', format: 'dash', target: 'cbcs', drms: ['widevine', 'playready'], conformance: 'none' },
-    { id: 'hls', format: 'hls', target: 'cbcs', drms: ['fairplay'], conformance: 'none' },
+  await writeFile(named, JSON.stringify({ schema_version: 4, outputs: [
+    { id: 'dash', output_format: 'dash', encryption: 'cbcs', drms: ['widevine', 'playready'], external_manifest_check: false },
+    { id: 'hls', output_format: 'hls-fmp4', encryption: 'cbcs', drms: ['fairplay'], external_manifest_check: false },
   ] }), { flag: 'wx', mode: 0o600 });
   const keys = join(fixture.config, 'keys.json');
-  const plannedBundle = await cli(['plan', '--decode', join(fixture.source, 'media.m3u8'), '--outputs', named,
-    '--output', join(fixture.output, 'cli-v10-' + worker), '--save', savedBundle, '--keys-file', keys, '--json']);
+  const plannedBundle = await cli(['plan', '--decode', join(fixture.source, 'media.m3u8'), '--output-config', named,
+    '--output-dir', join(fixture.output, 'cli-v10-' + worker), '--save', savedBundle, '--keys-file', keys, '--json']);
   expect(plannedBundle.report.schema_version).toBe(10); expect(planMinimumDepth(plannedBundle.report)).toBe('decoded');
   const legacyBundle = legacyPlan(plannedBundle.report);
   await writeFile(join(fixture.input, importedPlans.v2), JSON.stringify(legacyBundle), { flag: 'wx', mode: 0o600 });
   await writeFile(join(fixture.input, importedPlans.v4), JSON.stringify(compatibilityPlan(plannedBundle.report, 4)), { flag: 'wx', mode: 0o600 });
   await writeFile(join(fixture.input, importedPlans.v6), JSON.stringify(compatibilityPlan(plannedBundle.report, 6)), { flag: 'wx', mode: 0o600 });
-  const convertedBundle = await cli(['convert', '--plan', savedBundle, '--keys-file', keys, '--json']);
+  const convertedBundle = await cli(['convert', '--plan-file', savedBundle, '--keys-file', keys, '--json']);
   for (const output of convertedBundle.report.outputs) checks(output.conversion.verification);
   await writeFile(join(process.env.PW_REPORT_ROOT, 'cli-import-setup-' + worker + '.json'), JSON.stringify({
     sourceHead: fixture.sourceHead, binarySha256: fixture.binarySha256, planId: planned.report.plan_id,
@@ -286,8 +287,12 @@ test.beforeEach(async ({ page, context }) => {
       if (body.operation.kind === 'plan') {
         expect(body.operation.output_parent_ref).toBe(record.selections['output-parent']);
         for (const output of body.operation.outputs) {
+          expect(['mp4', 'dash', 'hls-fmp4', 'hls-ts']).toContain(output.output_format);
+          expect(['clear', 'cenc', 'cbcs', 'hls-aes128', 'hls-sample-aes']).toContain(output.encryption);
+          expect(typeof output.external_manifest_check).toBe('boolean');
+          for (const retired of ['format', 'target', 'conformance']) expect(Object.hasOwn(output, retired)).toBe(false);
           expect(['auto', 'segments', 'stitch']).toContain(output.processing);
-          if (output.format === 'dash') expect(['template', 'template-timeline', 'list', 'base']).toContain(output.dash_addressing);
+          if (output.output_format === 'dash') expect(['template', 'template-timeline', 'list', 'base']).toContain(output.dash_addressing);
           else expect(Object.hasOwn(output, 'dash_addressing')).toBe(false);
           expect(Object.hasOwn(output, 'layout')).toBe(false);
         }
@@ -431,7 +436,7 @@ for (const language of ['en', 'ja']) {
       expect(output.conformance).toBeNull();
       expect(output.signaling).toEqual(encrypted ? { systems: output.id === 'dash' ? ['widevine', 'playready'] : ['fairplay'], verified: true } : { systems: [], verified: false });
     }
-    const outside = await cli(['verify', '--plan', saved, ...(encrypted ? ['--keys-file', join(fixture.config, 'keys.json')] : []), '--json']);
+    const outside = await cli(['verify', '--plan-file', saved, ...(encrypted ? ['--keys-file', join(fixture.config, 'keys.json')] : []), '--json']);
     expect(outside.report.plan_id).toBe(planned.value.plan_id); expect(outside.report.passed).toBe(true);
     await reportAttachment(info, 'real-media-and-cli-plan', { planId: planned.value.plan_id,
       exportSha256: digest(bytes), retainedHashes, outsideCliSha256: outside.sha256, verified: verified.observedReport });
@@ -592,7 +597,7 @@ test('an imported version-two plan verifies current media and refuses a wrong ke
 test('a required unavailable manifest validator fails conversion without publication', async ({ page }) => {
   await openSession(page); await observedJob(page, '#common-analyze', 'analyze');
   await configure(page, 'required-validator');
-  await page.locator('tr[data-output-row]').nth(1).locator('select[id$="-conformance"]').selectOption('required');
+  await page.locator('tr[data-output-row]').nth(1).locator('input[id$="-external-manifest-check"]').check();
   await plan(page);
   const failed = await observedJob(page, '#common-convert', 'convert', { expected: 'failed' });
   expect(failed.observedReport.report.error.code).toBe('manifest-validator-unavailable');

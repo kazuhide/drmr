@@ -82,6 +82,7 @@ fn plans(input: &Path, root: &Path, mode: ProcessingMode) -> (ExecutionPlan, Bun
         conformance: ManifestValidation::None,
         processing: None,
         dash_addressing: None,
+        manifest_profile: None,
     }];
     let bundle = command
         .create_bundle_plan(BundlePlanRequest {

@@ -56,7 +56,7 @@ test('Stop sends only an empty object to the exact common job endpoint', async (
   assert.equal(request.options.body, '{}');
 });
 test('export links must be the exact same-origin attachment endpoint', async () => {
-  const plan = envelope({ plan_ref: 'plan_1', session_id: 'session_1', plan_id: 'b'.repeat(64), plan_schema_version: 2, outputs: [{ id: 'clear', format: 'mp4', target: 'clear', drms: [], conformance: 'none' }], destination_state: 'absent', export_url: 'https://other.invalid/export' });
+  const plan = envelope({ plan_ref: 'plan_1', session_id: 'session_1', plan_id: 'b'.repeat(64), plan_schema_version: 2, outputs: [{ id: 'clear', output_format: 'mp4', encryption: 'clear', drms: [], external_manifest_check: false }], destination_state: 'absent', export_url: 'https://other.invalid/export' });
   const api = load(() => Promise.resolve(plan));
   await assert.rejects(api.plan('plan_1'), { code: 'request-response-invalid' });
 });
@@ -64,7 +64,7 @@ test('current saved plans require explicit coverage while legacy versions remain
   for (const schema of [1, 2, 3, 4]) {
     const single = schema === 1 || schema === 3;
     const plan = envelope({ plan_ref: 'plan_1', session_id: 'session_1', plan_id: 'b'.repeat(64), plan_schema_version: schema,
-      outputs: single ? [{ id: null, format: 'mp4', target: 'clear' }] : [{ id: 'clear', format: 'mp4', target: 'clear', drms: [], conformance: 'none' }],
+      outputs: single ? [{ id: null, output_format: 'mp4', encryption: 'clear', external_manifest_check: false }] : [{ id: 'clear', output_format: 'mp4', encryption: 'clear', drms: [], external_manifest_check: false }],
       destination_state: 'absent', export_url: '/api/common/plans/plan_1/export' });
     if (schema >= 3) plan.required_depth = 'native';
     const api = load(() => Promise.resolve(plan));
@@ -86,7 +86,7 @@ test('saved schemas five and six require complete fixed processing selections', 
   for (const schema of [5, 6]) {
     const selection = { requested: 'auto', resolved: 'stitch', boundaries: 'resegment', segment_duration_ms: 2000 };
     const plan = envelope({ plan_ref: 'plan_1', session_id: 'session_1', plan_id: 'b'.repeat(64), plan_schema_version: schema,
-      required_depth: 'native', outputs: [{ id: schema === 5 ? null : 'hls', format: 'hls', target: 'clear', drms: [], conformance: 'none' }],
+      required_depth: 'native', outputs: [{ id: schema === 5 ? null : 'hls', output_format: 'hls-fmp4', encryption: 'clear', drms: [], external_manifest_check: false }],
       processing: schema === 5 ? selection : [{ id: 'hls', selection }],
       destination_state: 'absent', export_url: '/api/common/plans/plan_1/export' });
     assert.equal((await load(() => Promise.resolve(plan)).plan('plan_1')).plan_schema_version, schema);
@@ -110,7 +110,7 @@ test('saved segment targets retain positive bounded milliseconds rather than a f
   for (const schema of [5, 6]) {
     const selection = { requested: 'auto', resolved: 'stitch', boundaries: 'resegment', segment_duration_ms: 6000 };
     const plan = envelope({ plan_ref: 'plan_1', session_id: 'session_1', plan_id: 'b'.repeat(64), plan_schema_version: schema,
-      required_depth: 'native', outputs: [{ id: schema === 5 ? null : 'hls', format: 'hls', target: 'clear', drms: [], conformance: 'none' }],
+      required_depth: 'native', outputs: [{ id: schema === 5 ? null : 'hls', output_format: 'hls-fmp4', encryption: 'clear', drms: [], external_manifest_check: false }],
       processing: schema === 5 ? selection : [{ id: 'hls', selection }],
       destination_state: 'absent', export_url: '/api/common/plans/plan_1/export' });
     for (const duration of [1, 2000, 6000, 4294967295]) {
@@ -125,10 +125,10 @@ test('saved segment targets retain positive bounded milliseconds rather than a f
 });
 
 function outputPlan(schema, mode = 'template', format = 'dash') {
-  const single = schema === 7 || schema === 9;
+  const single = schema === 7 || schema === 9 || schema === 11;
   const selection = { requested: 'auto', resolved: 'stitch', boundaries: format === 'mp4' ? 'not-applicable' : 'resegment', segment_duration_ms: format === 'mp4' ? null : 6000 };
-  const output = { id: single ? null : 'output', format, target: 'clear' };
-  if (!single) Object.assign(output, { drms: [], conformance: 'none', processing: 'auto', ...(format === 'dash' ? { dash_addressing: mode } : {}) });
+  const output = { id: single ? null : 'output', output_format: format, encryption: 'clear', external_manifest_check: false };
+  if (!single) Object.assign(output, { drms: [], external_manifest_check: false, processing: 'auto', ...(format === 'dash' ? { dash_addressing: mode } : {}) });
   const options = { layout: format === 'mp4' ? 'not-applicable' : 'source', dash_addressing: format === 'dash' ? mode : null };
   return envelope({ plan_ref: 'plan_1', session_id: 'session_1', plan_id: 'b'.repeat(64), plan_schema_version: schema,
     required_depth: 'native', outputs: [output], processing: single ? selection : [{ id: 'output', selection }],
@@ -144,10 +144,36 @@ test('new saved plans expose closed path-free placement and four DASH addressing
       options.layout = 'previous-saved';
       await load(() => Promise.resolve(response)).plan('plan_1');
     }
-    for (const format of ['mp4', 'hls', 'hls-ts']) {
+    for (const format of ['mp4', 'hls-fmp4', 'hls-ts']) {
       const response = outputPlan(schema, 'template', format);
       await load(() => Promise.resolve(response)).plan('plan_1');
     }
+  }
+});
+
+test('explicit manifest policies stay bound to schemas eleven and twelve without legacy aliases', async () => {
+  for (const schema of [11, 12]) {
+    const response = outputPlan(schema, 'template', 'hls-fmp4');
+    response.outputs[0].manifest_profile = 'apple-vod';
+    response.outputs[0].external_manifest_check = true;
+    assert.equal((await load(() => Promise.resolve(response)).plan('plan_1')).plan_schema_version, schema);
+    for (const change of [
+      output => { output.manifest_profile = 'private-profile'; },
+      output => { output.manifest_profile = null; },
+      output => { delete output.manifest_profile; },
+      output => { output.external_manifest_check = 'required'; },
+      output => { delete output.external_manifest_check; },
+      output => { output.output_format = 'hls'; },
+      output => { output.output_format = 'dash'; },
+      output => { output.format = 'hls'; },
+      output => { output.target = 'clear'; },
+      output => { output.conformance = 'required'; },
+    ]) {
+      const changed = structuredClone(response); change(changed.outputs[0]);
+      await assert.rejects(load(() => Promise.resolve(changed)).plan('plan_1'), { code: 'request-response-invalid' });
+    }
+    const downgraded = structuredClone(response); downgraded.plan_schema_version = schema - 2;
+    await assert.rejects(load(() => Promise.resolve(downgraded)).plan('plan_1'), { code: 'request-response-invalid' });
   }
 });
 

@@ -123,7 +123,7 @@ fn malformed_private_request_never_falls_back_to_stdout() {
 fn ordinary_json_output_keeps_the_public_cli_contract() {
     let root = native::private_tempdir().unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_drmr"))
-        .args(["verify", "--decode", "--plan"])
+        .args(["verify", "--decode", "--plan-file"])
         .arg(root.path().join("missing.plan.json"))
         .arg("--json")
         .output()
@@ -166,9 +166,9 @@ fn all_four_handlers_share_one_saved_bundle_plan_and_fresh_media_evidence() {
     let mut file = native::create_private_new(&specification).unwrap();
     serde_json::to_writer(
         &mut file,
-        &json!({"schema_version":1,"outputs":[
-            {"id":"dash","format":"dash","target":"clear","drms":[]},
-            {"id":"hls","format":"hls","target":"clear","drms":[]}
+        &json!({"schema_version":4,"outputs":[
+            {"id":"dash","output_format":"dash","encryption":"clear","drms":[]},
+            {"id":"hls","output_format":"hls-fmp4","encryption":"clear","drms":[]}
         ]}),
     )
     .unwrap();

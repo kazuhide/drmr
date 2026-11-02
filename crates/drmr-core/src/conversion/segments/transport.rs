@@ -380,11 +380,11 @@ pub(super) fn verify(
 ) -> Result<VerificationReport, ConversionError> {
     source.check_original()?;
     output.check_original()?;
-    let checked = converter.checked_manifest(output.entrypoint(), OutputFormat::HlsTs)?;
+    let checked =
+        converter.checked_verification_manifest(output.entrypoint(), OutputFormat::HlsTs)?;
     let mut report = compare(converter, source, output, request)?;
     checked.check(converter)?;
-    report.native_manifest = Some(checked.report);
-    report.refresh_passed();
+    checked.apply_to(&mut report);
     source.check_original()?;
     output.check_original()?;
     Ok(report)
@@ -693,7 +693,7 @@ pub(super) fn convert(
         files::seal(stage.path())?;
     }
     let manifest = stage.path().join("master.m3u8");
-    let checked = converter.checked_manifest(&manifest, OutputFormat::HlsTs)?;
+    let checked = converter.checked_publication_manifest(&manifest, OutputFormat::HlsTs)?;
     checked.require_clean()?;
     let output_keys = output_keys(&request)?;
     let empty = InputKeys::default();
@@ -719,8 +719,7 @@ pub(super) fn convert(
             output: output_input,
         },
     )?;
-    verification.native_manifest = Some(checked.report.clone());
-    verification.refresh_passed();
+    checked.apply_to(&mut verification);
     if !verification.passed {
         return Err(ConversionError("media-verification-failed"));
     }

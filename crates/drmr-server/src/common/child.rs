@@ -219,8 +219,10 @@ fn prepare_operation(
             ..
         } => {
             let output_spec_file = directory.join("output-spec.json");
-            let bytes = serde_json::to_vec(&serde_json::json!({"schema_version":3,
-                "outputs":outputs.ok_or_else(unavailable)?}))
+            let bytes = serde_json::to_vec(&drmr_core::conversion::plan::bundle::OutputConfig {
+                output_dir: None,
+                outputs: outputs.ok_or_else(unavailable)?.to_vec(),
+            })
             .map_err(|_| unavailable())?;
             if bytes.len() > 65_536 {
                 return Err(Error::new(413, "request-too-large"));
@@ -308,7 +310,7 @@ mod tests {
     use std::{io::Write as _, os::unix::fs::PermissionsExt};
 
     #[test]
-    fn child_output_recipe_keeps_per_output_modes_and_addressing_in_schema_three() {
+    fn child_output_recipe_keeps_per_output_modes_and_addressing_in_schema_four() {
         let root = native::private_tempdir().unwrap();
         let directory = root.path().canonicalize().unwrap();
         let outputs: Vec<drmr_core::conversion::plan::bundle::BundleOutputIntent> =
@@ -340,11 +342,15 @@ mod tests {
             panic!("plan changed operation")
         };
         let recipe =
-            drmr_core::conversion::plan::bundle::read_output_spec(&output_spec_file).unwrap();
+            drmr_core::conversion::plan::bundle::read_output_config_diagnostic(&output_spec_file)
+                .unwrap()
+                .outputs;
         assert_eq!(recipe, outputs);
         let bytes = read_private(&BoundPath::capture(&output_spec_file).unwrap(), 65_536).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(value["schema_version"], 3);
+        assert_eq!(value["schema_version"], 4);
+        assert_eq!(value["outputs"][0]["output_format"], "hls-ts");
+        assert_eq!(value["outputs"][0]["encryption"], "clear");
         assert_eq!(value["outputs"][0]["processing"], "segments");
         assert_eq!(value["outputs"][1]["processing"], "stitch");
         assert_eq!(value["outputs"][1]["dash_addressing"], "list");

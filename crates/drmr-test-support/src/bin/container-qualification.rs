@@ -336,7 +336,13 @@ fn stop(cli: &Path, fixture: &Path, source: &Path, work: &Path) -> io::Result<()
         // This lifecycle fixture exercises the optional external validation path.
         .arg("--decode")
         .arg(source)
-        .args(["--to", "clear", "--format", "dash", "--output"])
+        .args([
+            "--encryption",
+            "clear",
+            "--output-format",
+            "dash",
+            "--output-dir",
+        ])
         .arg(&output)
         .args(["--json", "--max-workers", "1"])
         .env("PATH", &control)

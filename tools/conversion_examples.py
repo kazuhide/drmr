@@ -65,17 +65,17 @@ def commands(source, output, target, input_protection):
     if input_protection not in INPUTS[source]["protections"]:
         raise ValueError("conversion-example-input-protection")
     extension = INPUTS[source]["source"].rsplit(".", 1)[1]
-    runtime_keys = " --keys-file keys.json" if input_protection != "clear" or target != "clear" else ""
+    runtime_keys = " \\\n  --keys-file keys.json" if input_protection != "clear" or target != "clear" else ""
     return (f'drmr convert "https://example.com/input.{extension}" \\\n'
-            '  --download-dir src --outputs outputs.json \\\n'
-            f'  --output result{runtime_keys}\n')
+            f'  --download-dir src --output-config outputs.json{runtime_keys}\n')
 
 
 def output_spec(output, target):
     if not any(route[1:] == (output, target) for route in routes()):
         raise ValueError("conversion-example-output")
-    return {"schema_version": 3, "outputs": [
-        {"id": output, "format": output, "target": target, "drms": []}]}
+    return {"schema_version": 4, "output_dir": "result", "outputs": [
+        {"id": output, "output_format": "hls-fmp4" if output == "hls" else output,
+         "encryption": target, "drms": []}]}
 
 
 def key_config(output, target, mode="clear"):

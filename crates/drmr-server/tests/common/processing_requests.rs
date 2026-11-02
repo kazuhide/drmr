@@ -88,6 +88,14 @@ fn start_plan_decode(
             root["root_ref"].as_str().unwrap()
         ))
         .json();
+    // Native saved-plan fixtures keep their versioned vocabulary; requests use current settings.
+    let internal: Vec<drmr_core::conversion::plan::bundle::BundleOutputIntent> =
+        serde_json::from_value(outputs.clone()).unwrap();
+    let configuration = serde_json::to_value(drmr_core::conversion::plan::bundle::OutputConfig {
+        output_dir: None,
+        outputs: internal,
+    })
+    .unwrap();
     let reply = h.client.post_json(
         "/api/common/jobs",
         &json!({
@@ -95,7 +103,7 @@ fn start_plan_decode(
         "session_id":analyzed["session_id"],"request_id":"b".repeat(32),
         "operation":{"kind":"plan","analysis_ref":analyzed["analysis_ref"],
             "output_parent_ref":parent["output_parent_ref"],"destination_name":"results",
-            "outputs":outputs},"runtime":{"keys_ref":null,"max_workers":1,"decode":decode}}),
+            "outputs":configuration["outputs"]},"runtime":{"keys_ref":null,"max_workers":1,"decode":decode}}),
     );
     assert_eq!(reply.status, 202, "{}", reply.text());
     reply.json()

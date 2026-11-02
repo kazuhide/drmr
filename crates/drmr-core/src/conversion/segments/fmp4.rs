@@ -208,10 +208,9 @@ fn convert(
         request.format,
         native,
     )?;
-    let checked = converter.checked_manifest(&output_path, request.format)?;
+    let checked = converter.checked_publication_manifest(&output_path, request.format)?;
     checked.require_clean()?;
-    verification.native_manifest = Some(checked.report.clone());
-    verification.refresh_passed();
+    checked.apply_to(&mut verification);
     if !verification.passed {
         return Err(ConversionError("round-trip-verification-failed"));
     }
@@ -286,8 +285,7 @@ pub(super) fn verify(
     )?;
     if let Some(checked) = converter.checked_output_manifest(request.output.input)? {
         checked.check(converter)?;
-        report.native_manifest = Some(checked.report);
-        report.refresh_passed();
+        checked.apply_to(&mut report);
     }
     source.check_original()?;
     output.check_original()?;

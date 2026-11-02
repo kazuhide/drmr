@@ -91,7 +91,7 @@ pub struct ServeArgs {
     pub static_dir: Option<PathBuf>,
     /// The CLI the jobs run (default: the `drmr` executable — `drmr serve` itself, or the one
     /// next to `drmr-server`).
-    #[arg(long)]
+    #[arg(long = "drmr-bin")]
     pub cli: Option<PathBuf>,
 }
 
@@ -195,4 +195,27 @@ where
         config.common_config_root = Some(PathBuf::from(root));
     }
     Ok(config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ServeArgs;
+    use clap::Parser as _;
+
+    #[derive(clap::Parser)]
+    struct Arguments {
+        #[command(flatten)]
+        serve: ServeArgs,
+    }
+
+    #[test]
+    fn cli_override_uses_the_public_binary_option_without_a_legacy_alias() {
+        let parsed = Arguments::try_parse_from(["serve", "--drmr-bin", "custom-dr"])
+            .expect("public binary option");
+        assert_eq!(
+            parsed.serve.cli.as_deref(),
+            Some(std::path::Path::new("custom-dr"))
+        );
+        assert!(Arguments::try_parse_from(["serve", "--cli", "custom-dr"]).is_err());
+    }
 }

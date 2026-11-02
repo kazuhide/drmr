@@ -39,7 +39,7 @@ impl fmt::Debug for ManifestValidationTools {
 }
 
 /// One external engine, with neither executable paths nor untrusted diagnostic text.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ManifestToolCheck {
     pub tool: &'static str,
     pub passed: bool,
@@ -58,7 +58,7 @@ pub struct HlsVersionCheck {
 
 /// A successful manifest-only check of all playlists or the final DASH MPD.
 /// Every operational, parser, scope, or conformance failure returns an error instead.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ManifestValidationReport {
     pub schema_version: u32,
     pub scope: &'static str,

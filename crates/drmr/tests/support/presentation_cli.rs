@@ -67,7 +67,7 @@ pub(super) fn configuration(
     target: &str,
     format: &str,
 ) -> Vec<u8> {
-    let mut value = json!({"schema_version": 1});
+    let mut value = json!({"schema_version": 2,"outputs":{}});
     if encrypted_source {
         value["input"] = json!({"keys": [
             {"kid": "000102030405060708090a0b0c0d0e0f", "key": VIDEO_KEY},
@@ -77,12 +77,12 @@ pub(super) fn configuration(
     match target {
         "clear" => {}
         "hls-aes128" => {
-            value["output"] = json!({"key": RESULT_KEY, "hls_key_uri": RESULT_URI});
+            value["outputs"]["default"] = json!({"key": RESULT_KEY, "hls_key_uri": RESULT_URI});
         }
         _ => {
-            value["output"] = json!({"kid": RESULT_ID, "key": RESULT_KEY});
+            value["outputs"]["default"] = json!({"kid": RESULT_ID, "key": RESULT_KEY});
             if format == "hls" {
-                value["output"]["hls_key_uri"] = json!(RESULT_URI);
+                value["outputs"]["default"]["hls_key_uri"] = json!(RESULT_URI);
             }
         }
     }
@@ -104,10 +104,10 @@ pub(super) fn convert_and_verify(
     let planned = cli(&[
         "plan",
         source.to_str().unwrap(),
-        "--to",
+        "--encryption",
         target,
-        "--format",
-        format,
+        "--output-format",
+        if format == "hls" { "hls-fmp4" } else { format },
         "--json",
     ]);
     let plan = checked(&planned, &format!("{format}/{target} planning"));
@@ -116,11 +116,15 @@ pub(super) fn convert_and_verify(
     let converted = cli(&[
         "convert",
         source.to_str().unwrap(),
-        "--to",
+        "--encryption",
         target,
-        "--format",
-        format,
-        "--output",
+        "--output-format",
+        if format == "hls" { "hls-fmp4" } else { format },
+        if format == "mp4" {
+            "--output-file"
+        } else {
+            "--output-dir"
+        },
         destination.to_str().unwrap(),
         "--keys-file",
         config.to_str().unwrap(),

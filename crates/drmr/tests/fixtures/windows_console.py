@@ -179,7 +179,7 @@ def run(args):
     environment = dict(os.environ, PATH=str(case / "tools"), TEMP=str(temporary), TMP=str(temporary))
     invocation = [str(args.drmr), args.command]
     if args.command == "convert":
-        invocation += [str(args.clip), "--to", "clear", "--format", "dash", "--output", str(output)]
+        invocation += [str(args.clip), "--encryption", "clear", "--output-format", "dash", "--output-dir", str(output)]
     else:
         invocation += [str(args.clip), "--source", str(args.clip)]
     invocation += ["--decode", "--json", "--max-workers", "1"]

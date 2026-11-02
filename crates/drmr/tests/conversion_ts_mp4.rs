@@ -216,9 +216,9 @@ fn saved_mp4_plan(root: &Path, target: &str, output: &str, plan_name: &str) -> (
         &[
             "plan",
             "source/master.m3u8",
-            "--to",
+            "--encryption",
             target,
-            "--format",
+            "--output-format",
             "mp4",
             "--json",
         ],
@@ -230,11 +230,11 @@ fn saved_mp4_plan(root: &Path, target: &str, output: &str, plan_name: &str) -> (
         &[
             "plan",
             "source/master.m3u8",
-            "--to",
+            "--encryption",
             target,
-            "--format",
+            "--output-format",
             "mp4",
-            "--output",
+            "--output-file",
             output,
             "--save",
             plan_name,
@@ -278,9 +278,9 @@ fn native_ts_mp4_cli_analyzes_plans_converts_and_independently_verifies_every_pr
         private_json(
             &root.join(&keys_name),
             &if target == "clear" {
-                json!({"schema_version":1})
+                json!({"schema_version":2,"outputs":{}})
             } else {
-                json!({"schema_version":1,"output":{"kid":KID,"key":KEY}})
+                json!({"schema_version":2,"outputs":{"default":{"kid":KID,"key":KEY}}})
             },
         );
         let plan_name = format!("plans/{target} plan.json");
@@ -291,7 +291,7 @@ fn native_ts_mp4_cli_analyzes_plans_converts_and_independently_verifies_every_pr
                 &root,
                 &[
                     "convert",
-                    "--plan",
+                    "--plan-file",
                     &plan_name,
                     "--keys-file",
                     &keys_name,
@@ -305,7 +305,7 @@ fn native_ts_mp4_cli_analyzes_plans_converts_and_independently_verifies_every_pr
             &root,
             &[
                 "verify",
-                "--plan",
+                "--plan-file",
                 &plan_name,
                 "--keys-file",
                 &keys_name,
@@ -336,11 +336,11 @@ fn native_ts_mp4_cli_analyzes_plans_converts_and_independently_verifies_every_pr
                 &[
                     "convert",
                     "source/master.m3u8",
-                    "--format",
+                    "--output-format",
                     "mp4",
-                    "--to",
+                    "--encryption",
                     target,
-                    "--output",
+                    "--output-file",
                     &direct,
                     "--keys-file",
                     &keys_name,
@@ -363,9 +363,9 @@ fn native_ts_mp4_and_dash_share_one_bundle_without_losing_the_audio_tail_or_a_tr
     let original = files(&root.join("source"));
     private_json(
         &root.join("outputs.json"),
-        &json!({"schema_version":1,"outputs":[
-            {"id":"mp4","format":"mp4","target":"cbcs","drms":[]},
-            {"id":"dash","format":"dash","target":"clear","drms":[]}
+        &json!({"schema_version":4,"outputs":[
+            {"id":"mp4","output_format":"mp4","encryption":"cbcs","drms":[]},
+            {"id":"dash","output_format":"dash","encryption":"clear","drms":[]}
         ]}),
     );
     private_json(
@@ -377,9 +377,9 @@ fn native_ts_mp4_and_dash_share_one_bundle_without_losing_the_audio_tail_or_a_tr
         &[
             "plan",
             "source/master.m3u8",
-            "--outputs",
+            "--output-config",
             "outputs.json",
-            "--output",
+            "--output-dir",
             "saved result",
             "--save",
             "bundle.plan.json",
@@ -393,7 +393,7 @@ fn native_ts_mp4_and_dash_share_one_bundle_without_losing_the_audio_tail_or_a_tr
         root,
         &[
             "convert",
-            "--plan",
+            "--plan-file",
             "bundle.plan.json",
             "--keys-file",
             "keys.json",
@@ -406,7 +406,7 @@ fn native_ts_mp4_and_dash_share_one_bundle_without_losing_the_audio_tail_or_a_tr
         root,
         &[
             "verify",
-            "--plan",
+            "--plan-file",
             "bundle.plan.json",
             "--keys-file",
             "keys.json",
@@ -426,11 +426,11 @@ fn native_ts_mp4_and_dash_share_one_bundle_without_losing_the_audio_tail_or_a_tr
         &[
             "convert",
             "source/master.m3u8",
-            "--outputs",
+            "--output-config",
             "outputs.json",
             "--keys-file",
             "keys.json",
-            "--output",
+            "--output-dir",
             "direct result",
             "--json",
         ],

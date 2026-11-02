@@ -98,9 +98,9 @@ fn bundle(root: &Path, reference: &Path) -> PathBuf {
     let output = root.join("bundle");
     write(
         &recipe,
-        &json!({"schema_version":1,"outputs":[
-        {"id":"cbc","format":"hls","target":"cbcs","drms":["widevine","playready","fairplay"]},
-        {"id":"ctr","format":"hls","target":"cenc","drms":["widevine","playready"]}]}),
+        &json!({"schema_version":4,"outputs":[
+        {"id":"cbc","output_format":"hls-fmp4","encryption":"cbcs","drms":["widevine","playready","fairplay"]},
+        {"id":"ctr","output_format":"hls-fmp4","encryption":"cenc","drms":["widevine","playready"]}]}),
     );
     write(
         &keys,
@@ -109,16 +109,16 @@ fn bundle(root: &Path, reference: &Path) -> PathBuf {
     cli(&[
         "plan".into(),
         path(reference),
-        "--outputs".into(),
+        "--output-config".into(),
         path(&recipe),
-        "--output".into(),
+        "--output-dir".into(),
         path(&output),
         "--save".into(),
         path(&saved),
     ]);
     let converted = cli(&[
         "convert".into(),
-        "--plan".into(),
+        "--plan-file".into(),
         path(&saved),
         "--keys-file".into(),
         path(&keys),
@@ -129,7 +129,7 @@ fn bundle(root: &Path, reference: &Path) -> PathBuf {
     }
     let verified = cli(&[
         "verify".into(),
-        "--plan".into(),
+        "--plan-file".into(),
         path(&saved),
         "--keys-file".into(),
         path(&keys),
@@ -142,11 +142,11 @@ fn bundle(root: &Path, reference: &Path) -> PathBuf {
     let direct = cli(&[
         "convert".into(),
         path(reference),
-        "--outputs".into(),
+        "--output-config".into(),
         path(&recipe),
         "--keys-file".into(),
         path(&keys),
-        "--output".into(),
+        "--output-dir".into(),
         path(&root.join("direct")),
     ]);
     for output in direct["outputs"].as_array().unwrap() {
@@ -253,7 +253,7 @@ fn acquire_encrypted_source(root: &Path, output: &Path) -> (PathBuf, Vec<String>
     let input_keys = root.join("input-keys.json");
     write(
         &input_keys,
-        &json!({"schema_version":1,"input":{"keys":[{"kid":KID,"key":KEY}]}}),
+        &json!({"schema_version":2,"input":{"keys":[{"kid":KID,"key":KEY}]},"outputs":{}}),
     );
     let download = root.join("download");
     let url = format!(
@@ -267,7 +267,7 @@ fn acquire_encrypted_source(root: &Path, output: &Path) -> (PathBuf, Vec<String>
             url,
             "--download-dir".into(),
             path(&download),
-            "--fetch-policy".into(),
+            "--fetch-config".into(),
             path(&policy),
             "--keys-file".into(),
             path(&input_keys),
@@ -296,7 +296,7 @@ fn hls_multi_drm_url_analysis_saved_conversion_and_fresh_verification_stay_offli
     let keys = root.path().join("single-keys.json");
     write(
         &keys,
-        &json!({"schema_version":1,"input":{"keys":[{"kid":KID,"key":KEY}]},"output":settings(false)}),
+        &json!({"schema_version":2,"input":{"keys":[{"kid":KID,"key":KEY}]},"outputs":{"default":settings(false)}}),
     );
     let saved = root.path().join("single-plan.json");
     let result = root.path().join("result");
@@ -304,15 +304,15 @@ fn hls_multi_drm_url_analysis_saved_conversion_and_fresh_verification_stay_offli
         &invoke(&[
             "plan".into(),
             path(&input),
-            "--format".into(),
-            "hls".into(),
-            "--to".into(),
+            "--output-format".into(),
+            "hls-fmp4".into(),
+            "--encryption".into(),
             "cenc".into(),
             "--processing".into(),
             "segments".into(),
             "--keys-file".into(),
             path(&keys),
-            "--output".into(),
+            "--output-dir".into(),
             path(&result),
             "--save".into(),
             path(&saved),
@@ -322,7 +322,7 @@ fn hls_multi_drm_url_analysis_saved_conversion_and_fresh_verification_stay_offli
     let converted = success(
         &invoke(&[
             "convert".into(),
-            "--plan".into(),
+            "--plan-file".into(),
             path(&saved),
             "--keys-file".into(),
             path(&keys),
@@ -333,7 +333,7 @@ fn hls_multi_drm_url_analysis_saved_conversion_and_fresh_verification_stay_offli
     let verified = success(
         &invoke(&[
             "verify".into(),
-            "--plan".into(),
+            "--plan-file".into(),
             path(&saved),
             "--keys-file".into(),
             path(&keys),
@@ -356,7 +356,7 @@ fn hls_multi_drm_url_analysis_saved_conversion_and_fresh_verification_stay_offli
     let reference_keys = root.path().join("reference-keys.json");
     write(
         &reference_keys,
-        &json!({"schema_version":1,"output":settings(false)}),
+        &json!({"schema_version":2,"outputs":{"default":settings(false)}}),
     );
     checked(&success(
         &invoke(&[

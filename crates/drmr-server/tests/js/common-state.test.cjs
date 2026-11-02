@@ -82,7 +82,7 @@ test('unknown Stop is sent once and follows only the bound job via GET', async (
   assert.equal(stops, 1); assert.ok(gets >= 1); assert.ok(h.state.snapshot().owner);
 });
 test('a failed independent verification retains its negative report and cannot become success', async () => {
-  const plan = env({ plan_ref: 'plan_1', session_id: sid, plan_id: pid, plan_schema_version: 2, outputs: [{ id: 'clear', format: 'mp4', target: 'clear', drms: [], conformance: 'none' }], destination_state: 'present', export_url: '/api/common/plans/plan_1/export' });
+  const plan = env({ plan_ref: 'plan_1', session_id: sid, plan_id: pid, plan_schema_version: 2, outputs: [{ id: 'clear', output_format: 'mp4', encryption: 'clear', drms: [], external_manifest_check: false }], destination_state: 'present', export_url: '/api/common/plans/plan_1/export' });
   const h = await harness({ sessions: async () => env({ sessions: [session({ source: { kind: 'saved-plan', label: 'plan.json' }, plan_refs: ['plan_1'] })] }),
     plan: async () => plan,
     submit: async () => job({ operation: 'verify', state: 'failed', revision: 1, supervision_confirmed: true, cleanup_confirmed: true, exit_code: 1, plan_ref: 'plan_1', plan_id: pid, report_ref: 'report_1' }),
@@ -161,8 +161,8 @@ test('a throwing view observer cannot prevent a reserved attempt from reaching i
 });
 
 test('a new plan cannot substitute other output conditions under the accepted job binding', async () => {
-  const output = { id: 'clear', format: 'mp4', target: 'clear', drms: [], conformance: 'none' };
-  const plan = env({ plan_ref: 'plan_1', session_id: sid, plan_id: pid, plan_schema_version: 2, outputs: [{ ...output, format: 'hls' }], destination_state: 'absent', export_url: '/api/common/plans/plan_1/export' });
+  const output = { id: 'clear', output_format: 'mp4', encryption: 'clear', drms: [], external_manifest_check: false };
+  const plan = env({ plan_ref: 'plan_1', session_id: sid, plan_id: pid, plan_schema_version: 2, outputs: [{ ...output, output_format: 'hls-fmp4' }], destination_state: 'absent', export_url: '/api/common/plans/plan_1/export' });
   const h = await harness({ submit: async () => job({ operation: 'plan', state: 'succeeded', revision: 1, supervision_confirmed: true, cleanup_confirmed: true, exit_code: 0, plan_ref: 'plan_1', plan_id: pid, report_ref: 'report_1' }),
     plan: async () => plan,
     report: async () => env({ report_ref: 'report_1', session_id: sid, job_id: 'job_1', request_id: rid, operation: 'plan', analysis_ref: null, plan_ref: 'plan_1', plan_id: pid, report_kind: 'plan', report_schema_version: 2, report: { schema_version: 2, plan_id: pid } }) });
@@ -172,7 +172,7 @@ test('a new plan cannot substitute other output conditions under the accepted jo
 
 test('new processing plans bind each requested mode before becoming executable', async () => {
   for (const substitute of [false, true]) {
-    const output = { id: 'clear', format: 'mp4', target: 'clear', drms: [], conformance: 'none', processing: 'stitch' };
+    const output = { id: 'clear', output_format: 'mp4', encryption: 'clear', drms: [], external_manifest_check: false, processing: 'stitch' };
     const plan = env({ plan_ref: 'plan_1', session_id: sid, plan_id: pid, plan_schema_version: 10, required_depth: 'native',
       outputs: [{ ...output, processing: substitute ? 'auto' : 'stitch' }],
       processing: [{ id: 'clear', selection: { requested: substitute ? 'auto' : 'stitch', resolved: 'stitch', boundaries: 'not-applicable', segment_duration_ms: null } }],
@@ -190,7 +190,7 @@ test('new processing plans bind each requested mode before becoming executable',
 
 test('new plans bind the DASH choice and automatic source layout before execution', async () => {
   for (const substitute of ['none', 'mode', 'layout', 'legacy-schema']) {
-    const output = { id: 'dash', format: 'dash', target: 'clear', drms: [], conformance: 'none', processing: 'stitch', dash_addressing: 'list' };
+    const output = { id: 'dash', output_format: 'dash', encryption: 'clear', drms: [], external_manifest_check: false, processing: 'stitch', dash_addressing: 'list' };
     const options = { layout: substitute === 'layout' ? 'previous-saved' : 'source', dash_addressing: substitute === 'mode' ? 'base' : 'list' };
     const plan = env({ plan_ref: 'plan_1', session_id: sid, plan_id: pid, plan_schema_version: substitute === 'legacy-schema' ? 8 : 10, required_depth: 'native',
       outputs: [{ ...output, dash_addressing: options.dash_addressing }],

@@ -28,9 +28,9 @@ fn decode_reaches_direct_saved_and_bundle_media_commands() {
         vec![
             "plan",
             "missing.mp4",
-            "--to",
+            "--encryption",
             "clear",
-            "--output",
+            "--output-file",
             "result",
             "--save",
             "plan.json",
@@ -39,9 +39,9 @@ fn decode_reaches_direct_saved_and_bundle_media_commands() {
         vec![
             "plan",
             "missing.m3u8",
-            "--outputs",
+            "--output-config",
             "outputs.json",
-            "--output",
+            "--output-dir",
             "result",
             "--save",
             "plan.json",
@@ -50,15 +50,15 @@ fn decode_reaches_direct_saved_and_bundle_media_commands() {
         vec![
             "convert",
             "missing.mp4",
-            "--to",
+            "--encryption",
             "clear",
-            "--output",
+            "--output-file",
             "result",
             "--json",
         ],
-        vec!["convert", "--plan", "plan.json", "--json"],
+        vec!["convert", "--plan-file", "plan.json", "--json"],
         vec!["verify", "result.mp4", "--source", "missing.mp4", "--json"],
-        vec!["verify", "--plan", "plan.json", "--json"],
+        vec!["verify", "--plan-file", "plan.json", "--json"],
     ] {
         args.push("--decode");
         let output = invoke(&args);
@@ -74,7 +74,7 @@ fn decode_reaches_direct_saved_and_bundle_media_commands() {
 fn metadata_light_plan_and_manifest_only_refuse_decode_before_work() {
     for args in [
         vec!["analyze", "missing.mp4", "--metadata-only", "--decode"],
-        vec!["plan", "missing.mp4", "--to", "clear", "--decode"],
+        vec!["plan", "missing.mp4", "--encryption", "clear", "--decode"],
         vec!["verify", "missing.m3u8", "--manifest-only", "--decode"],
     ] {
         let output = invoke(&args);
@@ -94,7 +94,7 @@ fn source_reports_distinguish_native_evidence_from_actual_complete_decoding() {
         command
             .arg("analyze")
             .arg(&input)
-            .args(["--json", "--measure"]);
+            .args(["--json", "--stats"]);
         if decode {
             command.arg("--decode");
         }
@@ -213,19 +213,23 @@ fn saved_single_and_named_output_minima_survive_runtime_defaults_and_can_be_stre
             let root = drmr_core::native::private_tempdir().unwrap();
             let original = include_bytes!("fixtures/bbb/clip.mp4");
             std::fs::write(root.path().join("source.mp4"), original).unwrap();
-            std::fs::write(root.path().join("outputs.json"), br#"{"schema_version":1,"outputs":[{"id":"clear","format":"mp4","target":"clear","drms":[]}]}"#).unwrap();
+            std::fs::write(root.path().join("outputs.json"), br#"{"schema_version":4,"outputs":[{"id":"clear","output_format":"mp4","encryption":"clear","drms":[]}]}"#).unwrap();
             let mut plan = vec![
                 "plan",
                 "source.mp4",
-                "--output",
+                if named {
+                    "--output-dir"
+                } else {
+                    "--output-file"
+                },
                 "result",
                 "--save",
                 "plan.json",
             ];
             if named {
-                plan.extend(["--outputs", "outputs.json"]);
+                plan.extend(["--output-config", "outputs.json"]);
             } else {
-                plan.extend(["--to", "clear", "--format", "mp4"]);
+                plan.extend(["--encryption", "clear", "--output-format", "mp4"]);
             }
             if decoded {
                 plan.push("--decode");
@@ -237,7 +241,7 @@ fn saved_single_and_named_output_minima_survive_runtime_defaults_and_can_be_stre
                 if decoded { "decoded" } else { "native" }
             );
             let before = std::fs::read(root.path().join("plan.json")).unwrap();
-            let converted = json_at(root.path(), &["convert", "--plan", "plan.json"]);
+            let converted = json_at(root.path(), &["convert", "--plan-file", "plan.json"]);
             let conversion_proof = if named {
                 &converted["outputs"][0]["conversion"]["verification"]
             } else {
@@ -259,7 +263,7 @@ fn saved_single_and_named_output_minima_survive_runtime_defaults_and_can_be_stre
                 }
             );
             for strengthen in [false, true] {
-                let mut args = vec!["verify", "--plan", "plan.json"];
+                let mut args = vec!["verify", "--plan-file", "plan.json"];
                 if strengthen {
                     args.push("--decode");
                 }

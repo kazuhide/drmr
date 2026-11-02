@@ -5,11 +5,11 @@ fn invoke(args: &[&str]) -> Output {
     let directory = drmr_core::native::private_tempdir().unwrap();
     if args
         .windows(2)
-        .any(|pair| pair == ["--outputs", "outputs.json"])
+        .any(|pair| pair == ["--output-config", "outputs.json"])
     {
         std::fs::write(
             directory.path().join("outputs.json"),
-            br#"{"schema_version":1,"outputs":[{"id":"clear","format":"dash","target":"clear","drms":[]}]}"#,
+            br#"{"schema_version":4,"outputs":[{"id":"clear","output_format":"dash","encryption":"clear","drms":[]}]}"#,
         )
         .unwrap();
     }
@@ -47,9 +47,9 @@ fn processing_reaches_new_single_and_bundle_intent_without_becoming_a_usage_erro
             vec![
                 "plan",
                 "missing.mp4",
-                "--to",
+                "--encryption",
                 "clear",
-                "--output",
+                "--output-file",
                 "result",
                 "--save",
                 "plan.json",
@@ -58,9 +58,9 @@ fn processing_reaches_new_single_and_bundle_intent_without_becoming_a_usage_erro
             vec![
                 "plan",
                 "missing.m3u8",
-                "--outputs",
+                "--output-config",
                 "outputs.json",
-                "--output",
+                "--output-dir",
                 "result",
                 "--save",
                 "plan.json",
@@ -69,18 +69,18 @@ fn processing_reaches_new_single_and_bundle_intent_without_becoming_a_usage_erro
             vec![
                 "convert",
                 "missing.mp4",
-                "--to",
+                "--encryption",
                 "clear",
-                "--output",
+                "--output-file",
                 "result",
                 "--json",
             ],
             vec![
                 "convert",
                 "missing.m3u8",
-                "--outputs",
+                "--output-config",
                 "outputs.json",
-                "--output",
+                "--output-dir",
                 "result",
                 "--json",
             ],
@@ -106,7 +106,7 @@ fn saved_plan_execution_cannot_override_processing_even_with_auto() {
     for mode in ["auto", "segments", "stitch"] {
         let result = invoke(&[
             "convert",
-            "--plan",
+            "--plan-file",
             "missing-plan.json",
             "--processing",
             mode,
@@ -116,7 +116,7 @@ fn saved_plan_execution_cannot_override_processing_even_with_auto() {
         assert_eq!(result.stdout, [] as [u8; 0]);
         let error = String::from_utf8(result.stderr).unwrap();
         assert!(error.contains("--processing"), "{error}");
-        assert!(error.contains("--plan"), "{error}");
+        assert!(error.contains("--plan-file"), "{error}");
     }
 }
 
@@ -126,7 +126,7 @@ fn metadata_only_commands_and_unsaved_plans_do_not_accept_processing_intent() {
         vec![
             "plan",
             "missing.mp4",
-            "--to",
+            "--encryption",
             "clear",
             "--processing",
             "stitch",
@@ -140,7 +140,7 @@ fn metadata_only_commands_and_unsaved_plans_do_not_accept_processing_intent() {
         ],
         vec![
             "verify",
-            "--plan",
+            "--plan-file",
             "missing-plan.json",
             "--processing",
             "stitch",
@@ -163,9 +163,9 @@ fn unknown_processing_values_and_unpublished_aliases_are_usage_errors() {
         let mut command = vec![
             "convert",
             "missing.mp4",
-            "--to",
+            "--encryption",
             "clear",
-            "--output",
+            "--output-file",
             "result",
         ];
         command.extend(args);

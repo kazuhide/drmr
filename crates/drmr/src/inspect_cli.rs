@@ -7,61 +7,122 @@ use drmr_core::inspection::{self, Inspection, OutputFormat, TargetProtection};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::Arc;
 
-#[derive(Args)]
+#[derive(Clone, Args)]
+#[command(mut_arg("decode", |arg| arg.requires("save").help("Also decode all media while saving the plan; later runs retain this minimum.")))]
 pub struct PlanArgs {
     /// Local media or manifest whose conversion intent should be described.
+    #[arg(help_heading = "Input", value_name = "INPUT")]
     pub input: PathBuf,
-    /// Output protection for one result; use --outputs for several results.
-    #[arg(long, required_unless_present = "outputs", conflicts_with = "outputs")]
+    /// Output protection for one result; use --output-config for several results.
+    #[arg(
+        long = "encryption",
+        required_unless_present = "outputs",
+        conflicts_with = "outputs"
+    )]
+    #[arg(help_heading = "Output", value_name = "MODE")]
     pub to: Option<TargetProtection>,
-    /// Output packaging: mp4, dash, hls, hls-ts, or a comma-separated list.
-    #[arg(long, value_delimiter = ',')]
+    /// Output packaging: mp4, dash, hls-fmp4, hls-ts, or a comma-separated list.
+    #[arg(long = "output-format", value_delimiter = ',', value_parser = crate::output_cli::parse_format)]
+    #[arg(help_heading = "Output", value_name = "FORMAT")]
     pub format: Vec<OutputFormat>,
     /// Processing mode: segments keeps source boundaries; stitch joins media before packaging.
     /// HLS/DASH output from stitch is segmented again. Default: auto.
     #[arg(long, value_enum, requires = "save")]
+    #[arg(help_heading = "Output", value_name = "MODE")]
     pub processing: Option<ProcessingMode>,
     /// DASH segment references for new output; default: template. Source directories are retained.
     #[arg(long, value_enum, requires = "save")]
+    #[arg(help_heading = "Output", value_name = "MODE")]
     pub dash_addressing: Option<DashAddressing>,
     /// Print the versioned JSON plan without executing any conversion.
     #[arg(long)]
+    #[arg(help_heading = "Reporting")]
     pub json: bool,
-    /// New private execution-plan file; requires --output and one intent or --outputs.
-    #[arg(long, requires = "output")]
+    /// New private execution-plan file; fixes the output destination and conversion intent.
+    #[arg(long)]
+    #[arg(help_heading = "Plan", value_name = "FILE")]
     pub save: Option<PathBuf>,
     /// JSON output list, with each result's format, protection, DRM systems and manifest checks.
-    #[arg(long, requires = "save", conflicts_with_all = ["to", "format"])]
+    #[arg(long = "output-config", requires = "save", conflicts_with_all = ["to", "format", "output_file"])]
+    #[arg(help_heading = "Output", value_name = "FILE")]
     pub outputs: Option<PathBuf>,
-    /// New result file or directory recorded in the saved execution plan.
+    /// New single MP4 result file fixed in the saved execution plan.
+    #[arg(long, requires = "save", conflicts_with_all = ["output_dir", "outputs"])]
+    #[arg(help_heading = "Output", value_name = "FILE")]
+    pub output_file: Option<PathBuf>,
+    /// New streaming or named-output result directory fixed in the saved plan.
+    #[arg(long, requires = "save", conflicts_with = "output_file")]
+    #[arg(help_heading = "Output", value_name = "DIR")]
+    pub output_dir: Option<PathBuf>,
+    /// Retain an original URL source for a saved execution plan.
     #[arg(long, requires = "save")]
-    pub output: Option<PathBuf>,
+    #[arg(help_heading = "Input", value_name = "DIR")]
+    pub download_dir: Option<PathBuf>,
+    /// Private HTTP settings for URL metadata or retained acquisition.
+    #[arg(long = "fetch-config")]
+    #[arg(help_heading = "Input", value_name = "FILE")]
+    pub fetch_policy: Option<PathBuf>,
+    /// Required native final-manifest rules recorded in the execution plan.
+    #[arg(long, value_enum, requires = "save")]
+    #[arg(help_heading = "Verification", value_name = "PROFILE")]
+    pub manifest_profile: Option<drmr_core::conversion::manifest_lint::ManifestProfile>,
+    /// Require external final-manifest checks when the saved plan is executed.
+    #[arg(long, requires = "save")]
+    #[arg(help_heading = "Verification")]
+    pub external_manifest_check: bool,
     /// Protected input/output key configuration used for complete source checks.
     #[arg(long, requires = "save")]
+    #[arg(help_heading = "Input", value_name = "FILE")]
     pub keys_file: Option<PathBuf>,
     /// Shaka Packager executable used for complete source checks.
     #[arg(long, requires = "save")]
+    #[arg(help_heading = "Tools", value_name = "PROGRAM")]
     pub packager_bin: Option<String>,
     /// Upper bound for simultaneous media work (1-64); default adapts to CPU and memory.
     #[arg(long, requires = "save", value_parser = clap::value_parser!(u8).range(1..=64))]
+    #[arg(help_heading = "Execution", value_name = "N")]
     pub max_workers: Option<u8>,
-    /// Also decode all media while saving the plan; later runs retain this minimum.
-    #[arg(long, requires = "save")]
-    pub decode: bool,
-    /// Include numeric measurements in JSON; only available when saving a plan.
-    #[arg(long, requires_all = ["json", "save"])]
+    #[command(flatten)]
+    pub decoding: convert_cli::DecodeOptions,
+    /// Include detailed observed statistics; only available when saving a plan.
+    #[arg(long = "stats", requires = "save")]
+    #[arg(help_heading = "Reporting")]
     pub measure: bool,
+    /// Write the same structured result to a new private JSON file.
+    #[arg(long)]
+    #[arg(help_heading = "Reporting", value_name = "FILE")]
+    pub report_file: Option<PathBuf>,
 }
 
-fn write_json(value: &serde_json::Value) -> std::io::Result<()> {
-    let mut out = std::io::stdout().lock();
-    serde_json::to_writer_pretty(&mut out, value)?;
-    writeln!(out)
+impl PlanArgs {
+    pub(crate) fn destination(&self) -> Option<&Path> {
+        self.output_file.as_deref().or(self.output_dir.as_deref())
+    }
 }
 
-fn inspect_input(path: &Path) -> Result<Inspection, ConversionError> {
-    inspection::inspect(path).map_err(|error| ConversionError(error.0))
+fn inspect_input(
+    args: &PlanArgs,
+    progress: &Arc<Progress>,
+    stop: drmr_core::concurrency::Stop,
+) -> Result<Inspection, convert_cli::ConfigurationError> {
+    match crate::download_cli::Input::parse(args.input.as_os_str())? {
+        crate::download_cli::Input::Local(path) => {
+            if args.fetch_policy.is_some() {
+                return Err(ConversionError("download-options-require-url").into());
+            }
+            inspection::inspect(&path).map_err(|error| ConversionError(error.0).into())
+        }
+        crate::download_cli::Input::Url(url) => {
+            let policy =
+                drmr_core::conversion::download_policy::read(&url, args.fetch_policy.as_deref())?;
+            progress.mark("acquisition");
+            convert_cli::converter("packager", None, false, progress.clone(), stop)
+                .inspect_url_metadata(&url, &policy)
+                .map_err(Into::into)
+        }
+    }
 }
 
 pub(crate) fn summary(report: &Inspection, out: &mut impl Write) -> std::io::Result<()> {
@@ -134,7 +195,7 @@ pub fn plan(args: &PlanArgs) -> ExitCode {
     if args.save.is_some() {
         return crate::plan_cli::save(args);
     }
-    let progress = Progress::new(!args.json);
+    let progress = Arc::new(Progress::new(!args.json));
     progress.mark("configuration");
     let Some(target) = args.to else {
         return convert_cli::error(
@@ -145,20 +206,38 @@ pub fn plan(args: &PlanArgs) -> ExitCode {
             Some(2),
         );
     };
+    let Ok(cancellation) = crate::cancellation::Cancellation::install() else {
+        return convert_cli::error(
+            "plan",
+            ConversionError("signal-monitor-unavailable"),
+            args.json,
+            &progress,
+            None,
+        );
+    };
     progress.mark("inspection");
-    let report = match inspect_input(&args.input) {
+    let report = match inspect_input(args, &progress, cancellation.stop.clone()) {
         Ok(value) => value,
         Err(cause) => return convert_cli::error("plan", cause, args.json, &progress, Some(2)),
     };
+    if cancellation.stop.is_set() {
+        return convert_cli::error(
+            "plan",
+            ConversionError("cancelled"),
+            args.json,
+            &progress,
+            None,
+        );
+    }
     let plan = inspection::plan(report, target, args.format.clone());
     progress.mark("publication");
     let success = progress
         .write_result(|| {
-            if args.json {
-                write_json(&serde_json::to_value(&plan).expect("conversion plan serializes"))
-            } else {
-                text_plan(&plan)
-            }
+            crate::reporting::render(
+                &serde_json::to_value(&plan).expect("conversion plan serializes"),
+                args.json,
+                || text_plan(&plan),
+            )
         })
         .is_ok();
     if success {
@@ -181,7 +260,11 @@ fn text_plan(plan: &inspection::ConversionPlan) -> std::io::Result<()> {
         }
     )?;
     summary(&plan.input, &mut out)?;
-    let formats: Vec<_> = plan.formats.iter().map(|value| value.as_str()).collect();
+    let formats: Vec<_> = plan
+        .formats
+        .iter()
+        .map(|value| crate::output_cli::profile_name(*value))
+        .collect();
     writeln!(
         out,
         "Target: {} ({})",
@@ -206,7 +289,7 @@ fn text_plan(plan: &inspection::ConversionPlan) -> std::io::Result<()> {
                 out,
                 "Conditional route: {} -> {}",
                 candidate.route.as_str(),
-                candidate.output_format.as_str()
+                crate::output_cli::profile_name(candidate.output_format)
             )?;
             writeln!(out, "  {}", candidate.explanation)?;
             writeln!(

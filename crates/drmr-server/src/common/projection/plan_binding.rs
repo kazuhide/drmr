@@ -29,7 +29,7 @@ pub(in crate::common) fn bind_plan(
             .ok_or_else(bad);
     }
     let outputs = plan.outputs.as_array().ok_or_else(bad)?;
-    let bundle = matches!(plan.schema, 2 | 4 | 6 | 8 | 10);
+    let bundle = matches!(plan.schema, 2 | 4 | 6 | 8 | 10 | 12);
     let rows = if bundle {
         let rows = report["outputs"].as_array().ok_or_else(bad)?;
         if rows.len() != outputs.len()
@@ -55,6 +55,7 @@ pub(in crate::common) fn bind_plan(
             row
         };
         bind_depth(&media["verification"], requested.max(plan.required_depth))?;
+        bind_manifest_policy(output, row, &media["verification"], bundle)?;
         if operation == OperationName::Convert || media.get("processing").is_some() {
             bind_actual(
                 media.get("processing"),
@@ -92,10 +93,10 @@ fn bind_depth(proof: &Value, minimum: ValidationDepth) -> Result<()> {
 
 fn saved_selections(plan: &Plan, count: usize) -> Result<Vec<Option<ProcessingSelection>>> {
     match plan.schema {
-        5 | 7 | 9 => Ok(vec![Some(typed(
+        5 | 7 | 9 | 11 => Ok(vec![Some(typed(
             plan.processing.as_ref().ok_or_else(bad)?,
         )?)]),
-        6 | 8 | 10 => Ok(typed::<Vec<OutputProcessing>>(
+        6 | 8 | 10 | 12 => Ok(typed::<Vec<OutputProcessing>>(
             plan.processing.as_ref().ok_or_else(bad)?,
         )?
         .into_iter()
@@ -104,6 +105,46 @@ fn saved_selections(plan: &Plan, count: usize) -> Result<Vec<Option<ProcessingSe
         1..=4 => Ok(vec![None; count]),
         _ => Err(bad()),
     }
+}
+
+fn bind_manifest_policy(output: &Value, row: &Value, proof: &Value, bundle: bool) -> Result<()> {
+    if let Some(profile) = output.get("manifest_profile") {
+        let profile: drmr_core::conversion::manifest_lint::ManifestProfile = typed(profile)?;
+        let format: OutputFormat = typed(&output["format"])?;
+        let expected = match (profile, format) {
+            (
+                drmr_core::conversion::manifest_lint::ManifestProfile::AppleVod,
+                OutputFormat::Hls | OutputFormat::HlsTs,
+            ) => "apple-vod-manifest",
+            (
+                drmr_core::conversion::manifest_lint::ManifestProfile::Base,
+                OutputFormat::Hls | OutputFormat::HlsTs,
+            ) => "hls-base-manifest",
+            (drmr_core::conversion::manifest_lint::ManifestProfile::Base, OutputFormat::Dash) => {
+                "dash-static-manifest"
+            }
+            _ => return Err(bad()),
+        };
+        if proof["native_manifest"]["profile"] != expected {
+            return Err(bad());
+        }
+    }
+    let required = if bundle {
+        output["conformance"] == "required"
+    } else {
+        output["external_manifest_check"] == true
+    };
+    if required {
+        let external = if bundle {
+            &row["conformance"]
+        } else {
+            &proof["external_manifest"]
+        };
+        if !super::conformance_passed(external) {
+            return Err(bad());
+        }
+    }
+    Ok(())
 }
 
 fn bind_actual(
@@ -155,6 +196,57 @@ mod tests {
         assert!(bind_actual(Some(&mp4), None, OutputFormat::Mp4).is_ok());
         for format in [OutputFormat::HlsTs, OutputFormat::Hls, OutputFormat::Dash] {
             assert!(bind_actual(Some(&mp4), None, format).is_err());
+        }
+    }
+
+    #[test]
+    fn an_explicit_native_profile_cannot_be_replaced_by_the_base_manifest_check() {
+        let output = serde_json::json!({"format":"hls","manifest_profile":"apple-vod"});
+        let proof = serde_json::json!({"native_manifest":{"profile":"apple-vod-manifest"}});
+        assert!(bind_manifest_policy(&output, &Value::Null, &proof, false).is_ok());
+        for changed in [
+            serde_json::json!({}),
+            serde_json::json!({"native_manifest":{"profile":"hls-base-manifest"}}),
+        ] {
+            assert!(bind_manifest_policy(&output, &Value::Null, &changed, false).is_err());
+        }
+    }
+
+    #[test]
+    fn required_external_evidence_stays_in_its_single_or_bundle_report_scope() {
+        let external = serde_json::json!({"passed":true,"checks":[{"passed":true}]});
+        let single = serde_json::json!({"format":"dash","external_manifest_check":true});
+        let bundle = serde_json::json!({"format":"dash","conformance":"required"});
+        let proof = serde_json::json!({"external_manifest":external});
+        let row = serde_json::json!({"conformance":external});
+        assert!(bind_manifest_policy(&single, &Value::Null, &proof, false).is_ok());
+        assert!(bind_manifest_policy(&single, &row, &Value::Null, false).is_err());
+        assert!(bind_manifest_policy(&bundle, &row, &Value::Null, true).is_ok());
+        assert!(bind_manifest_policy(&bundle, &Value::Null, &proof, true).is_err());
+        for changed in [
+            serde_json::json!({"passed":false,"checks":[{}]}),
+            serde_json::json!({"passed":true,"checks":[]}),
+            serde_json::json!({"passed":true,"checks":[{"passed":false}]}),
+            serde_json::json!({"passed":true,"checks":[{"passed":true},{"passed":false}]}),
+        ] {
+            assert!(
+                bind_manifest_policy(
+                    &single,
+                    &Value::Null,
+                    &serde_json::json!({"external_manifest":changed}),
+                    false
+                )
+                .is_err()
+            );
+            assert!(
+                bind_manifest_policy(
+                    &bundle,
+                    &serde_json::json!({"conformance":changed}),
+                    &Value::Null,
+                    true
+                )
+                .is_err()
+            );
         }
     }
 }

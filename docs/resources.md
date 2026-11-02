@@ -96,7 +96,7 @@ disk throughput, subprocess startup, track count and checks that must retain
 presentation order can limit the benefit of more workers. Use
 `--max-workers 1` and the automatic setting on the same retained local input to
 compare processing, rather than comparing two unrelated downloads. With
-`--json --measure`, phase observations help locate the work; overlapping phase
+`--json --stats`, phase observations help locate the work; overlapping phase
 times must not be added together as command wall time.
 
 TS preparation collects metadata and encoded-frame evidence from independent
@@ -287,9 +287,9 @@ This synthetic pipe observation does not establish media conversion speed.
 
 ## Generic conversion
 
-Use `convert ... --measure --json` or `verify ... --measure --json` to add an
-optional `measurements` object to the normal result. The media checks and exit
-codes are unchanged. Without `--measure`, the JSON result has no measurement
+Use `convert ... --stats` or `verify ... --stats` for detailed human-readable
+measurements. With `--json`, the same flag adds a `measurements` object to the
+normal result. The media checks and exit codes are unchanged. Without `--stats`, the JSON result has no measurement
 fields. A failed command retains its normal error rather than manufacturing a
 successful measurement report.
 

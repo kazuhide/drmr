@@ -401,8 +401,8 @@ def media(image, root):
         for protection in ("clear", "cbcs"):
             output = f"/work/{kind}-{protection}"
             options = ["--keys-file", "/keys/safe.json"] if protection == "cbcs" else []
-            converted = load_json(image.checked(["convert", "--decode", source, "--to", protection, "--format", kind,
-                                                 "--output", output, "--max-workers", "1", "--json", *options]))
+            converted = load_json(image.checked(["convert", "--decode", source, "--encryption", protection, "--output-format", "hls-fmp4" if kind == "hls" else kind,
+                                                 "--output-dir", output, "--max-workers", "1", "--json", *options]))
             require_verification(converted["verification"])
             manifest = output + ("/manifest.mpd" if kind == "dash" else "/master.m3u8")
             verified = load_json(image.checked(["verify", "--decode", manifest, "--source", source,
@@ -411,16 +411,16 @@ def media(image, root):
             rows.append({"input": kind, "output": kind, "protection": protection,
                          "conversion": converted["verification"], "independent_verification": verified})
     audio_converted = load_json(image.checked([
-        "convert", "--decode", "/input/audio-ts/master.m3u8", "--to", "cbcs", "--format", "hls",
-        "--output", "/work/audio-ts-cbcs", "--max-workers", "1", "--json",
+        "convert", "--decode", "/input/audio-ts/master.m3u8", "--encryption", "cbcs", "--output-format", "hls-fmp4",
+        "--output-dir", "/work/audio-ts-cbcs", "--max-workers", "1", "--json",
         "--keys-file", "/keys/safe.json"]))
     require_verification(audio_converted["verification"])
     audio_verified = load_json(image.checked([
         "verify", "--decode", "/work/audio-ts-cbcs/master.m3u8", "--source", "/input/audio-ts/master.m3u8",
         "--max-workers", "1", "--json", "--keys-file", "/keys/safe.json"]))
     require_verification(audio_verified)
-    finite = load_json(image.checked(["convert", "--decode", "/input/clip.mp4", "--to", "clear", "--format", "mp4",
-                                      "--output", "/work/finite.mp4", "--max-workers", "1", "--json"]))
+    finite = load_json(image.checked(["convert", "--decode", "/input/clip.mp4", "--encryption", "clear", "--output-format", "mp4",
+                                      "--output-file", "/work/finite.mp4", "--max-workers", "1", "--json"]))
     require_verification(finite["verification"])
     finite_verify = load_json(image.checked(["verify", "--decode", "/work/finite.mp4", "--source", "/input/clip.mp4",
                                              "--max-workers", "1", "--json"]))
@@ -443,8 +443,8 @@ def permissions(image, root):
     unsafe = root / "keys/unsafe.json"
     shutil.copyfile(root / "keys/safe.json", unsafe)
     unsafe.chmod(0o644)
-    arguments = ["convert", "--decode", "/input/dash/manifest.mpd", "--to", "cbcs", "--format", "dash",
-                 "--output", "/work/unsafe-key-output", "--keys-file", "/keys/unsafe.json", "--json"]
+    arguments = ["convert", "--decode", "/input/dash/manifest.mpd", "--encryption", "cbcs", "--output-format", "dash",
+                 "--output-dir", "/work/unsafe-key-output", "--keys-file", "/keys/unsafe.json", "--json"]
     status, stdout, stderr = image.invoke(arguments)
     if KEY.encode() in stdout + stderr:
         raise Refusal("secret-displayed")
@@ -452,8 +452,8 @@ def permissions(image, root):
     if (root / "work/unsafe-key-output").exists():
         raise Refusal("unsafe-key-output-published")
     unsafe.unlink()
-    arguments = ["convert", "--decode", "/input/dash/manifest.mpd", "--to", "clear", "--format", "dash",
-                 "--output", "/work/readonly-output", "--json"]
+    arguments = ["convert", "--decode", "/input/dash/manifest.mpd", "--encryption", "clear", "--output-format", "dash",
+                 "--output-dir", "/work/readonly-output", "--json"]
     status, stdout, _ = image.invoke(arguments, readonly=True)
     readonly = require_failure(status, stdout, "temporary-workspace-unavailable", 1)
     if (root / "work/readonly-output").exists():
@@ -547,8 +547,8 @@ def resources(image):
             "effective_cpus": cpus if type(cpus) is int and 0 <= cpus <= 100_000 else None,
             "available_memory_bytes": memory if type(memory) is int and 0 <= memory < 2 ** 63 else None})
     status, stdout, stderr = image.invoke([
-        "convert", "--decode", "/input/dash/manifest.mpd", "--to", "clear", "--format", "dash",
-        "--output", "/work/resource-limited", "--progress", "json", "--json"], limited=True)
+        "convert", "--decode", "/input/dash/manifest.mpd", "--encryption", "clear", "--output-format", "dash",
+        "--output-dir", "/work/resource-limited", "--progress", "json", "--json"], limited=True)
     failure = {"exit_code": status if type(status) is int and -(2 ** 31) <= status < 2 ** 32 else None,
                "stdout_sha256": hashlib.sha256(stdout).hexdigest(),
                "stderr_sha256": hashlib.sha256(stderr).hexdigest()}
@@ -904,8 +904,8 @@ def main():
             shutil.copyfile(FIXTURE, root / "input/clip.mp4")
             config = root / "keys/safe.json"
             with open(config, "x", encoding="utf-8", opener=lambda path, flags: os.open(path, flags, 0o600)) as file:
-                json.dump({"schema_version": 1, "output": {
-                    "kid": KID, "key": KEY, "hls_key_uri": "https://keys.example.invalid/container"}}, file)
+                json.dump({"schema_version": 2, "outputs": {"default": {
+                    "kid": KID, "key": KEY, "hls_key_uri": "https://keys.example.invalid/container"}}}, file)
             image = Image(arguments.image, root, arguments.qualifiers)
             stack.callback(image.close)
             report.update(image_id=image.identifier, architecture=image.architecture)

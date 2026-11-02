@@ -391,7 +391,7 @@ cancellation; its permit is released before external tools run.
 
 ## MPEG transport stream output
 
-`--format hls-ts` reads admitted original TS resources in playlist order and
+`--output-format hls-ts` reads admitted original TS resources in playlist order and
 prepares complete tracks before creating new segments. It does not independently
 re-encrypt each old segment. For SAMPLE-AES input, the clear view remains bound
 to native evidence taken from the original encrypted frames. For clear or

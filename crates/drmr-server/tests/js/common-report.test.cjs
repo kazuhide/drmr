@@ -22,9 +22,20 @@ test('native evidence never pretends to establish decoded equality', () => {
   assert.equal(r.verificationPassed(nativeVerification({ required_depth: 'decoded', decode_evidence: { status: 'content-compared', equal: true } })), true);
   assert.equal(r.verificationPassed(nativeVerification({ required_depth: 'decoded', scope: 'source-admission', decode_evidence: { status: 'source-decoded' } })), true);
 });
+test('a requested external manifest check requires complete passing evidence', () => {
+  const r = load(), external = { passed: true, checks: [{ passed: true, tool: 'dash-if-manifest', checked_manifest_count: 1, warning_count: 0 }] };
+  assert.equal(r.verificationPassed(nativeVerification({ external_manifest: external })), true);
+  for (const value of [null, {}, { ...external, passed: false }, { ...external, checks: [] },
+    { ...external, checks: [{ ...external.checks[0], passed: false }] }]) {
+    assert.equal(r.verificationPassed(nativeVerification({ external_manifest: value })), false);
+  }
+  const rendered = renderer();
+  rendered.render({ report_kind: 'conversion', report: { verification: nativeVerification({ external_manifest: external }) } });
+  assert.equal(rendered.all(rendered.host).find(node => node.getAttribute?.('data-common-check') === 'external_manifest').getAttribute('data-common-state'), 'pass');
+});
 test('current reports and plans reach the overall evidence predicate with their actual scope', () => {
   const r = load();
-  for (const schema of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
+  for (const schema of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]) {
     const report = { schema_version: schema, plan_id: 'a'.repeat(64) };
     if (schema >= 3) report.required_depth = 'native';
     assert.equal(r.evidencePassed({ report_kind: 'plan', report }), true);
@@ -333,6 +344,13 @@ test('configuration failures render known schema positions and fixed expectation
   const outputs = diagnosticFailure({ schema_version: 1, file: 'outputs', path: ['outputs', 1, 'format'], expected: 'output-format' });
   outputs.report.error.code = 'output-spec-invalid';
   assert.match(renderResult(outputs), /outputs\[1\].format/);
+  for (const [path, expected] of [[['output_dir'], 'output-directory'],
+    [['outputs', 1, 'output_format'], 'output-format'], [['outputs', 1, 'encryption'], 'target-protection'],
+    [['outputs', 1, 'external_manifest_check'], 'boolean'], [['outputs', 1, 'manifest_profile'], 'manifest-profile']]) {
+    const current = diagnosticFailure({ schema_version: 1, file: 'outputs', path, expected });
+    current.report.error.code = 'output-spec-invalid';
+    assert.match(renderResult(current), new RegExp('commonConfigurationExpected_' + expected));
+  }
 });
 test('forged configuration fields, contexts, values and positions never reach the DOM', () => {
   for (const [field, value] of [

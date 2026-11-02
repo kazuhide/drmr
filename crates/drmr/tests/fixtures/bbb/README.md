@@ -27,7 +27,7 @@ The fixture test checks the committed bytes, codecs, duration, packet count, and
 - Dynamic Adaptive Streaming over HTTP (DASH), using fragmented MP4 with CBCS encryption and Widevine/PlayReady signaling.
 - HLS, using fragmented MP4 with CBCS encryption and FairPlay signaling.
 
-`convert --plan --decode` must verify every coded packet, packet timestamp, decoded frame and audio sample for both outputs, together with native manifest checks and DRM signaling. A separate `verify --plan --decode` repeats the comparison and checks that both outputs match the saved plan. The test also checks that the source bytes and saved plan remain unchanged.
+`convert --plan-file --decode` must verify every coded packet, packet timestamp, decoded frame and audio sample for both outputs, together with native manifest checks and DRM signaling. A separate `verify --plan-file --decode` repeats the comparison and checks that both outputs match the saved plan. The test also checks that the source bytes and saved plan remain unchanged.
 
 This test uses the MPEG-TS adapter as its comparison baseline. MPEG-TS does not carry the progressive MP4 edit list that trims AAC encoder priming and final padding. It therefore checks preservation of the complete TS presentation, rather than claiming to preserve the progressive clip's finite audio trim. Separate [progressive MP4 regressions](../../progressive_mp4.rs) check that behavior; see [media processing](../../../../../docs/media-processing.md) for the supported edit profiles and their limits.
 

@@ -136,6 +136,7 @@ pub fn output(
         drms: Vec::new(),
         conformance: ManifestValidation::None,
         processing,
+        manifest_profile: None,
     }
 }
 

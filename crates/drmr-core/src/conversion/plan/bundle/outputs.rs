@@ -78,6 +78,7 @@ impl Conversion<'_> {
                 plan.schema_version >= 8,
             )
             .using_output_options(plan.output_options(&output.id))
+            .using_bundle_output_policy(output)
             .with_output_signaling(output_keys.signaling.clone());
         let admitted = self.admission();
         let mut conversion = child
@@ -231,7 +232,9 @@ impl Verification<'_> {
                 plan.processing_selection(&intent.id),
                 plan.schema_version >= 8,
             );
-        let child = child.using_output_options(plan.output_options(&intent.id));
+        let child = child
+            .using_output_options(plan.output_options(&intent.id))
+            .using_bundle_output_policy(intent);
         let source = VerificationSource {
             input: original.entrypoint(),
             input_keys: &keys.input,

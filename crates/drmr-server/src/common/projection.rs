@@ -413,6 +413,7 @@ fn verification(v: &Value) -> Result<Value> {
         "failure",
         "license_playback_verified",
         "native_manifest",
+        "external_manifest",
     ];
     if v["schema_version"] == 1 {
         return legacy_verification(v);
@@ -433,12 +434,19 @@ fn verification(v: &Value) -> Result<Value> {
     if let Some(manifest) = v.get("native_manifest") {
         out["native_manifest"] = native(manifest)?;
     }
+    if let Some(manifest) = v.get("external_manifest") {
+        if manifest.is_null() || manifest["checks"].as_array().is_none_or(Vec::is_empty) {
+            return Err(bad());
+        }
+        out["external_manifest"] = conformance(manifest)?;
+    }
     let expected = checks.is_pass()
         && decode.satisfies(depth, scope)
         && v.get("failure").is_none()
         && v.get("native_manifest").is_none_or(|n| {
             n["errors"] == 0 && n["truncated"] == false && n["incomplete"] == false
-        });
+        })
+        && v.get("external_manifest").is_none_or(conformance_passed);
     if boolean(&v["passed"])? != expected {
         return Err(bad());
     }
@@ -580,6 +588,13 @@ fn conformance(v: &Value) -> Result<Value> {
     })?;
     Ok(select(v, F))
 }
+fn conformance_passed(v: &Value) -> bool {
+    v["passed"] == true
+        && v["checks"].as_array().is_some_and(|checks| {
+            !checks.is_empty() && checks.iter().all(|check| check["passed"] == true)
+        })
+}
+
 fn failure(v: &Value, operation: OperationName) -> Result<Value> {
     if v["command"] != operation.as_str() {
         return Err(bad());
@@ -774,7 +789,7 @@ fn bundle(operation: OperationName, v: &Value) -> Result<(Value, &'static str, b
                 .as_array()
                 .is_some_and(Vec::is_empty)
                 || o["signaling"]["verified"] == true)
-                && (o["conformance"].is_null() || o["conformance"]["passed"] == true)
+                && (o["conformance"].is_null() || conformance_passed(&o["conformance"]))
         }) && if verify {
             boolean(&v["source_unchanged"])?
                 && boolean(&v["passed"])?
@@ -843,15 +858,15 @@ pub fn project(
     let (mut value, kind, success) = match operation {
         OperationName::Analyze => analysis(v)?,
         OperationName::Plan => plan(v)?,
-        OperationName::Convert if matches!(schema, Some(1 | 3 | 5 | 7 | 9)) => {
+        OperationName::Convert if matches!(schema, Some(1 | 3 | 5 | 7 | 9 | 11)) => {
             single_conversion(v)?
         }
         OperationName::Convert | OperationName::Verify
-            if matches!(schema, Some(2 | 4 | 6 | 8 | 10)) =>
+            if matches!(schema, Some(2 | 4 | 6 | 8 | 10 | 12)) =>
         {
             bundle(operation, v)?
         }
-        OperationName::Verify if matches!(schema, Some(1 | 3 | 5 | 7 | 9)) => {
+        OperationName::Verify if matches!(schema, Some(1 | 3 | 5 | 7 | 9 | 11)) => {
             single_verification(v)?
         }
         _ => return Err(bad()),
@@ -894,6 +909,88 @@ mod coverage_tests {
         json!({"schema_version":2,"required_depth":"native","scope":"comparison","passed":true,
             "checks":{"stream_metadata":"pass","packet_payloads_equal":true,"packet_timing_equal":true},
             "decode_evidence":{"status":"not-checked","reason":"not-requested"},"license_playback_verified":false})
+    }
+
+    #[test]
+    fn policy_plan_versions_dispatch_their_result_shapes_without_accepting_unknown_versions() {
+        let fixtures =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb");
+        let inspection = drmr_core::inspection::inspect(&fixtures.join("clip.mp4")).unwrap();
+        let id = "a".repeat(64);
+        let media = json!({"schema_version":2,"input":inspection,"output":inspection,
+            "verification":native_report()});
+        let mut single_conversion = media.clone();
+        single_conversion["plan_id"] = json!(id);
+        let single_verification = json!({"kind":"plan-verification","schema_version":2,"plan_id":id,
+            "source_unchanged":true,"output_matches_plan":true,"verification":native_report()});
+        let bundle_conversion = json!({"kind":"bundle-conversion","schema_version":2,"plan_id":id,
+            "outputs":[{"id":"result","conversion":media,"signaling":{"systems":[],"verified":false},"conformance":null}]});
+        let bundle_verification = json!({"kind":"bundle-verification","schema_version":2,"plan_id":id,
+            "source_unchanged":true,"passed":true,"outputs":[{"id":"result","output_matches_plan":true,
+                "verification":native_report(),"signaling":{"systems":[],"verified":false},"conformance":null}]});
+        for (operation, payload, schemas) in [
+            (OperationName::Convert, single_conversion, [9, 11]),
+            (OperationName::Verify, single_verification, [9, 11]),
+            (OperationName::Convert, bundle_conversion, [10, 12]),
+            (OperationName::Verify, bundle_verification, [10, 12]),
+        ] {
+            for schema in schemas {
+                let result = project(operation, Some(schema), Some(&id), &payload).unwrap();
+                assert!(result.success, "schema {schema}");
+            }
+            for unknown in [0, 13, 14] {
+                assert!(project(operation, Some(unknown), Some(&id), &payload).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn external_manifest_success_requires_every_actual_tool_check_to_pass() {
+        use drmr_core::conversion::conformance::{ManifestToolCheck, ManifestValidationReport};
+        let external = ManifestValidationReport {
+            schema_version: 1,
+            scope: "manifest-only",
+            passed: true,
+            manifest_count: 1,
+            checks: vec![ManifestToolCheck {
+                tool: "dash-if-manifest",
+                passed: true,
+                checked_manifest_count: 1,
+                warning_count: 0,
+                observed_version: None,
+            }],
+            hls_versions: Vec::new(),
+        };
+        let mut checked = native_report();
+        checked["external_manifest"] = serde_json::to_value(external).unwrap();
+        assert!(verified(&verification(&checked).unwrap()));
+        let mut contradictory = checked.clone();
+        contradictory["external_manifest"]["checks"][0]["passed"] = json!(false);
+        assert!(verification(&contradictory).is_err());
+        contradictory["passed"] = json!(false);
+        assert!(!verified(&verification(&contradictory).unwrap()));
+        // An omitted optional check retains the existing native report shape.
+        assert!(verified(&verification(&native_report()).unwrap()));
+
+        let fixtures =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb");
+        let inspection = drmr_core::inspection::inspect(&fixtures.join("clip.mp4")).unwrap();
+        let mut bundle = json!({"kind":"bundle-conversion","schema_version":2,"plan_id":"a".repeat(64),
+            "outputs":[{"id":"result","conversion":{"schema_version":2,"input":inspection,"output":inspection,
+                "verification":native_report()},"signaling":{"systems":[],"verified":false},
+                "conformance":checked["external_manifest"]}]});
+        assert!(
+            project(OperationName::Convert, Some(12), None, &bundle)
+                .unwrap()
+                .success
+        );
+        bundle["outputs"][0]["conformance"]["checks"][0]["passed"] = json!(false);
+        // A failed tool remains visible as negative evidence, never success.
+        assert!(
+            !project(OperationName::Convert, Some(12), None, &bundle)
+                .unwrap()
+                .success
+        );
     }
 
     #[test]

@@ -1,10 +1,10 @@
 # Releases and compatibility
 
-The documented CLI has the 1.x compatibility contract described below. Release
-maturity is separate: check the **Pre-release** label on each
-[GitHub release](https://github.com/kazuhide/drmr/releases) before choosing a
-version. A 1.x version number alone does not establish complete media or platform
-qualification. The local Web console and Desktop host remain experimental.
+Version 1.2.0 revises the CLI and output configuration format. Follow the
+[migration steps below](#version-12-migration) when moving from 1.0 or 1.1;
+replaced option names are refused. Existing published tags and assets remain
+unchanged. Check each release's **Pre-release** label and qualification reports.
+The local Web console and Desktop host remain experimental.
 
 Version 1.1.0 adds native HEVC Main/Main10 and VP9 conversion and verification
 for the qualified MP4 and fragmented MP4 profiles. It also improves temporary
@@ -44,10 +44,10 @@ system and processor in the release notes:
 | macOS | Apple Silicon | `aarch64-apple-darwin` |
 | Windows | x86-64 | `x86_64-pc-windows-msvc` |
 
-CLI archive names include the version and target. For 1.1.0, they are
-`drmr-1.1.0-x86_64-unknown-linux-gnu.tar.gz`,
-`drmr-1.1.0-aarch64-apple-darwin.tar.gz` and
-`drmr-1.1.0-x86_64-pc-windows-msvc.zip`, respectively. Choose an archive actually
+CLI archive names include the version and target. For 1.2.0, they are
+`drmr-1.2.0-x86_64-unknown-linux-gnu.tar.gz`,
+`drmr-1.2.0-aarch64-apple-darwin.tar.gz` and
+`drmr-1.2.0-x86_64-pc-windows-msvc.zip`, respectively. Choose an archive actually
 listed on GitHub Releases, and download its documentation and verification
 reports from that same release. Current repository documentation can describe
 changes absent from an older archive.
@@ -109,46 +109,94 @@ they do not retain an original for a saved plan or establish complete media
 validity. Normal `analyze URL --download-dir NEW_DIR` retains and checks the
 complete source as before. See [metadata reading and progress](usage.md).
 
-## What stays compatible in 1.x
+## Version 1.2 migration
 
-drmr follows [Semantic Versioning](https://semver.org/). Compatibility covers
-the documented CLI, rather than every implementation detail:
+Version 1.2 intentionally replaces the earlier CLI and configuration names.
+This is an explicit exception to the former blanket 1.x option/configuration
+compatibility policy. It does not alter previous immutable releases or their
+accompanying documentation.
 
-- Except for the pre-release migration above, existing commands, options and
-  documented exit-code meanings remain usable.
-  Deprecated interfaces remain available throughout 1.x, with migration guidance
-  before removal in a major release.
-- Supported configuration formats retain their existing fields and meanings.
-  This includes version-1 and version-2 operator key files, fetch settings and
-  output lists. New optional settings may be added.
-- Machine-readable reports retain documented fields, their types and meanings
-  within a report schema. Programs must ignore additional fields and handle
-  unknown diagnostic codes or status values as unrecognized results, rather
-  than treating them as success. Report schema versions are separate from the
-  drmr version.
-- Valid saved execution plans using schema version 1 or 2 remain readable
-  throughout 1.x. Plan versions describe JSON formats, not drmr releases.
+| Earlier interface | Version 1.2 |
+| --- | --- |
+| `--outputs FILE` | `--output-config FILE` |
+| `--output PATH` | `--output-dir DIR` for streaming/configured outputs; `--output-file FILE` for quick single MP4 output |
+| `--to MODE` | `--encryption MODE` |
+| `--format FORMAT` | `--output-format FORMAT`; replace `hls` with `hls-fmp4` |
+| `--fetch-policy FILE` | `--fetch-config FILE` |
+| `--plan FILE` | `--plan-file FILE` |
+| `--measure` | `--stats`; readable results also support detailed statistics |
+| `--external-validator` | `--external-manifest-check` |
+| `--dash-validator-bin FILE` | `--php-bin FILE`, the PHP executable used by the DASH-IF adapter |
+| `serve --cli FILE` | `serve --drmr-bin FILE` |
 
-Legacy saved-plan version 1 describes one output; version 2 describes one to eight named outputs. Both remain strict and keep a minimum of complete decoded verification. Versions 3 and 4 additionally bind `required_depth` in their identity; versions 5 and 6 bind processing and boundary behavior. Versions 7 and 8 additionally bind source-relative placement and DASH references. New single-output plans use version 9 and named-output plans use version 10, including a one-output console list. They also bind source-derived media filenames. Versions 1–8 retain their identities, fixed packaging requests and recorded placement and filenames. Execution and fresh verification may strengthen the saved minimum with `--decode`, but cannot lower it or override the processing or output settings.
+Use output-configuration schema 4. In each output, rename `format` to
+`output_format`, `target` to `encryption`, and `conformance: "required"` to
+`external_manifest_check: true` (`"none"` becomes `false`). The HLS fMP4
+profile is `hls-fmp4`; an output ID such as `hls` can stay unchanged. Optional
+`manifest_profile` chooses `base` or HLS-only `apple-vod`.
 
-New complete-media report version 2 states native checks, required depth and actual decode evidence. A `not-checked` decode result does not claim decoded equality. Legacy report version 1 keeps its original full-decode meaning. These report and plan changes do not change operator key-file versions.
+An optional top-level `output_dir` supplies the result root relative to the
+configuration file. An explicit direct CLI `--output-dir` overrides it and is
+relative to the working directory. Quick MP4 output uses `--output-file` instead.
+Saved plans keep their resolved destinations; do not edit them to relocate a run.
 
-All saved-plan versions fix source fingerprints and output conditions while keeping key
-values and DRM initialization data separate. See
-[single-output plans](executable-plans.md) and [multiple outputs](multiple-outputs.md).
+All CLI key files now use schema 2. For a quick single-output command or an older
+single-output plan, change the former `output` object to `outputs.default` and
+set `schema_version` to `2`. Source keys remain under `input`. Configured outputs
+use their explicit IDs instead of `default`. Clear outputs have no key entry;
+source-only key files use `outputs: {}`. See the
+[complete configuration examples](configuration.md).
 
-Being readable does not make a plan portable or authorize unsafe input. Source
-files must remain at their recorded locations and match their fingerprints.
-Runtime keys, tools, supported media conditions and destination permissions must
-still satisfy the checks. Newer 1.x releases can reject previously accepted
-invalid or unsafe media when fixing a validation or security defect. Such
-changes are described in the release notes.
+A saved plan is optional for fresh named-output verification:
 
-Human-readable wording, JSON object order, progress-event order, timing
-measurements and exact generated media bytes are not stable interfaces.
-The experimental Web/Desktop interfaces and their internal protocols may
-change. Workspace Rust crates are not published as a supported SDK, so this
-policy does not promise Rust library API compatibility.
+```sh
+drmr verify result --source source/input.m3u8 \
+  --output-config outputs.json --keys-file keys.json
+```
+
+The positional result root takes precedence over any `output_dir` in the JSON.
+`--report-file NEW_FILE` saves a JSON result while keeping readable stdout.
+The report must be a new file outside input/output trees and distinct from the
+settings and plan files; no media is processed twice to produce it.
+
+## Compatibility from 1.2
+
+Subsequent changes follow [Semantic Versioning](https://semver.org/); the explicit
+1.2 migration above replaces the earlier CLI/configuration promise.
+
+- Documented 1.2 command names, options and exit-code meanings remain usable
+  within their compatibility series. A later incompatible change requires a
+  documented migration and an appropriate major release.
+- New output configurations use schema 4 and CLI key files use schema 2. Fetch
+  settings retain their schema and security checks. These versions are independent
+  of the product version.
+- Existing saved plans remain readable without changing their IDs, source
+  fingerprints, output paths, processing, filenames, DASH references or minimum
+  verification depth. Older single-output plans select schema-2 `outputs.default`.
+- Report fields, types and meanings remain stable within a report schema.
+  Consumers ignore additional fields and treat unknown diagnostic/status values
+  as unrecognized results rather than success.
+
+Saved-plan schemas 1/2 retain complete-decoding minima; 3/4 bind verification
+depth, 5/6 processing, 7/8 placement and DASH references, and 9/10 source-derived
+filenames. Manifest-profile plans use 11/12 and also bind the selected native
+manifest rules. Odd versions describe one quick output and even versions named
+outputs. Existing plans retain their recorded conditions. `--decode` can
+strengthen a saved minimum but cannot lower it.
+
+Plans fix source fingerprints and output conditions while keeping key values
+and DRM initialization addresses separate. Readability does not make a plan
+portable: source locations/fingerprints, runtime keys, tools, admitted media and
+destination permissions must still satisfy checks. Security and validation fixes
+can refuse unsafe inputs previously accepted by mistake; release notes describe
+those changes.
+
+Complete-media report version 2 distinguishes native checks, required depth and
+actual decoding evidence. `not-checked` decoding does not claim decoded equality.
+Legacy report version 1 retains its full-decoding meaning. Human wording,
+JSON object order, progress-event order, timings and exact output bytes are not
+stable interfaces. Experimental Web/Desktop protocols can change; workspace Rust
+crates are not published as a supported SDK.
 
 ## What key validation establishes
 
@@ -225,7 +273,7 @@ tag or release, use a clean checkout of its exact source revision:
 ```sh
 python3 tools/codec_qualification.py \
   --archive /path/to/ci-archive.tar.gz \
-  --target aarch64-apple-darwin --expected-version 1.1.0 \
+  --target aarch64-apple-darwin --expected-version 1.2.0 \
   --source /path/to/exact-source --scope full --jobs 4 \
   --report /path/outside/source/codec-qualification.json
 ```

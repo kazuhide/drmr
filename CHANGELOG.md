@@ -5,6 +5,33 @@ for installation, stable interfaces and versioning.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-02
+
+### Changed
+
+- Introduce the revised CLI names: `--output-config`, `--output-dir`,
+  `--output-file`, `--encryption`, `--output-format`, `--fetch-config`,
+  `--plan-file`, `--stats`, `--external-manifest-check` and `--php-bin`.
+  Use `hls-fmp4` for fragmented MP4 HLS and `serve --drmr-bin` for the job CLI.
+  The replaced option names are no longer accepted; see the migration guide.
+- Use output-configuration schema 4 with explicit `output_format`, `encryption`,
+  external manifest checks and manifest profiles. An optional `output_dir` is
+  resolved relative to its configuration file; a direct CLI destination overrides
+  it. Saved plans continue to fix their resolved destinations.
+- Use named key-file schema 2 for all CLI operations. Quick single-output
+  conversion selects `outputs.default`; configured outputs select their IDs.
+- Keep native media and manifest verification mandatory. Additional decoding and
+  requested external manifest checks remain distinct requirements.
+
+### Added
+
+- Plan supported URL inputs with an explicit retained-download directory.
+- Independently verify a configured set of outputs against its source without
+  requiring a saved plan.
+- Show detailed statistics in readable or JSON results, and optionally save a
+  JSON report while retaining the readable completion summary.
+
+
 ## [1.1.1] - 2026-11-02
 
 ### Changed

@@ -125,10 +125,12 @@ class MeasurementBoundary(unittest.TestCase):
                  "checks": {"stream_metadata": "pass", **{name: True for name in measure.CHECKS}}}
         calls, outputs = [], []
         def run(argv, *_):
-            self.assertIn("--measure", argv)
+            self.assertIn("--stats", argv)
             calls.append(argv[1])
             if argv[1] == "convert":
-                path = Path(argv[argv.index("--output") + 1])
+                self.assertIn("--encryption", argv)
+                self.assertIn("--output-format", argv)
+                path = Path(argv[argv.index("--output-file") + 1])
                 path.write_bytes(b"verified-result")
                 outputs.append(path)
                 payload = {"schema_version": 1, "verification": dict(proof), "measurements": metrics()}
@@ -141,7 +143,7 @@ class MeasurementBoundary(unittest.TestCase):
         report = {"runs": []}
         with mock.patch.object(measure, "measured_run", side_effect=run), mock.patch.object(
                 measure, "query", side_effect=lambda _binary, arguments, _env:
-                "drmr 0.1.0" if arguments == ["--version"] else "--max-workers --measure"):
+                "drmr 0.1.0" if arguments == ["--version"] else "--max-workers --stats"):
             if bad_warmup:
                 with self.assertRaises(measure.Failure) as failed:
                     measure.benchmark(args, report)

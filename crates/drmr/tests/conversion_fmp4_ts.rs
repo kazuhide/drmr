@@ -71,30 +71,30 @@ fn saved_and_named_transport_outputs_use_the_common_cli_and_independent_checks()
         let keys = root.path().join(format!("{target}.keys.json"));
         let output = root.path().join(target);
         let saved = root.path().join(format!("{target}.plan.json"));
-        let mut config = json!({"schema_version":1,"input":input_keys});
+        let mut config = json!({"schema_version":2,"input":input_keys,"outputs":{}});
         if target != "clear" {
-            config["output"] = fairplay.clone();
+            config["outputs"]["default"] = fairplay.clone();
         }
         write(&keys, &config);
         cli(&[
             "plan".into(),
             path(&input),
-            "--to".into(),
+            "--encryption".into(),
             target.into(),
-            "--format".into(),
+            "--output-format".into(),
             "hls-ts".into(),
             "--processing".into(),
             "stitch".into(),
             "--keys-file".into(),
             path(&keys),
-            "--output".into(),
+            "--output-dir".into(),
             path(&output),
             "--save".into(),
             path(&saved),
         ]);
         let converted = cli(&[
             "convert".into(),
-            "--plan".into(),
+            "--plan-file".into(),
             path(&saved),
             "--keys-file".into(),
             path(&keys),
@@ -102,7 +102,7 @@ fn saved_and_named_transport_outputs_use_the_common_cli_and_independent_checks()
         checked(&converted["verification"]);
         let verified = cli(&[
             "verify".into(),
-            "--plan".into(),
+            "--plan-file".into(),
             path(&saved),
             "--keys-file".into(),
             path(&keys),
@@ -124,7 +124,7 @@ fn saved_and_named_transport_outputs_use_the_common_cli_and_independent_checks()
     let saved = root.path().join("bundle.plan.json");
     write(
         &recipe,
-        &json!({"schema_version":3,"outputs":[{"id":"clear","format":"hls-ts","target":"clear","drms":[],"processing":"stitch"},{"id":"fairplay","format":"hls-ts","target":"hls-sample-aes","processing":"stitch","drms":["fairplay"]}]}),
+        &json!({"schema_version":4,"outputs":[{"id":"clear","output_format":"hls-ts","encryption":"clear","drms":[],"processing":"stitch"},{"id":"fairplay","output_format":"hls-ts","encryption":"hls-sample-aes","processing":"stitch","drms":["fairplay"]}]}),
     );
     write(
         &keys,
@@ -133,18 +133,18 @@ fn saved_and_named_transport_outputs_use_the_common_cli_and_independent_checks()
     cli(&[
         "plan".into(),
         path(&input),
-        "--outputs".into(),
+        "--output-config".into(),
         path(&recipe),
         "--keys-file".into(),
         path(&keys),
-        "--output".into(),
+        "--output-dir".into(),
         path(&output),
         "--save".into(),
         path(&saved),
     ]);
     let converted = cli(&[
         "convert".into(),
-        "--plan".into(),
+        "--plan-file".into(),
         path(&saved),
         "--keys-file".into(),
         path(&keys),
@@ -155,7 +155,7 @@ fn saved_and_named_transport_outputs_use_the_common_cli_and_independent_checks()
     }
     let verified = cli(&[
         "verify".into(),
-        "--plan".into(),
+        "--plan-file".into(),
         path(&saved),
         "--keys-file".into(),
         path(&keys),

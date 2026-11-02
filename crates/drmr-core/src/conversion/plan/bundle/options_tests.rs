@@ -2,6 +2,45 @@
 use super::*;
 use crate::conversion::plan::{self, SavedPlan};
 
+#[test]
+fn version_twelve_binds_manifest_profiles_and_preserves_version_ten_bytes() {
+    use crate::conversion::manifest_lint::ManifestProfile;
+    let root = crate::native::private_tempdir().unwrap();
+    let mut plan: BundlePlan = serde_json::from_value(value(root.path())).unwrap();
+    plan.schema_version = 10;
+    for settings in plan.output_options.as_mut().unwrap() {
+        settings.options = plan::options_tests::current_options(&plan.source);
+    }
+    plan.plan_id = identity(&plan).unwrap();
+    validate(&plan).unwrap();
+    let legacy = serde_json::to_vec(&plan).unwrap();
+    plan.schema_version = 12;
+    plan.outputs[0].manifest_profile = Some(ManifestProfile::Base);
+    plan.plan_id = identity(&plan).unwrap();
+    validate(&plan).unwrap();
+    let file = root.path().join("profile.bundle.json");
+    plan::write_bundle(&file, &plan).unwrap();
+    assert_eq!(
+        plan::read_saved(&file).unwrap(),
+        SavedPlan::Bundle(plan.clone())
+    );
+    let mut edited = plan.clone();
+    edited.outputs[0].manifest_profile = None;
+    assert_eq!(validate(&edited), Err(INVALID));
+    edited.plan_id = identity(&edited).unwrap();
+    assert_eq!(validate(&edited), Err(INVALID));
+    let mut edited = plan.clone();
+    edited.outputs[0].conformance = ManifestValidation::Required;
+    assert_eq!(validate(&edited), Err(INVALID));
+    edited.plan_id = identity(&edited).unwrap();
+    validate(&edited).unwrap();
+    plan.schema_version = 10;
+    assert_eq!(validate(&plan), Err(INVALID));
+    plan.outputs[0].manifest_profile = None;
+    plan.plan_id = identity(&plan).unwrap();
+    assert_eq!(serde_json::to_vec(&plan).unwrap(), legacy);
+}
+
 fn value(root: &Path) -> serde_json::Value {
     let plan = tests::sample(root);
     let options = plan::options_tests::options(&plan.source);
@@ -222,6 +261,7 @@ fn native_plan(command: &Converter, input: &Path, output_root: &Path) -> BundleP
             conformance: ManifestValidation::None,
             processing: None,
             dash_addressing: Some(DashAddressing::List),
+            manifest_profile: None,
         },
         BundleOutputIntent {
             id: "default-template".into(),
@@ -231,6 +271,7 @@ fn native_plan(command: &Converter, input: &Path, output_root: &Path) -> BundleP
             conformance: ManifestValidation::None,
             processing: None,
             dash_addressing: None,
+            manifest_profile: None,
         },
     ];
     command

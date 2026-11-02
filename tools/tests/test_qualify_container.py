@@ -74,8 +74,8 @@ class ResourceProgressTests(unittest.TestCase):
         result, checked, invoked = self.run_gate(raw)
         self.assertEqual(result["actual_cli_workers"], [2, 2])
         self.assertEqual(result["limits"], {"memory_bytes": 1024 ** 3, "cpus": 2})
-        self.assertEqual(invoked, [(["convert", "--decode", "/input/dash/manifest.mpd", "--to", "clear", "--format", "dash",
-                                    "--output", "/work/resource-limited", "--progress", "json", "--json"], {"limited": True})])
+        self.assertEqual(invoked, [(["convert", "--decode", "/input/dash/manifest.mpd", "--encryption", "clear", "--output-format", "dash",
+                                    "--output-dir", "/work/resource-limited", "--progress", "json", "--json"], {"limited": True})])
         self.assertEqual(checked, [([], {"entry": "/qualifiers/container-resources", "limited": True}),
                                   (["verify", "--decode", "/work/resource-limited/manifest.mpd", "--source",
                                     "/input/dash/manifest.mpd", "--json"], {"limited": True})])
