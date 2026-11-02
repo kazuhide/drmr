@@ -205,6 +205,17 @@ pub(crate) fn run(path: &Path) -> ExitCode {
     exit
 }
 
+fn analysis_source(source: ChildSource) -> (PathBuf, Option<PathBuf>, Option<PathBuf>) {
+    match source {
+        ChildSource::Local { input_file } => (input_file, None, None),
+        ChildSource::Url {
+            url,
+            download_dir,
+            fetch_policy_file,
+        } => (PathBuf::from(url), Some(download_dir), fetch_policy_file),
+    }
+}
+
 fn invoke(request: ChildRequest) -> ExitCode {
     let keys = request.runtime.keys_file;
     let workers = request.runtime.max_workers;
@@ -212,14 +223,7 @@ fn invoke(request: ChildRequest) -> ExitCode {
     let tools = request.runtime.tools;
     match request.operation {
         ChildOperation::Analyze { source } => {
-            let (input, download_dir, fetch_policy) = match source {
-                ChildSource::Local { input_file } => (input_file, None, None),
-                ChildSource::Url {
-                    url,
-                    download_dir,
-                    fetch_policy_file,
-                } => (PathBuf::from(url), Some(download_dir), fetch_policy_file),
-            };
+            let (input, download_dir, fetch_policy) = analysis_source(source);
             analyze_cli::analyze(&analyze_cli::AnalyzeArgs {
                 input,
                 metadata_only: false,
@@ -231,6 +235,7 @@ fn invoke(request: ChildRequest) -> ExitCode {
                 decoding: convert_cli::DecodeOptions { decode },
                 json: true,
                 measure: false,
+                report_file: None,
             })
         }
         ChildOperation::Plan {
@@ -248,12 +253,18 @@ fn invoke(request: ChildRequest) -> ExitCode {
             json: true,
             save: Some(save_file),
             outputs: Some(output_spec_file),
-            output: Some(output_root),
+            output_dir: Some(output_root),
+            output_file: None,
+            download_dir: None,
+            fetch_policy: None,
+            manifest_profile: None,
+            external_manifest_check: false,
             keys_file: keys,
             packager_bin: Some(tools.packager_bin),
             max_workers: workers,
-            decode,
+            decoding: convert_cli::DecodeOptions { decode },
             measure: false,
+            report_file: None,
         }),
         ChildOperation::Convert {
             plan_file,
@@ -268,19 +279,24 @@ fn invoke(request: ChildRequest) -> ExitCode {
             processing,
             dash_addressing: None,
             outputs: None,
-            output: None,
+            output_file: None,
+            output_dir: None,
+            manifest_profile: None,
+            external_manifest_check: false,
             keys_file: keys,
             packager_bin: tools.packager_bin,
             max_workers: workers,
-            decode,
+            decoding: convert_cli::DecodeOptions { decode },
             hls_validator_bin: tools.hls_validator_bin,
             dash_validator_bin: tools.dash_validator_bin,
             json: true,
             measure: false,
+            report_file: None,
         }),
         ChildOperation::Verify { plan_file } => convert_cli::verify(&convert_cli::VerifyArgs {
             output: None,
             plan: Some(plan_file),
+            outputs: None,
             manifest: convert_cli::ManifestArgs {
                 manifest_only: false,
                 external_validator: false,
@@ -295,6 +311,7 @@ fn invoke(request: ChildRequest) -> ExitCode {
             decode,
             json: true,
             measure: false,
+            report_file: None,
         }),
     }
 }

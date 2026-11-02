@@ -339,6 +339,7 @@ mod tests {
                     conformance: ManifestValidation::None,
                     processing: None,
                     dash_addressing: None,
+                    manifest_profile: None,
                 }
             });
         let source = || Source::Local(PathBuf::from("source/master.m3u8"));

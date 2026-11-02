@@ -91,7 +91,7 @@ def regression(binary, destination):
     rows = []
     for source_protection, source in sources.items():
         for target in PROTECTIONS:
-            config = {"schema_version": 2, "input": {}}
+            config = {"schema_version": 2, "input": {}, "outputs": {}}
             if source_protection == "hls-aes128":
                 config["input"]["hls_keys"] = [{"uri": SOURCE_URI, "key": SOURCE_KEY}]
             elif source_protection != "clear":

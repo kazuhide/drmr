@@ -379,7 +379,7 @@ fn encrypted_url_roundtrip(profile: Profile) {
     let local_keys = root.path().join("local-keys.json");
     private_json(
         &local_keys,
-        &json!({"schema_version":1,"input":input_keys(profile,None,false)}),
+        &json!({"schema_version":2,"input":input_keys(profile,None,false),"outputs":{}}),
     );
     let local = success(
         &invoke("analyze", &source, Some(&local_keys))
@@ -412,7 +412,7 @@ fn encrypted_url_roundtrip(profile: Profile) {
         &invoke("analyze", Path::new(&url), Some(&keys))
             .arg("--download-dir")
             .arg(&download)
-            .arg("--fetch-policy")
+            .arg("--fetch-config")
             .arg(&policy)
             .output()
             .unwrap(),
@@ -491,7 +491,13 @@ fn refuse_ts_counter_mode(download: &Path, input: &Path, keys: &Path) {
 fn refuse_single_output_bundle_keys(root: &Path, input: &Path, keys: &Path) {
     let single = root.join("single-must-not-exist");
     let refused = invoke("convert", input, Some(keys))
-        .args(["--to", "clear", "--format", "dash", "--output"])
+        .args([
+            "--encryption",
+            "clear",
+            "--output-format",
+            "dash",
+            "--output-dir",
+        ])
         .arg(&single)
         .output()
         .unwrap();
@@ -538,13 +544,13 @@ fn offline_plan(root: &Path, input: &Path, keys: &Path) {
     let outputs = root.join("outputs.json");
     private_json(
         &outputs,
-        &json!({"schema_version":1,"outputs":[{"id":"dash","format":"dash","target":"clear","drms":[]}]}),
+        &json!({"schema_version":4,"outputs":[{"id":"dash","output_format":"dash","encryption":"clear","drms":[]}]}),
     );
     let planned = success(
         &invoke("plan", input, Some(keys))
-            .arg("--outputs")
+            .arg("--output-config")
             .arg(&outputs)
-            .arg("--output")
+            .arg("--output-dir")
             .arg(&output)
             .arg("--save")
             .arg(&plan)
@@ -560,7 +566,7 @@ fn offline_plan(root: &Path, input: &Path, keys: &Path) {
     }
     for operation in ["convert", "verify"] {
         let result = Command::new(env!("CARGO_BIN_EXE_drmr"))
-            .args([operation, "--plan"])
+            .args([operation, "--plan-file"])
             .arg(&plan)
             .arg("--keys-file")
             .arg(keys)
@@ -611,7 +617,7 @@ fn cenc_all_qualified_outputs(root: &Path, input: &Path) {
         let mut intents = Vec::new();
         for &(format, target) in routes {
             let id = format!("{format}-{target}");
-            intents.push(json!({"id":id,"format":format,"target":target,"drms":[]}));
+            intents.push(json!({"id":id,"output_format":if format == "hls" { "hls-fmp4" } else { format },"encryption":target,"drms":[]}));
             if target != "clear" {
                 let value = if target == "hls-aes128" {
                     json!({"key":ROTATED,"hls_key_uri":"https://operator.invalid/output.key"})
@@ -625,16 +631,16 @@ fn cenc_all_qualified_outputs(root: &Path, input: &Path) {
                 output_keys.insert(id, value);
             }
         }
-        private_json(&spec, &json!({"schema_version":1,"outputs":intents}));
+        private_json(&spec, &json!({"schema_version":4,"outputs":intents}));
         private_json(
             &keys,
             &json!({"schema_version":2,"input":input_keys(Profile::CencFmp4,None,false),"outputs":output_keys}),
         );
         let planned = success(
             &invoke("plan", input, Some(&keys))
-                .arg("--outputs")
+                .arg("--output-config")
                 .arg(&spec)
-                .arg("--output")
+                .arg("--output-dir")
                 .arg(&output)
                 .arg("--save")
                 .arg(&plan)
@@ -650,7 +656,7 @@ fn cenc_all_qualified_outputs(root: &Path, input: &Path) {
         }
         for operation in ["convert", "verify"] {
             let result = Command::new(env!("CARGO_BIN_EXE_drmr"))
-                .args([operation, "--plan"])
+                .args([operation, "--plan-file"])
                 .arg(&plan)
                 .arg("--keys-file")
                 .arg(&keys)

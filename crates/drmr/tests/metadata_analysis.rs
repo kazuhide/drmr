@@ -80,7 +80,7 @@ fn metadata_and_light_planning_publish_structured_progress_separately() {
     hls(&source);
     for (name, options) in [
         ("analyze", vec!["--metadata-only"]),
-        ("plan", vec!["--to", "clear"]),
+        ("plan", vec!["--encryption", "clear"]),
     ] {
         let output = command()
             .arg(name)
@@ -115,7 +115,7 @@ fn metadata_and_light_plan_output_failures_keep_structured_stderr_and_originals(
     let original = std::fs::read(&source).unwrap();
     for (name, options) in [
         ("analyze", vec!["--metadata-only"]),
-        ("plan", vec!["--to", "clear"]),
+        ("plan", vec!["--encryption", "clear"]),
     ] {
         // Close the pipe before spawning, so publication deterministically fails.
         let (reader, writer) = std::io::pipe().unwrap();
@@ -160,7 +160,7 @@ fn metadata_rejects_complete_analysis_options_including_an_explicit_default_tool
         vec!["--packager-bin", "packager"],
         vec!["--max-workers", "1"],
         vec!["--decode"],
-        vec!["--measure"],
+        vec!["--stats"],
     ] {
         let output = command()
             .args(["analyze", "--metadata-only", "--json"])
@@ -182,7 +182,7 @@ fn local_metadata_refuses_fetch_settings_without_reading_them() {
     let output = command()
         .args(["analyze", "--metadata-only", "--json"])
         .arg(&source)
-        .arg("--fetch-policy")
+        .arg("--fetch-config")
         .arg(root.path().join("metadata-auth-sentinel"))
         .output()
         .unwrap();
@@ -470,7 +470,7 @@ mod remote {
                 "--metadata-only",
                 "--json",
                 &server.url(path),
-                "--fetch-policy",
+                "--fetch-config",
             ])
             .arg(policy)
             .output()
@@ -602,7 +602,7 @@ mod remote {
                 "--metadata-only",
                 "--json",
                 &server.url("/source.mpd"),
-                "--fetch-policy",
+                "--fetch-config",
             ])
             .arg(&policy)
             .stdout(std::process::Stdio::piped())

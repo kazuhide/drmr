@@ -10,7 +10,7 @@ use drmr_core::conversion::{
     key_file::{self, BundleOperatorKeys},
     plan::{
         self,
-        bundle::{BundlePlan, BundlePlanRequest, read_output_spec_diagnostic},
+        bundle::{BundlePlan, BundlePlanRequest, read_output_config_diagnostic},
     },
 };
 use serde_json::Value;
@@ -24,7 +24,7 @@ mod result_text;
 pub(crate) fn error_hint(code: &str) -> Option<&'static str> {
     match code {
         "output-spec-invalid" => Some(
-            "Use a version-1 output recipe, version 2 for per-output processing, or version 3 for DASH addressing, with unique safe IDs and supported format, protection, DRM systems and manifest-check policy.",
+            "Use a schema-version-4 output config with unique safe IDs, output_format, encryption and explicit DRM selections.",
         ),
         "execution-plan-output-keys-mismatch" => Some(
             "Match schema-version-2 output key entries to the encrypted output IDs; omit clear outputs and unused entries.",
@@ -165,12 +165,16 @@ impl Session {
         let elapsed = self.progress.elapsed();
         let downloaded = self.progress.downloaded_resources();
         let result = self.progress.write_result(|| {
+            crate::reporting::record(&report)?;
             if json {
                 convert_cli::json(&report)
             } else {
                 text(command, &report, passed)?;
                 if let Some(summary) = summary {
                     summary.write(&mut std::io::stdout().lock(), elapsed, downloaded)?;
+                }
+                if let Some(statistics) = report.get("measurements") {
+                    crate::reporting::stats(statistics, &mut std::io::stdout().lock())?;
                 }
                 Ok(())
             }
@@ -274,7 +278,7 @@ fn write_text(
     if command == "plan" {
         writeln!(
             out,
-            "Execution plan saved with {} outputs.\nSource fingerprints, output profiles, DRM systems and manifest-check policies are fixed.\nSupply runtime keys separately with convert --plan.",
+            "Execution plan saved with {} outputs.\nSource fingerprints, output profiles, DRM systems and manifest-check policies are fixed.\nSupply runtime keys separately with convert --plan-file.",
             value["outputs"].as_array().map_or(0, Vec::len)
         )?;
     } else {
@@ -388,13 +392,30 @@ fn manifest_format(path: &Path) -> Result<drmr_core::inspection::OutputFormat, C
     }
 }
 
+fn selected_configuration(
+    path: &Path,
+    explicit: Option<&Path>,
+) -> Result<(Vec<plan::bundle::BundleOutputIntent>, PathBuf), convert_cli::ConfigurationError> {
+    let config = read_output_config_diagnostic(path)?;
+    let output = crate::output_cli::bundle_destination(explicit, config.output_dir)?;
+    crate::reporting::ready();
+    Ok((config.outputs, output))
+}
+
 pub fn save(args: &PlanArgs) -> ExitCode {
+    let (mut outputs, output) = match selected_configuration(
+        args.outputs.as_deref().expect("named output mode selected"),
+        args.output_dir.as_deref(),
+    ) {
+        Ok(value) => value,
+        Err(cause) => return crate::plan_cli::preparation_error("plan", cause, args.json),
+    };
     let session = match Session::start(
         "plan",
         args.json,
         args.packager_bin.as_deref().unwrap_or("packager"),
         args.max_workers,
-        args.decode,
+        args.decoding.decode,
         args.keys_file.as_ref(),
     ) {
         Ok(session) => {
@@ -402,12 +423,13 @@ pub fn save(args: &PlanArgs) -> ExitCode {
         }
         Err(code) => return code,
     };
-    let outputs = match read_output_spec_diagnostic(
-        args.outputs
-            .as_deref()
-            .expect("multiple-output mode was selected"),
-    ) {
-        Ok(outputs) => outputs,
+    crate::output_cli::override_validation(
+        &mut outputs,
+        args.manifest_profile,
+        args.external_manifest_check,
+    );
+    let input = match crate::plan_cli::PlanInput::prepare(args, &output) {
+        Ok(input) => input,
         Err(error) => return session.failed("plan", error, args.json),
     };
     session.run("plan", args.json, args.measure, |converter| {
@@ -416,15 +438,19 @@ pub fn save(args: &PlanArgs) -> ExitCode {
             outputs.iter().map(|output| output.format),
         )?;
         session.progress.mark("input-preparation");
+        let downloaded = input.acquire(converter, &output, &session.progress)?;
         let plan = converter.create_bundle_plan(BundlePlanRequest {
             input: VerificationSource {
-                input: args.input.as_path(),
+                input: input.entrypoint(downloaded.as_ref()),
                 input_keys: &session.keys.input,
                 hls_keys: &session.keys.hls_input,
             },
-            output_root: args.output.as_deref().expect("clap requires the output"),
+            output_root: &output,
             outputs: &outputs,
         })?;
+        if let Some(source) = downloaded.as_ref() {
+            source.check(&session.cancellation.stop)?;
+        }
         session.progress.mark("publication");
         plan::write_bundle(
             args.save.as_deref().expect("clap requires the plan path"),
@@ -443,7 +469,7 @@ pub fn convert(args: &ConvertArgs, plan: &BundlePlan) -> ExitCode {
         args.json,
         &args.packager_bin,
         args.max_workers,
-        args.decode,
+        args.decoding.decode,
         args.keys_file.as_ref(),
     ) {
         Ok(session) => session,
@@ -503,32 +529,34 @@ pub fn convert_direct(args: &ConvertArgs) -> ExitCode {
         Ok(input) => input,
         Err(error) => return convert_cli::error("convert", error, args.json, &progress, None),
     };
-    let policy = match convert_cli::configured_download(args, &input) {
-        Ok(policy) => policy,
-        Err(error) => {
-            return convert_cli::error("convert", error, args.json, &progress, None);
-        }
+    let (mut outputs, output) = match selected_configuration(
+        args.outputs.as_deref().expect("named output mode selected"),
+        args.output_dir.as_deref(),
+    ) {
+        Ok(value) => value,
+        Err(cause) => return convert_cli::error("convert", cause, args.json, &progress, None),
     };
     let session = match Session::start_observed(
         "convert",
         args.json,
         &args.packager_bin,
         args.max_workers,
-        args.decode,
+        args.decoding.decode,
         args.keys_file.as_ref(),
         progress,
     ) {
         Ok(session) => session.with_new_intent(ProcessingMode::Auto, args.dash_addressing),
         Err(code) => return code,
     };
-    let mut outputs = match read_output_spec_diagnostic(
-        args.outputs
-            .as_deref()
-            .expect("multiple-output mode was selected"),
-    ) {
-        Ok(outputs) => outputs,
+    let policy = match convert_cli::configured_download(args, &input, &output) {
+        Ok(policy) => policy,
         Err(error) => return session.failed("convert", error, args.json),
     };
+    crate::output_cli::override_validation(
+        &mut outputs,
+        args.manifest_profile,
+        args.external_manifest_check,
+    );
     // Freeze the CLI default into the output choices before executing the new plan.
     if let Some(default) = args.processing {
         for output in &mut outputs {
@@ -536,7 +564,7 @@ pub fn convert_direct(args: &ConvertArgs) -> ExitCode {
         }
     }
     let validators = tools(&args.hls_validator_bin, &args.dash_validator_bin);
-    let output = args.output.as_deref().expect("clap requires the output");
+    let output = output.as_path();
     session.run("convert", args.json, args.measure, |converter| {
         crate::output_cli::validate(
             args.dash_addressing,
@@ -581,6 +609,52 @@ pub fn convert_direct(args: &ConvertArgs) -> ExitCode {
         Ok((
             serde_json::to_value(report).expect("bundle conversion serializes"),
             summary,
+        ))
+    })
+}
+
+pub fn verify_direct(args: &VerifyArgs) -> ExitCode {
+    let config = match read_output_config_diagnostic(
+        args.outputs
+            .as_deref()
+            .expect("named verification selected"),
+    ) {
+        Ok(config) => config,
+        Err(error) => return crate::plan_cli::preparation_error("verify", error, args.json),
+    };
+    crate::reporting::ready();
+    let session = match Session::start(
+        "verify",
+        args.json,
+        &args.packager_bin,
+        args.max_workers,
+        args.decode,
+        args.keys_file.as_ref(),
+    ) {
+        Ok(session) => session,
+        Err(code) => return code,
+    };
+    let mut outputs = config.outputs;
+    crate::output_cli::override_validation(
+        &mut outputs,
+        args.manifest.manifest_profile,
+        args.manifest.external_validator,
+    );
+    let root = args
+        .output
+        .as_deref()
+        .expect("clap requires the actual result root");
+    let source = args
+        .source
+        .as_deref()
+        .expect("clap requires the original source");
+    let validators = verify_tools(args);
+    session.run("verify", args.json, args.measure, |converter| {
+        let report =
+            converter.verify_bundle_config(source, &outputs, root, &session.keys, &validators)?;
+        Ok((
+            serde_json::to_value(report).expect("named verification serializes"),
+            None,
         ))
     })
 }

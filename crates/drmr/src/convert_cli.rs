@@ -17,10 +17,11 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 /// Additional media validation is independent of metadata and result-format flags.
-#[derive(Args)]
+#[derive(Clone, Args)]
 pub struct DecodeOptions {
     /// Add complete decoding to the required native media checks.
     #[arg(long)]
+    #[arg(help_heading = "Verification")]
     pub decode: bool,
 }
 
@@ -40,63 +41,101 @@ pub(crate) const fn decode_summary(
     }
 }
 
-#[derive(Args)]
+#[derive(Clone, Args)]
 pub struct ConvertArgs {
     /// Local source media or a supported HLS, static DASH, or MP4 URL. The source is never overwritten.
     #[arg(required_unless_present = "plan", conflicts_with = "plan")]
+    #[arg(help_heading = "Input", value_name = "INPUT")]
     pub input: Option<PathBuf>,
     /// Execute the exact source and media intent in a saved plan; keys stay separate.
-    #[arg(long, conflicts_with_all = ["input", "download_dir", "fetch_policy", "to", "format", "output", "outputs"])]
+    #[arg(long = "plan-file", conflicts_with_all = ["input", "download_dir", "fetch_policy", "to", "format", "output_file", "output_dir", "outputs", "manifest_profile", "external_manifest_check"])]
+    #[arg(help_heading = "Plan", value_name = "FILE")]
     pub plan: Option<PathBuf>,
     /// New directory retaining the original input; required for URL input.
     #[arg(long)]
+    #[arg(help_heading = "Input", value_name = "DIR")]
     pub download_dir: Option<PathBuf>,
     /// Private JSON settings for additional origins, authentication and fetch limits.
-    #[arg(long)]
+    #[arg(long = "fetch-config")]
+    #[arg(help_heading = "Input", value_name = "FILE")]
     pub fetch_policy: Option<PathBuf>,
     /// Target protection: clear, cenc, cbcs, hls-aes128, or hls-sample-aes.
-    #[arg(long, required_unless_present_any = ["plan", "outputs"], conflicts_with = "outputs")]
+    #[arg(long = "encryption", required_unless_present_any = ["plan", "outputs"], conflicts_with = "outputs")]
+    #[arg(help_heading = "Output", value_name = "MODE")]
     pub to: Option<TargetProtection>,
-    /// Output format: mp4, dash, hls (fragmented MP4), or hls-ts.
-    #[arg(long)]
+    /// Output profile: mp4, dash, hls-fmp4, or hls-ts.
+    #[arg(long = "output-format", value_parser = crate::output_cli::parse_format)]
+    #[arg(help_heading = "Output", value_name = "FORMAT")]
     pub format: Option<OutputFormat>,
     /// Processing mode: segments keeps source boundaries; stitch joins media before packaging.
     /// HLS/DASH output from stitch is segmented again. Default: auto.
     #[arg(long, value_enum, conflicts_with = "plan")]
+    #[arg(help_heading = "Output", value_name = "MODE")]
     pub processing: Option<ProcessingMode>,
     /// DASH segment references for new output; default: template. Source directories are retained.
     #[arg(long, value_enum, conflicts_with = "plan")]
+    #[arg(help_heading = "Output", value_name = "MODE")]
     pub dash_addressing: Option<DashAddressing>,
     /// JSON output list; publish all verified results together in one new directory.
-    #[arg(long, conflicts_with_all = ["plan", "to", "format"])]
+    #[arg(long = "output-config", conflicts_with_all = ["plan", "to", "format", "output_file"])]
+    #[arg(help_heading = "Output", value_name = "FILE")]
     pub outputs: Option<PathBuf>,
-    /// A new output file or directory; existing destinations are refused.
-    #[arg(long, required_unless_present = "plan")]
-    pub output: Option<PathBuf>,
+    /// A new single MP4 file; existing destinations are refused.
+    #[arg(long, conflicts_with_all = ["plan", "output_dir", "outputs"])]
+    #[arg(help_heading = "Output", value_name = "FILE")]
+    pub output_file: Option<PathBuf>,
+    /// A new streaming result or named-output directory; overrides `output_dir` in the output config.
+    #[arg(long, conflicts_with_all = ["plan", "output_file"])]
+    #[arg(help_heading = "Output", value_name = "DIR")]
+    pub output_dir: Option<PathBuf>,
+    /// Final native manifest rules; apple-vod applies only to HLS outputs.
+    #[arg(long, value_enum, conflicts_with = "plan")]
+    #[arg(help_heading = "Verification", value_name = "PROFILE")]
+    pub manifest_profile: Option<drmr_core::conversion::manifest_lint::ManifestProfile>,
+    /// Require an external final-manifest check in addition to native checks.
+    #[arg(long, conflicts_with = "plan")]
+    #[arg(help_heading = "Verification")]
+    pub external_manifest_check: bool,
     /// Protected JSON configuration with distinct input and output keys.
     #[arg(long)]
+    #[arg(help_heading = "Input", value_name = "FILE")]
     pub keys_file: Option<PathBuf>,
     /// Shaka Packager executable, selected by the operator.
     #[arg(long, default_value = "packager")]
+    #[arg(help_heading = "Tools", value_name = "PROGRAM")]
     pub packager_bin: String,
     /// Upper bound for simultaneous media work (1-64); default adapts to CPU and memory.
     #[arg(long, value_parser = clap::value_parser!(u8).range(1..=64))]
+    #[arg(help_heading = "Execution", value_name = "N")]
     pub max_workers: Option<u8>,
-    /// Add complete source and result decoding to the required native media checks.
-    #[arg(long)]
-    pub decode: bool,
+    #[command(flatten)]
+    pub decoding: DecodeOptions,
     /// Apple mediastreamvalidator executable for requested final HLS manifest checks.
     #[arg(long, default_value = "mediastreamvalidator")]
+    #[arg(help_heading = "Tools", value_name = "PROGRAM")]
     pub hls_validator_bin: String,
     /// PHP executable for requested local DASH-IF manifest checks.
-    #[arg(long, default_value = "php")]
+    #[arg(long = "php-bin", default_value = "php")]
+    #[arg(help_heading = "Tools", value_name = "PROGRAM")]
     pub dash_validator_bin: String,
     /// Print the versioned result as one JSON object.
     #[arg(long)]
+    #[arg(help_heading = "Reporting")]
     pub json: bool,
-    /// Include numeric measurements in JSON; does not change media verification.
-    #[arg(long, requires = "json")]
+    /// Include detailed observed statistics in the result; does not change verification.
+    #[arg(long = "stats")]
+    #[arg(help_heading = "Reporting")]
     pub measure: bool,
+    /// Write the same structured result to a new private JSON file.
+    #[arg(long)]
+    #[arg(help_heading = "Reporting", value_name = "FILE")]
+    pub report_file: Option<PathBuf>,
+}
+
+impl ConvertArgs {
+    pub(crate) fn destination(&self) -> Option<&std::path::Path> {
+        self.output_file.as_deref().or(self.output_dir.as_deref())
+    }
 }
 
 #[derive(Args)]
@@ -105,63 +144,84 @@ pub struct VerifyArgs {
     #[arg(required_unless_present = "plan", conflicts_with = "plan")]
     pub output: Option<PathBuf>,
     /// Verify saved-plan source fingerprints, output intent, and complete media correspondence.
-    #[arg(long, conflicts_with_all = ["output", "source"])]
+    #[arg(long = "plan-file", conflicts_with_all = ["output", "source", "outputs"])]
+    #[arg(help_heading = "Plan", value_name = "FILE")]
     pub plan: Option<PathBuf>,
+    /// Expected named-output configuration for independently checking an existing result root.
+    #[arg(long = "output-config", conflicts_with_all = ["plan", "manifest_only"])]
+    #[arg(help_heading = "Output", value_name = "FILE")]
+    pub outputs: Option<PathBuf>,
     #[command(flatten)]
     pub manifest: ManifestArgs,
     /// Original source media. Required to verify content correspondence.
     #[arg(long, required_unless_present_any = ["plan", "manifest_only"])]
+    #[arg(help_heading = "Input", value_name = "INPUT")]
     pub source: Option<PathBuf>,
     /// Protected JSON configuration: input keys for source, output keys for result.
     #[arg(long)]
+    #[arg(help_heading = "Input", value_name = "FILE")]
     pub keys_file: Option<PathBuf>,
     /// Shaka Packager executable, selected by the operator.
     #[arg(long, default_value = "packager")]
+    #[arg(help_heading = "Tools", value_name = "PROGRAM")]
     pub packager_bin: String,
     /// Upper bound for simultaneous media or native manifest work (1-64); default adapts to CPU and memory.
     #[arg(long, value_parser = clap::value_parser!(u8).range(1..=64))]
+    #[arg(help_heading = "Execution", value_name = "N")]
     pub max_workers: Option<u8>,
     /// Add complete source and result decoding to the required native media checks.
     #[arg(long, conflicts_with = "manifest_only")]
+    #[arg(help_heading = "Verification")]
     pub decode: bool,
     /// Print the versioned verification result as one JSON object.
     #[arg(long)]
+    #[arg(help_heading = "Reporting")]
     pub json: bool,
-    /// Include numeric measurements in JSON; does not change media verification.
-    #[arg(long, requires = "json")]
+    /// Include detailed observed statistics in the result; does not change verification.
+    #[arg(long = "stats")]
+    #[arg(help_heading = "Reporting")]
     pub measure: bool,
+    /// Write the same structured result to a new private JSON file.
+    #[arg(long)]
+    #[arg(help_heading = "Reporting", value_name = "FILE")]
+    pub report_file: Option<PathBuf>,
 }
 
 #[derive(Args)]
 pub struct ManifestArgs {
     /// Check final HLS/DASH manifests with native rules, without reading media or keys.
     #[arg(long, conflicts_with_all = ["plan", "source", "keys_file"])]
+    #[arg(help_heading = "Verification")]
     pub manifest_only: bool,
-    /// Add the selected external validator to native manifest-only checks.
-    #[arg(long, requires = "manifest_only", conflicts_with_all = ["source", "keys_file", "plan"])]
+    /// Require an external final-manifest check in addition to the native checks.
+    #[arg(long = "external-manifest-check", conflicts_with = "plan")]
+    #[arg(help_heading = "Verification")]
     pub external_validator: bool,
-    /// Native manifest profile (default: base); apple-vod adds HLS authoring-guide rules.
-    #[arg(long, value_enum, requires = "manifest_only", conflicts_with_all = ["source", "keys_file", "plan"])]
+    /// Final native manifest profile (default: base); apple-vod adds HLS authoring-guide rules.
+    #[arg(long, value_enum, conflicts_with = "plan")]
+    #[arg(help_heading = "Verification", value_name = "PROFILE")]
     pub manifest_profile: Option<drmr_core::conversion::manifest_lint::ManifestProfile>,
     /// External HLS executable; defaults to mediastreamvalidator when requested.
     #[arg(long)]
+    #[arg(help_heading = "Tools", value_name = "PROGRAM")]
     pub hls_validator_bin: Option<String>,
     /// External DASH PHP executable; defaults to php when requested.
-    #[arg(long)]
+    #[arg(long = "php-bin")]
+    #[arg(help_heading = "Tools", value_name = "PROGRAM")]
     pub dash_validator_bin: Option<String>,
 }
 
 pub(crate) fn load(path: Option<&PathBuf>) -> Result<OperatorKeys, ConfigurationError> {
     path.map_or_else(
         || Ok(OperatorKeys::default()),
-        |path| key_file::read_diagnostic(path).map_err(Into::into),
+        |path| key_file::read_single_named_diagnostic(path, "default").map_err(Into::into),
     )
 }
 
 pub(crate) fn load_source(path: Option<&PathBuf>) -> Result<OperatorKeys, ConfigurationError> {
     path.map_or_else(
         || Ok(OperatorKeys::default()),
-        |path| key_file::read_source_diagnostic(path).map_err(Into::into),
+        |path| key_file::read_canonical_source_diagnostic(path).map_err(Into::into),
     )
 }
 
@@ -187,10 +247,10 @@ fn manifest_error_hint(code: &str) -> Option<&'static str> {
             "The retained segment boundaries cannot use duration-based DASH addressing. Create a new plan using --dash-addressing template-timeline.",
         ),
         "external-validator-required" => Some(
-            "Use --external-validator with --manifest-only to request an external engine; executable paths only configure that request.",
+            "Use --external-manifest-check with --manifest-only to request an external engine; executable paths only configure that request.",
         ),
         "manifest-lint-profile-unsupported" => Some(
-            "Use --manifest-profile base for DASH. The apple-vod profile applies only to HLS manifest-only checks.",
+            "Use --manifest-profile base for DASH. The apple-vod profile applies only to HLS outputs and manifests.",
         ),
         "native-manifest-lint-failed" => Some(
             "Review native_manifest diagnostics and incomplete coverage. Native checks establish only their named manifest scope; media and external checks remain separate.",
@@ -220,7 +280,7 @@ fn processing_error_hint(code: &str) -> Option<&'static str> {
 fn error_hint(code: &str) -> Option<&'static str> {
     match code {
         "key-file-invalid" => Some(
-            "Use an owner-only regular JSON file: schema version 1 for one output, or version 2 for named outputs.",
+            "Use an owner-only schema-version-2 JSON key file with input keys and named output keys; the simple output ID is default.",
         ),
         "cancelled" => Some(
             "Check the destination and job status before retrying; cancellation is not a media verification result.",
@@ -241,7 +301,7 @@ fn error_hint(code: &str) -> Option<&'static str> {
             "URL input requires --download-dir pointing to a new directory under an existing parent.",
         ),
         "download-options-require-url" => {
-            Some("Use --download-dir and --fetch-policy only with URL input.")
+            Some("Use --download-dir and --fetch-config only with URL input.")
         }
         "download-output-overlap" => {
             Some("Choose separate download and output paths; neither may contain the other.")
@@ -256,7 +316,7 @@ fn error_hint(code: &str) -> Option<&'static str> {
             Some("Use an owner-only JSON object with supported, correctly typed fetch settings.")
         }
         "download-source-unavailable" => Some(
-            "Check network access, allowed origins, authentication, and fetch limits in --fetch-policy.",
+            "Check network access, allowed origins, authentication, and fetch limits in --fetch-config.",
         ),
         "download-source-not-supported" => Some(
             "URL input requires supported completed HLS, single-Period static DASH using SegmentTemplate with a finite SegmentTimeline, or self-contained MP4. Supply input keys separately; key and license URIs are never fetched. See docs/conversion-support.md.",
@@ -279,9 +339,11 @@ fn error_hint(code: &str) -> Option<&'static str> {
         "input-key-required" => Some(
             "Provide every source key in input.keys; use input.hls_keys for HLS AES-128 or SAMPLE-AES.",
         ),
-        "output-key-required" => Some("Provide output.kid and output.key in --keys-file."),
+        "output-key-required" => Some(
+            "Provide kid and key in the selected outputs entry of --keys-file; simple conversion selects outputs.default.",
+        ),
         "output-key-role-mismatch" => Some(
-            "For cenc/cbcs, provide output.kid and output.key. For HLS AES-128 or SAMPLE-AES, omit the KID and provide output.key plus output.hls_key_uri; SAMPLE-AES also needs output.iv. For clear output, omit output.",
+            "For cenc/cbcs, provide kid and key in the selected named output. HLS AES-128 and SAMPLE-AES use key and hls_key_uri without a KID; SAMPLE-AES also needs iv. Omit key entries for clear outputs.",
         ),
         "hls-key-uri-required" => {
             Some("Provide output.hls_key_uri for CBCS HLS playlist signaling.")
@@ -290,7 +352,7 @@ fn error_hint(code: &str) -> Option<&'static str> {
             Some("For clear output, omit the output section from --keys-file.")
         }
         "target-requires-hls-output" => {
-            Some("Use --format hls or --format hls-ts for HLS AES-128.")
+            Some("Use --output-format hls-fmp4 or --output-format hls-ts for HLS AES-128.")
         }
         "single-track-mp4-required" | "mp4-output-requires-one-track" => {
             Some("Use DASH or HLS output for separate video and audio tracks.")
@@ -309,6 +371,8 @@ fn error_hint(code: &str) -> Option<&'static str> {
         ),
         _ => processing_error_hint(code)
             .or_else(|| manifest_error_hint(code))
+            .or_else(|| crate::output_cli::error_hint(code))
+            .or_else(|| crate::reporting::error_hint(code))
             .or_else(|| crate::bundle_cli::error_hint(code))
             .or_else(|| crate::plan_cli::error_hint(code)),
     }
@@ -347,16 +411,17 @@ pub(crate) fn error(
     let error = error.into();
     let code = error.cause.0;
     progress.diagnostic(command, code);
+    let value = configured_error_value(command, &error, progress);
     let result = progress.write_result(|| {
-        if as_json {
-            json(&configured_error_value(command, &error, progress))
-        } else if !progress.structured()
-            && let Some(hint) = error.hint()
-        {
-            writeln!(std::io::stderr().lock(), "{hint}")
-        } else {
-            Ok(())
-        }
+        crate::reporting::render(&value, as_json, || {
+            if !progress.structured()
+                && let Some(hint) = error.hint()
+            {
+                writeln!(std::io::stderr().lock(), "{hint}")
+            } else {
+                Ok(())
+            }
+        })
     });
     if result.is_err() {
         progress.diagnostic(command, "result-output-unavailable");
@@ -369,6 +434,13 @@ pub(crate) fn error(
         if matches!(
             code,
             "key-file-invalid"
+                | "output-destination-required"
+                | "output-destination-conflict"
+                | "mp4-output-file-required"
+                | "stream-output-dir-required"
+                | "report-destination-overlap"
+                | "report-destination-exists"
+                | "report-destination-unsafe"
                 | "external-validator-required"
                 | "manifest-lint-profile-unsupported"
                 | "execution-plan-invalid"
@@ -450,6 +522,7 @@ pub(crate) fn json(value: &serde_json::Value) -> std::io::Result<()> {
 pub(crate) fn configured_download(
     args: &ConvertArgs,
     input: &crate::download_cli::Input,
+    output: &std::path::Path,
 ) -> Result<Option<drmr_core::source::FetchPolicy>, ConfigurationError> {
     match input {
         crate::download_cli::Input::Local(_) => {
@@ -464,15 +537,11 @@ pub(crate) fn configured_download(
                 .download_dir
                 .as_ref()
                 .ok_or(ConversionError("download-directory-required"))?;
-            crate::download_cli::preflight(
-                directory,
-                args.output
-                    .as_deref()
-                    .expect("clap requires a direct output"),
-            )
-            .map_err(|cause| ConfigurationError {
-                exit: Some(2),
-                ..cause.into()
+            crate::download_cli::preflight(directory, output).map_err(|cause| {
+                ConfigurationError {
+                    exit: Some(2),
+                    ..cause.into()
+                }
             })?;
             drmr_core::conversion::download_policy::read(url, args.fetch_policy.as_deref())
                 .map(Some)
@@ -492,28 +561,33 @@ impl CompletedConversion {
         self,
         args: &ConvertArgs,
         input: &crate::download_cli::Input,
-        measurement: Option<MeasurementReport>,
+        measurement: Option<&MeasurementReport>,
         progress: &Progress,
     ) -> std::io::Result<()> {
         let summary = (!args.json).then(|| {
             crate::conversion_summary::Summary::single(
                 &self.report,
                 crate::conversion_summary::Source::direct(input, args.download_dir.as_deref()),
-                args.output
-                    .as_deref()
-                    .expect("clap requires the direct output"),
+                args.destination().expect("clap requires the direct output"),
                 self.format,
                 args.to.expect("clap requires the direct target"),
             )
         });
         let elapsed = progress.elapsed();
         let downloaded = progress.downloaded_resources();
+        let mut value = serde_json::to_value(&self.report).expect("conversion report serializes");
+        if let Some(download) = self.download {
+            value["download"] = download;
+        }
+        crate::reporting::measurements(&mut value, measurement);
         progress.write_result(|| {
-            write_conversion_result(&self.report, self.download, measurement, args.json)?;
-            if let Some(summary) = summary {
-                summary.write(&mut std::io::stdout().lock(), elapsed, downloaded)?;
-            }
-            Ok(())
+            crate::reporting::render(&value, args.json, || {
+                conversion_text(&self.report)?;
+                if let Some(summary) = summary {
+                    summary.write(&mut std::io::stdout().lock(), elapsed, downloaded)?;
+                }
+                Ok(())
+            })
         })
     }
 }
@@ -535,9 +609,7 @@ fn execute_conversion(
                 args.download_dir
                     .as_deref()
                     .expect("URL download directory was checked"),
-                args.output
-                    .as_deref()
-                    .expect("clap requires a direct output"),
+                args.destination().expect("clap requires a direct output"),
                 fetch_policy.expect("URL fetch policy was checked"),
             )?;
             progress.source_retained();
@@ -559,13 +631,15 @@ fn execute_conversion(
         command.default_output_format(source)?
     };
     crate::output_cli::validate(args.dash_addressing, [format])?;
+    crate::output_cli::validate_destination(
+        args.output_file.as_deref(),
+        args.output_dir.as_deref(),
+        format,
+    )?;
     progress.mark("input-preparation");
     let request = ConversionRequest {
         input: source,
-        output: args
-            .output
-            .as_deref()
-            .expect("clap requires a direct output"),
+        output: args.destination().expect("clap requires a direct output"),
         format,
         target: args.to.expect("clap requires a direct target"),
         input_keys: &keys.input,
@@ -682,6 +756,31 @@ fn convert_saved(args: &ConvertArgs, path: &std::path::Path) -> ExitCode {
     crate::plan_cli::convert(args, path)
 }
 
+fn configured_converter(
+    args: &ConvertArgs,
+    keys: &OperatorKeys,
+    progress: Arc<Progress>,
+    stop: drmr_core::concurrency::Stop,
+) -> Converter {
+    crate::output_cli::validation(
+        crate::output_cli::configure(
+            converter(
+                &args.packager_bin,
+                args.max_workers,
+                args.decoding.decode,
+                progress,
+                stop,
+            ),
+            args.dash_addressing,
+        )
+        .with_processing(args.processing.unwrap_or_default())
+        .with_output_signaling(keys.signaling.clone()),
+        args.manifest_profile,
+        args.external_manifest_check,
+        crate::output_cli::manifest_tools(&args.hls_validator_bin, &args.dash_validator_bin),
+    )
+}
+
 pub fn convert(args: &ConvertArgs) -> ExitCode {
     if let Some(path) = &args.plan {
         return convert_saved(args, path);
@@ -700,7 +799,16 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
         Ok(input) => input,
         Err(cause) => return error("convert", cause, args.json, &progress, None),
     };
-    let fetch_policy = match configured_download(args, &input) {
+    let Some(output) = args.destination() else {
+        return error(
+            "convert",
+            ConversionError("output-destination-required"),
+            args.json,
+            &progress,
+            Some(2),
+        );
+    };
+    let fetch_policy = match configured_download(args, &input, output) {
         Ok(policy) => policy,
         Err(cause) => return error("convert", cause, args.json, &progress, None),
     };
@@ -717,22 +825,20 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
         Ok(keys) => keys,
         Err(cause) => return error("convert", cause, args.json, &progress, None),
     };
-    let converter = crate::output_cli::configure(
-        converter(
-            &args.packager_bin,
-            args.max_workers,
-            args.decode,
-            progress.clone(),
-            cancellation.stop.clone(),
-        ),
-        args.dash_addressing,
-    )
-    .with_processing(args.processing.unwrap_or_default())
-    .with_output_signaling(keys.signaling.clone());
+    let converter = configured_converter(args, &keys, progress.clone(), cancellation.stop.clone());
     let local_format = match configured_format(&converter, args, &input, &progress) {
         Ok(value) => value,
         Err(cause) => return error("convert", cause, args.json, &progress, None),
     };
+    if let Some(format) = local_format
+        && let Err(cause) = crate::output_cli::validate_destination(
+            args.output_file.as_deref(),
+            args.output_dir.as_deref(),
+            format,
+        )
+    {
+        return error("convert", cause, args.json, &progress, Some(2));
+    }
     let execute = |command: &Converter| {
         execute_conversion(
             command,
@@ -763,7 +869,7 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
             None,
         );
     }
-    let result = completed.write(args, &input, measurement, &progress);
+    let result = completed.write(args, &input, measurement.as_ref(), &progress);
     if result.is_err() {
         progress.diagnostic("convert", "result-output-unavailable");
     } else {
@@ -772,33 +878,15 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
     ExitCode::from(u8::from(result.is_err()))
 }
 
-fn write_conversion_result(
-    report: &ConversionReport,
-    download: Option<serde_json::Value>,
-    measurement: Option<MeasurementReport>,
-    as_json: bool,
-) -> std::io::Result<()> {
-    if as_json {
-        let mut value = serde_json::to_value(report).expect("conversion report serializes");
-        if let Some(download) = download {
-            value["download"] = download;
-        }
-        if let Some(measurement) = measurement {
-            value["measurements"] =
-                serde_json::to_value(measurement).expect("measurement serializes");
-        }
-        json(&value)
-    } else {
-        conversion_text(report)
-    }
-}
-
 pub fn verify(args: &VerifyArgs) -> ExitCode {
     if args.manifest.manifest_only {
         return crate::bundle_cli::verify_manifest(args);
     }
     if let Some(path) = &args.plan {
         return crate::plan_cli::verify(args, path);
+    }
+    if args.outputs.is_some() {
+        return crate::bundle_cli::verify_direct(args);
     }
     let progress = Arc::new(Progress::new(!args.json));
     progress.mark("configuration");
@@ -816,12 +904,23 @@ pub fn verify(args: &VerifyArgs) -> ExitCode {
         Err(cause) => return error("verify", cause, args.json, &progress, None),
     };
     progress.mark("input-preparation");
-    let converter = converter(
-        &args.packager_bin,
-        args.max_workers,
-        args.decode,
-        progress.clone(),
-        cancellation.stop.clone(),
+    let converter = crate::output_cli::validation(
+        converter(
+            &args.packager_bin,
+            args.max_workers,
+            args.decode,
+            progress.clone(),
+            cancellation.stop.clone(),
+        ),
+        args.manifest.manifest_profile,
+        args.manifest.external_validator,
+        crate::output_cli::manifest_tools(
+            args.manifest
+                .hls_validator_bin
+                .as_deref()
+                .unwrap_or("mediastreamvalidator"),
+            args.manifest.dash_validator_bin.as_deref().unwrap_or("php"),
+        ),
     );
     let execute =
         |command: &Converter| verify_current_output(command, args, &keys, &cancellation.stop);
@@ -844,7 +943,7 @@ pub fn verify(args: &VerifyArgs) -> ExitCode {
             None,
         );
     }
-    verification_result(&report, args.json, measurement, &progress)
+    verification_result(&report, args.json, measurement.as_ref(), &progress)
 }
 
 fn verify_current_output(
@@ -867,7 +966,7 @@ fn verify_current_output(
     let checked_output = frozen
         .as_ref()
         .map_or(output, drmr_core::conversion::FrozenSource::entrypoint);
-    let report = command.verify(VerificationRequest {
+    let report = command.verify_with_output_checks(VerificationRequest {
         source: VerificationSource {
             input: args
                 .source
@@ -938,34 +1037,33 @@ fn verify_current_output(
 fn verification_result(
     report: &VerificationReport,
     as_json: bool,
-    measurement: Option<MeasurementReport>,
+    measurement: Option<&MeasurementReport>,
     progress: &Progress,
 ) -> ExitCode {
     if !report.passed {
         progress.diagnostic("verify", "verification-mismatch");
     }
+    let mut value = serde_json::to_value(report).expect("verification report serializes");
+    if !report.passed {
+        let failure = error_value("verify", ConversionError("verification-mismatch"), progress);
+        for key in ["command", "status", "error"] {
+            value[key] = failure[key].clone();
+        }
+    }
+    crate::reporting::measurements(&mut value, measurement);
     let result = progress.write_result(|| {
-        if as_json {
-            let mut value = serde_json::to_value(report).expect("verification report serializes");
-            if !report.passed {
-                let failure =
-                    error_value("verify", ConversionError("verification-mismatch"), progress);
-                for key in ["command", "status", "error"] {
-                    value[key] = failure[key].clone();
-                }
-            }
-            if let Some(measurement) = measurement {
-                value["measurements"] =
-                    serde_json::to_value(measurement).expect("measurement serializes");
-            }
-            json(&value)
-        } else {
+        crate::reporting::render(&value, as_json, || {
             writeln!(
                 std::io::stdout().lock(),
-                "Verification: {}",
+                "Verification: {}.",
                 if report.passed { "passed" } else { "failed" }
+            )?;
+            writeln!(
+                std::io::stdout().lock(),
+                "{}",
+                decode_summary(report.decode_evidence)
             )
-        }
+        })
     });
     if result.is_err() {
         progress.diagnostic("verify", "result-output-unavailable");

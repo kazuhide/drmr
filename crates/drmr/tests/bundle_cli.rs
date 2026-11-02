@@ -21,9 +21,9 @@ fn recipe(root: &Path, value: &Value) -> PathBuf {
 }
 
 fn outputs() -> Value {
-    json!({"schema_version":1,"outputs":[
-        {"id":"dash","format":"dash","target":"clear","drms":[]},
-        {"id":"hls","format":"hls","target":"clear","drms":[]}
+    json!({"schema_version":4,"outputs":[
+        {"id":"dash","output_format":"dash","encryption":"clear","drms":[]},
+        {"id":"hls","output_format":"hls-fmp4","encryption":"clear","drms":[]}
     ]})
 }
 
@@ -97,14 +97,14 @@ fn help_exposes_output_sets_and_explicit_manifest_validator_executables() {
         let result = invoke(&[command, "--help"]);
         assert!(result.status.success());
         let help = String::from_utf8(result.stdout).unwrap();
-        assert!(help.contains("--outputs"), "{help}");
+        assert!(help.contains("--output-config"), "{help}");
         assert!(help.contains("--decode"), "{help}");
     }
     for command in ["convert", "verify"] {
         let result = invoke(&[command, "--help"]);
         let help = String::from_utf8(result.stdout).unwrap();
         assert!(help.contains("--hls-validator-bin"), "{help}");
-        assert!(help.contains("--dash-validator-bin"), "{help}");
+        assert!(help.contains("--php-bin"), "{help}");
         assert!(help.contains("manifest"), "{help}");
         assert!(help.contains("--decode"), "{help}");
         if command == "verify" {
@@ -118,7 +118,7 @@ fn manifest_only_cannot_claim_a_source_comparison_or_load_keys() {
     for extra in [
         vec!["--source", "source.mp4"],
         vec!["--keys-file", "keys.json"],
-        vec!["--plan", "plan.json"],
+        vec!["--plan-file", "plan.json"],
         vec!["--decode"],
     ] {
         let mut args = vec!["verify", "manifest.mpd", "--manifest-only"];
@@ -132,13 +132,16 @@ fn manifest_only_cannot_claim_a_source_comparison_or_load_keys() {
 #[test]
 fn output_sets_refuse_single_output_and_saved_plan_overrides() {
     for command in ["plan", "convert"] {
-        for extra in [vec!["--to", "clear"], vec!["--format", "dash"]] {
+        for extra in [
+            vec!["--encryption", "clear"],
+            vec!["--output-format", "dash"],
+        ] {
             let mut args = vec![
                 command,
                 "missing.mp4",
-                "--outputs",
+                "--output-config",
                 "outputs.json",
-                "--output",
+                "--output-dir",
                 "result",
             ];
             if command == "plan" {
@@ -152,9 +155,9 @@ fn output_sets_refuse_single_output_and_saved_plan_overrides() {
     }
     let result = invoke(&[
         "convert",
-        "--plan",
+        "--plan-file",
         "plan.json",
-        "--outputs",
+        "--output-config",
         "outputs.json",
     ]);
     assert_eq!(result.status.code(), Some(2));
@@ -167,17 +170,16 @@ fn invalid_output_recipe_fails_privately_before_source_checks_or_publication() {
     let path = recipe(
         root.path(),
         &json!({
-            "schema_version":1,"outputs":[],"license_url":"confidential-sentinel"
-        }),
+            "schema_version":4,"outputs":[],"license_url":"confidential-sentinel"}),
     );
     let destination = root.path().join("result");
     let saved = root.path().join("plan.json");
     let result = invoke(&[
         "plan",
         "missing.mp4",
-        "--outputs",
+        "--output-config",
         path.to_str().unwrap(),
-        "--output",
+        "--output-dir",
         destination.to_str().unwrap(),
         "--save",
         saved.to_str().unwrap(),
@@ -192,16 +194,16 @@ fn duplicate_recipe_fields_are_not_silently_replaced() {
     let root = drmr_core::native::private_tempdir().unwrap();
     let path = root.path().join("outputs.json");
     drmr_core::native::create_private_new(&path).unwrap().write_all(
-        br#"{"schema_version":1,"schema_version":1,"outputs":[{"id":"dash","format":"dash","target":"clear","drms":[]}]}"#
+        br#"{"schema_version":4,"schema_version":4,"outputs":[{"id":"dash","output_format":"dash","encryption":"clear","drms":[]}]}"#
     ).unwrap();
     let destination = root.path().join("result");
     let saved = root.path().join("plan.json");
     let result = invoke(&[
         "plan",
         "missing.mp4",
-        "--outputs",
+        "--output-config",
         path.to_str().unwrap(),
-        "--output",
+        "--output-dir",
         destination.to_str().unwrap(),
         "--save",
         saved.to_str().unwrap(),
@@ -219,9 +221,9 @@ fn direct_multi_output_url_still_requires_retained_download_directory() {
     let result = invoke(&[
         "convert",
         "https://example.invalid/master.m3u8?confidential-sentinel",
-        "--outputs",
+        "--output-config",
         path.to_str().unwrap(),
-        "--output",
+        "--output-dir",
         destination.to_str().unwrap(),
         "--json",
     ]);
@@ -233,11 +235,11 @@ fn direct_multi_output_url_still_requires_retained_download_directory() {
 fn validator_binary_options_are_runtime_settings_not_plan_overrides() {
     let result = invoke(&[
         "verify",
-        "--plan",
+        "--plan-file",
         "missing.plan.json",
         "--hls-validator-bin",
         "confidential-sentinel",
-        "--dash-validator-bin",
+        "--php-bin",
         "confidential-sentinel",
         "--json",
     ]);
@@ -256,9 +258,9 @@ fn common_commands_save_execute_and_freshly_verify_two_real_outputs() {
         "plan",
         "--decode",
         input.to_str().unwrap(),
-        "--outputs",
+        "--output-config",
         recipe.to_str().unwrap(),
-        "--output",
+        "--output-dir",
         destination.to_str().unwrap(),
         "--save",
         plan.to_str().unwrap(),
@@ -278,7 +280,7 @@ fn common_commands_save_execute_and_freshly_verify_two_real_outputs() {
     let saved = std::fs::read(&plan).unwrap();
     assert_eq!(value, serde_json::from_slice::<Value>(&saved).unwrap());
     assert!(!destination.exists());
-    let converted = invoke(&["convert", "--plan", plan.to_str().unwrap(), "--json"]);
+    let converted = invoke(&["convert", "--plan-file", plan.to_str().unwrap(), "--json"]);
     assert!(
         converted.status.success(),
         "{} {}",
@@ -297,7 +299,7 @@ fn common_commands_save_execute_and_freshly_verify_two_real_outputs() {
     }
     assert!(destination.join("dash/manifest.mpd").is_file());
     assert!(destination.join("hls/master.m3u8").is_file());
-    let verified = invoke(&["verify", "--plan", plan.to_str().unwrap(), "--json"]);
+    let verified = invoke(&["verify", "--plan-file", plan.to_str().unwrap(), "--json"]);
     assert!(
         verified.status.success(),
         "{} {}",
@@ -319,7 +321,7 @@ fn common_commands_save_execute_and_freshly_verify_two_real_outputs() {
     let mut changed = std::fs::read(&input).unwrap();
     *changed.last_mut().unwrap() ^= 1;
     std::fs::write(&input, changed).unwrap();
-    let refused = invoke(&["verify", "--plan", plan.to_str().unwrap(), "--json"]);
+    let refused = invoke(&["verify", "--plan-file", plan.to_str().unwrap(), "--json"]);
     failure_with_exit(&refused, "execution-plan-source-changed", 1);
     assert!(destination.join("dash/manifest.mpd").is_file());
     assert!(destination.join("hls/master.m3u8").is_file());

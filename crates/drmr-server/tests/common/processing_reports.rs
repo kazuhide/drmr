@@ -246,6 +246,8 @@ fn saved_plan(
                 output: h.output.canonicalize().unwrap().join("master.m3u8"),
             },
             required_depth,
+            manifest_profile: None,
+            external_manifest_check: None,
             processing: (schema >= 5).then(|| choice(single_mode)),
             output_options: (schema >= 7).then(|| {
                 fixture_output_options(

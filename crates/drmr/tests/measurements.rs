@@ -8,10 +8,17 @@ fn convert(source: &Path, output: &Path, measure: bool) -> std::process::Output 
         .arg("convert")
         .arg("--decode")
         .arg(source)
-        .args(["--to", "clear", "--format", "mp4", "--json", "--output"])
+        .args([
+            "--encryption",
+            "clear",
+            "--output-format",
+            "mp4",
+            "--json",
+            "--output-file",
+        ])
         .arg(output);
     if measure {
-        command.arg("--measure");
+        command.arg("--stats");
     }
     command.output().unwrap()
 }
@@ -57,7 +64,7 @@ fn measured_conversion_and_verification_keep_the_complete_proof_and_default_shap
         .arg(&target)
         .arg("--source")
         .arg(&source)
-        .args(["--measure", "--json"])
+        .args(["--stats", "--json"])
         .output()
         .unwrap();
     assert!(result.status.success(), "{:?}", result.stderr);
@@ -121,15 +128,51 @@ fn measurement_helper_observes_real_bbb_tools_in_both_worker_modes() {
 }
 
 #[test]
-fn measurements_require_json_and_failure_results_keep_the_existing_exit_contract() {
+fn statistics_work_in_readable_results_and_failures_keep_the_existing_exit_contract() {
     for command in ["convert", "verify"] {
         let output = Command::new(env!("CARGO_BIN_EXE_drmr"))
-            .args([command, "--measure"])
+            .args([command, "--stats"])
             .output()
             .unwrap();
         assert_eq!(output.status.code(), Some(2));
     }
     let directory = tempfile::tempdir().unwrap();
+    let source =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bbb/clip.mp4");
+    let result = directory.path().join("result.mp4");
+    for command in ["convert", "verify"] {
+        let mut process = Command::new(env!("CARGO_BIN_EXE_drmr"));
+        process.arg(command);
+        if command == "convert" {
+            process
+                .arg(&source)
+                .args([
+                    "--encryption",
+                    "clear",
+                    "--output-format",
+                    "mp4",
+                    "--output-file",
+                ])
+                .arg(&result);
+        } else {
+            process.arg(&result).arg("--source").arg(&source);
+        }
+        let output = process
+            .args(["--stats", "--progress", "off"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert!(text.contains("\nStatistics\n"), "{command}: {text}");
+        assert!(
+            !text.starts_with('{'),
+            "readable output must remain readable"
+        );
+    }
     let missing = directory.path().join("source-does-not-exist.mp4");
     let default = convert(&missing, &directory.path().join("plain.mp4"), false);
     let measured = convert(&missing, &directory.path().join("measured.mp4"), true);

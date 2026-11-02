@@ -12,6 +12,81 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
+pub(crate) enum PlanInput {
+    Local(PathBuf),
+    Url {
+        url: String,
+        directory: PathBuf,
+        policy: drmr_core::source::FetchPolicy,
+    },
+}
+
+impl PlanInput {
+    pub(crate) fn prepare(
+        args: &PlanArgs,
+        output: &Path,
+    ) -> Result<Self, convert_cli::ConfigurationError> {
+        match crate::download_cli::Input::parse(args.input.as_os_str())? {
+            crate::download_cli::Input::Local(path) => {
+                if args.download_dir.is_some() || args.fetch_policy.is_some() {
+                    return Err(ConversionError("download-options-require-url").into());
+                }
+                Ok(Self::Local(path))
+            }
+            crate::download_cli::Input::Url(url) => {
+                let directory = args
+                    .download_dir
+                    .as_ref()
+                    .ok_or(ConversionError("download-directory-required"))?;
+                crate::download_cli::preflight(directory, output)?;
+                let policy = drmr_core::conversion::download_policy::read(
+                    &url,
+                    args.fetch_policy.as_deref(),
+                )?;
+                Ok(Self::Url {
+                    url,
+                    directory: directory.clone(),
+                    policy,
+                })
+            }
+        }
+    }
+
+    pub(crate) fn acquire(
+        &self,
+        command: &Converter,
+        output: &Path,
+        progress: &Progress,
+    ) -> Result<Option<drmr_core::conversion::DownloadedSource>, ConversionError> {
+        match self {
+            Self::Local(_) => Ok(None),
+            Self::Url {
+                url,
+                directory,
+                policy,
+            } => {
+                progress.mark("acquisition");
+                let source = command.download_source(url, directory, output, policy)?;
+                progress.source_retained();
+                Ok(Some(source))
+            }
+        }
+    }
+
+    pub(crate) fn entrypoint<'a>(
+        &'a self,
+        downloaded: Option<&'a drmr_core::conversion::DownloadedSource>,
+    ) -> &'a Path {
+        if let Some(source) = downloaded {
+            source.entrypoint()
+        } else if let Self::Local(path) = self {
+            path
+        } else {
+            unreachable!("URL source was acquired")
+        }
+    }
+}
+
 pub(crate) fn error_hint(code: &str) -> Option<&'static str> {
     match code {
         "execution-plan-invalid" => Some(
@@ -29,9 +104,9 @@ pub(crate) fn error_hint(code: &str) -> Option<&'static str> {
         "execution-plan-not-supported" => Some(
             "The actual source or output does not satisfy this plan. Review the supported media profile and create a new plan when changing intent.",
         ),
-        "plan-requires-single-output" => {
-            Some("Use one --format with --to, or select named outputs with --outputs instead.")
-        }
+        "plan-requires-single-output" => Some(
+            "Use one --output-format with --encryption, or select named outputs with --output-config instead.",
+        ),
         _ => None,
     }
 }
@@ -94,6 +169,16 @@ impl Session {
         self
     }
 
+    fn with_validation(
+        mut self,
+        profile: Option<drmr_core::conversion::manifest_lint::ManifestProfile>,
+        external: bool,
+        tools: drmr_core::conversion::conformance::ManifestValidationTools,
+    ) -> Self {
+        self.converter = crate::output_cli::validation(self.converter, profile, external, tools);
+        self
+    }
+
     fn check_cancelled(&self, command: &str, as_json: bool) -> Result<(), ExitCode> {
         if self.cancellation.stop.is_set() {
             return Err(self.failed(command, ConversionError("cancelled"), as_json));
@@ -125,21 +210,33 @@ pub fn save(args: &PlanArgs) -> ExitCode {
         args.json,
         args.packager_bin.as_deref().unwrap_or("packager"),
         args.max_workers,
-        args.decode,
+        args.decoding.decode,
         args.keys_file.as_ref(),
     ) {
-        Ok(value) => {
-            value.with_new_intent(args.processing.unwrap_or_default(), args.dash_addressing)
-        }
+        Ok(value) => value
+            .with_new_intent(args.processing.unwrap_or_default(), args.dash_addressing)
+            .with_validation(
+                args.manifest_profile,
+                args.external_manifest_check,
+                crate::output_cli::manifest_tools("mediastreamvalidator", "php"),
+            ),
         Err(code) => return code,
     };
-    let input = args.input.as_path();
-    let output = args
-        .output
-        .as_deref()
-        .expect("clap requires the saved-plan output");
+    let Some(output) = args.destination() else {
+        return session.failed(
+            "plan",
+            ConversionError("output-destination-required"),
+            args.json,
+        );
+    };
+    let input = match PlanInput::prepare(args, output) {
+        Ok(input) => input,
+        Err(cause) => return convert_cli::error("plan", cause, args.json, &session.progress, None),
+    };
     let path = args.save.as_deref().expect("saved-plan mode was selected");
     let execute = |command: &Converter| {
+        let downloaded = input.acquire(command, output, &session.progress)?;
+        let input = input.entrypoint(downloaded.as_ref());
         if args.dash_addressing.is_some() {
             let format = formats
                 .first()
@@ -158,6 +255,14 @@ pub fn save(args: &PlanArgs) -> ExitCode {
             format: formats.first().copied(),
             target: args.to.expect("clap requires the saved-plan target"),
         })?;
+        crate::output_cli::validate_destination(
+            args.output_file.as_deref(),
+            args.output_dir.as_deref(),
+            plan.intent.format,
+        )?;
+        if let Some(source) = downloaded.as_ref() {
+            source.check(&session.cancellation.stop)?;
+        }
         if session.cancellation.stop.is_set() {
             return Err(ConversionError("cancelled"));
         }
@@ -178,23 +283,22 @@ pub fn save(args: &PlanArgs) -> ExitCode {
     if let Err(code) = session.check_cancelled("plan", args.json) {
         return code;
     }
-    let result = session.progress.write_result(|| {
-        if args.json {
-            let mut value = serde_json::to_value(&plan).expect("execution plan serializes");
-            if let Some(measurement) = measurement {
-                value["measurements"] =
-                    serde_json::to_value(measurement).expect("measurement serializes");
-            }
-            convert_cli::json(&value)
-        } else {
-            writeln!(
-                std::io::stdout().lock(),
-                "Execution plan saved.\nTarget: {} ({})\nSource fingerprints and output intent are fixed.\nSupply runtime keys separately with convert --plan.",
-                plan.intent.target.as_str(),
-                plan.intent.format.as_str(),
-            )
-        }
-    });
+    saved_result(args, &session, &plan, measurement.as_ref())
+}
+
+fn saved_result(
+    args: &PlanArgs,
+    session: &Session,
+    plan: &plan::ExecutionPlan,
+    measurement: Option<&drmr_core::conversion::measurement::MeasurementReport>,
+) -> ExitCode {
+    let mut value = serde_json::to_value(plan).expect("execution plan serializes");
+    crate::reporting::measurements(&mut value, measurement);
+    let result = session.progress.write_result(|| crate::reporting::render(&value, args.json, || {
+        writeln!(std::io::stdout().lock(),
+            "Execution plan saved.\nOutput: {} / {}\nSource fingerprints, destination and conversion conditions are fixed.\nSupply runtime keys separately with convert --plan-file.",
+            crate::output_cli::profile_name(plan.intent.format), plan.intent.target.as_str())
+    }));
     if result.is_err() {
         session
             .progress
@@ -205,26 +309,60 @@ pub fn save(args: &PlanArgs) -> ExitCode {
     ExitCode::from(u8::from(result.is_err()))
 }
 
+pub(crate) fn preparation_error(
+    command: &str,
+    cause: impl Into<convert_cli::ConfigurationError>,
+    as_json: bool,
+) -> ExitCode {
+    let progress = Progress::new(!as_json);
+    progress.mark("configuration");
+    convert_cli::error(command, cause, as_json, &progress, Some(2))
+}
+
+fn read_for_execution(
+    command: &str,
+    as_json: bool,
+    path: &Path,
+) -> Result<plan::SavedPlan, ExitCode> {
+    let saved =
+        plan::read_saved(path).map_err(|cause| preparation_error(command, cause, as_json))?;
+    let (source, format, output) = match &saved {
+        plan::SavedPlan::Single(plan) => (&plan.source, plan.source_format, &plan.intent.output),
+        plan::SavedPlan::Bundle(plan) => (&plan.source, plan.source_format, &plan.output_root),
+    };
+    crate::reporting::protect_saved(
+        &source.root,
+        source.files.iter().map(|file| file.path.as_path()),
+        format == drmr_core::inspection::OutputFormat::Mp4,
+        output,
+    )
+    .map_err(|cause| preparation_error(command, cause, as_json))?;
+    crate::reporting::ready();
+    Ok(saved)
+}
+
 pub fn convert(args: &ConvertArgs, path: &Path) -> ExitCode {
-    match plan::read_saved(path) {
+    let plan = match read_for_execution("convert", args.json, path) {
         Ok(plan::SavedPlan::Bundle(plan)) => return crate::bundle_cli::convert(args, &plan),
-        Ok(plan::SavedPlan::Single(_)) | Err(_) => {}
-    }
+        Ok(plan::SavedPlan::Single(plan)) => plan,
+        Err(code) => return code,
+    };
     let session = match Session::start(
         "convert",
         args.json,
         &args.packager_bin,
         args.max_workers,
-        args.decode,
+        args.decoding.decode,
         args.keys_file.as_ref(),
     ) {
         Ok(value) => value,
         Err(code) => return code,
     };
-    let plan = match plan::read(path) {
-        Ok(value) => value,
-        Err(cause) => return session.failed("convert", cause, args.json),
-    };
+    let session = session.with_validation(
+        plan.manifest_profile,
+        plan.external_manifest_check.unwrap_or(false),
+        crate::output_cli::manifest_tools(&args.hls_validator_bin, &args.dash_validator_bin),
+    );
     let execute = |command: &Converter| command.execute_plan(&plan, &session.keys);
     let (result, measurement) = if args.measure {
         let (result, measurement) = session.converter.measure(execute);
@@ -240,16 +378,11 @@ pub fn convert(args: &ConvertArgs, path: &Path) -> ExitCode {
         return code;
     }
     let elapsed = session.progress.elapsed();
+    let mut value = serde_json::to_value(&report).expect("conversion report serializes");
+    value["plan_id"] = plan.plan_id.clone().into();
+    crate::reporting::measurements(&mut value, measurement.as_ref());
     let result = session.progress.write_result(|| {
-        if args.json {
-            let mut value = serde_json::to_value(&report).expect("conversion report serializes");
-            value["plan_id"] = plan.plan_id.clone().into();
-            if let Some(measurement) = measurement {
-                value["measurements"] =
-                    serde_json::to_value(measurement).expect("measurement serializes");
-            }
-            convert_cli::json(&value)
-        } else {
+        crate::reporting::render(&value, args.json, || {
             convert_cli::conversion_text(&report)?;
             crate::conversion_summary::Summary::single(
                 &report,
@@ -261,7 +394,7 @@ pub fn convert(args: &ConvertArgs, path: &Path) -> ExitCode {
                 plan.intent.target,
             )
             .write(&mut std::io::stdout().lock(), elapsed, None)
-        }
+        })
     });
     if result.is_err() {
         session
@@ -274,10 +407,11 @@ pub fn convert(args: &ConvertArgs, path: &Path) -> ExitCode {
 }
 
 pub fn verify(args: &VerifyArgs, path: &Path) -> ExitCode {
-    match plan::read_saved(path) {
+    let plan = match read_for_execution("verify", args.json, path) {
         Ok(plan::SavedPlan::Bundle(plan)) => return crate::bundle_cli::verify(args, &plan),
-        Ok(plan::SavedPlan::Single(_)) | Err(_) => {}
-    }
+        Ok(plan::SavedPlan::Single(plan)) => plan,
+        Err(code) => return code,
+    };
     let session = match Session::start(
         "verify",
         args.json,
@@ -289,10 +423,17 @@ pub fn verify(args: &VerifyArgs, path: &Path) -> ExitCode {
         Ok(value) => value,
         Err(code) => return code,
     };
-    let plan = match plan::read(path) {
-        Ok(value) => value,
-        Err(cause) => return session.failed("verify", cause, args.json),
-    };
+    let session = session.with_validation(
+        plan.manifest_profile,
+        plan.external_manifest_check.unwrap_or(false),
+        crate::output_cli::manifest_tools(
+            args.manifest
+                .hls_validator_bin
+                .as_deref()
+                .unwrap_or("mediastreamvalidator"),
+            args.manifest.dash_validator_bin.as_deref().unwrap_or("php"),
+        ),
+    );
     let execute = |command: &Converter| command.verify_plan(&plan, &session.keys);
     let (result, measurement) = if args.measure {
         let (result, measurement) = session.converter.measure(execute);
@@ -314,32 +455,21 @@ pub fn verify(args: &VerifyArgs, path: &Path) -> ExitCode {
             .progress
             .diagnostic("verify", "verification-mismatch");
     }
-    let result = session.progress.write_result(|| {
-        if args.json {
-            let mut value = serde_json::to_value(report).expect("plan verification serializes");
-            if !passed {
-                let failure = convert_cli::error_value(
-                    "verify",
-                    ConversionError("verification-mismatch"),
-                    &session.progress,
-                );
-                for key in ["command", "status", "error"] {
-                    value[key] = failure[key].clone();
-                }
-            }
-            if let Some(measurement) = measurement {
-                value["measurements"] =
-                    serde_json::to_value(measurement).expect("measurement serializes");
-            }
-            convert_cli::json(&value)
-        } else {
-            writeln!(
-                std::io::stdout().lock(),
-                "Plan verification: {} (source fingerprints, output intent, and media correspondence).",
-                if passed { "passed" } else { "failed" }
-            )
+    let mut value = serde_json::to_value(&report).expect("plan verification serializes");
+    if !passed {
+        let failure = convert_cli::error_value(
+            "verify",
+            ConversionError("verification-mismatch"),
+            &session.progress,
+        );
+        for key in ["command", "status", "error"] {
+            value[key] = failure[key].clone();
         }
-    });
+    }
+    crate::reporting::measurements(&mut value, measurement.as_ref());
+    let result = session.progress.write_result(|| crate::reporting::render(&value, args.json, || {
+        writeln!(std::io::stdout().lock(), "Plan verification: {} (source fingerprints, output intent, and media correspondence).", if passed { "passed" } else { "failed" })
+    }));
     if result.is_err() {
         session
             .progress

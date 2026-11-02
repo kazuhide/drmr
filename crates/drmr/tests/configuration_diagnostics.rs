@@ -28,7 +28,7 @@ fn check(result: &std::process::Output, command: &str, code: &str) -> Value {
 fn typed_key_errors_keep_existing_codes_and_show_only_schema_fields_and_indices() {
     let root = drmr_core::native::private_tempdir().unwrap();
     let keys = root.path().join(format!("{CANARY}.json"));
-    let value = json!({"schema_version":1,"input":{"keys":[
+    let value = json!({"schema_version":2,"outputs":{},"input":{"keys":[
         {"kid":"000102030405060708090a0b0c0d0e0f","key":false}
     ]},CANARY:CANARY});
     write(&keys, value.to_string().as_bytes());
@@ -38,14 +38,26 @@ fn typed_key_errors_keep_existing_codes_and_show_only_schema_fields_and_indices(
         process.arg(&keys).args(["--json", "--progress", "json"]);
         match command {
             "plan" => {
-                process.args(["--to", "clear", "--format", "dash", "--output"]);
+                process.args([
+                    "--encryption",
+                    "clear",
+                    "--output-format",
+                    "dash",
+                    "--output-dir",
+                ]);
                 process
                     .arg(root.path().join("result"))
                     .arg("--save")
                     .arg(root.path().join("plan.json"));
             }
             "convert" => {
-                process.args(["--to", "clear", "--format", "dash", "--output"]);
+                process.args([
+                    "--encryption",
+                    "clear",
+                    "--output-format",
+                    "dash",
+                    "--output-dir",
+                ]);
                 process.arg(root.path().join("result"));
             }
             "verify" => {
@@ -70,16 +82,16 @@ fn typed_key_errors_keep_existing_codes_and_show_only_schema_fields_and_indices(
 fn output_spec_errors_report_array_positions_without_ids_or_private_values() {
     let root = drmr_core::native::private_tempdir().unwrap();
     let spec = root.path().join(format!("{CANARY}.json"));
-    write(&spec, json!({"schema_version":3,"outputs":[{"id":CANARY,"format":true,"target":"clear","drms":[]}]}).to_string().as_bytes());
+    write(&spec, json!({"schema_version":4,"outputs":[{"id":CANARY,"output_format":true,"encryption":"clear","drms":[]}]}).to_string().as_bytes());
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bbb/clip.mp4");
     for command in ["plan", "convert"] {
         let mut process = Command::new(env!("CARGO_BIN_EXE_drmr"));
         process
             .arg(command)
             .arg(&source)
-            .arg("--outputs")
+            .arg("--output-config")
             .arg(&spec)
-            .arg("--output")
+            .arg("--output-dir")
             .arg(root.path().join("result"))
             .arg("--json");
         if command == "plan" {
@@ -89,7 +101,7 @@ fn output_spec_errors_report_array_positions_without_ids_or_private_values() {
         assert_eq!(report["error"]["configuration"]["file"], "outputs");
         assert_eq!(
             report["error"]["configuration"]["path"],
-            json!(["outputs", 0, "format"])
+            json!(["outputs", 0, "output_format"])
         );
         assert_eq!(
             report["error"]["configuration"]["expected"],
@@ -104,9 +116,9 @@ fn key_diagnostics_are_safe_in_human_json_and_all_progress_modes() {
     let keys = root.path().join(format!("{CANARY}.json"));
     write(
         &keys,
-        json!({"schema_version":1,"input":{"keys":[
+        json!({"schema_version":2,"input":{"keys":[
             {"kid":"000102030405060708090a0b0c0d0e0f","key":CANARY}
-        ]}})
+        ]},"outputs":{}})
         .to_string()
         .as_bytes(),
     );
@@ -124,14 +136,26 @@ fn key_diagnostics_are_safe_in_human_json_and_all_progress_modes() {
                 match command {
                     "plan" => {
                         process
-                            .args(["--to", "clear", "--format", "dash", "--output"])
+                            .args([
+                                "--encryption",
+                                "clear",
+                                "--output-format",
+                                "dash",
+                                "--output-dir",
+                            ])
                             .arg(root.path().join("result"))
                             .arg("--save")
                             .arg(root.path().join("plan.json"));
                     }
                     "convert" => {
                         process
-                            .args(["--to", "clear", "--format", "dash", "--output"])
+                            .args([
+                                "--encryption",
+                                "clear",
+                                "--output-format",
+                                "dash",
+                                "--output-dir",
+                            ])
                             .arg(root.path().join("result"));
                     }
                     "verify" => {
@@ -173,13 +197,13 @@ fn named_output_keys_never_disclose_the_operator_output_id() {
         .to_string()
         .as_bytes(),
     );
-    write(&spec, br#"{"schema_version":3,"outputs":[{"id":"clear","format":"dash","target":"clear","drms":[]}]}"#);
+    write(&spec, br#"{"schema_version":4,"outputs":[{"id":"clear","output_format":"dash","encryption":"clear","drms":[]}]}"#);
     let output = Command::new(env!("CARGO_BIN_EXE_drmr"))
-        .args(["convert", "missing.mp4", "--outputs"])
+        .args(["convert", "missing.mp4", "--output-config"])
         .arg(&spec)
         .arg("--keys-file")
         .arg(&keys)
-        .arg("--output")
+        .arg("--output-dir")
         .arg(root.path().join("result"))
         .arg("--json")
         .output()

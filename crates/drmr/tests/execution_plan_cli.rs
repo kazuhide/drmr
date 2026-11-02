@@ -36,10 +36,10 @@ fn analyze_help_explains_full_input_checks_separately_from_metadata_only() {
     let help = String::from_utf8(result.stdout).unwrap();
     for option in [
         "--download-dir",
-        "--fetch-policy",
+        "--fetch-config",
         "--keys-file",
         "--json",
-        "--measure",
+        "--stats",
     ] {
         assert!(help.contains(option), "{help}");
     }
@@ -70,7 +70,7 @@ fn analyze_rejects_remote_options_for_local_input_without_creating_a_directory()
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("confidential-sentinel.mp4");
     let download = root.path().join("source");
-    for flag in ["--download-dir", "--fetch-policy"] {
+    for flag in ["--download-dir", "--fetch-config"] {
         let result = invoke(&[
             "analyze",
             source.to_str().unwrap(),
@@ -84,8 +84,27 @@ fn analyze_rejects_remote_options_for_local_input_without_creating_a_directory()
 }
 
 #[test]
-fn analyze_measurements_require_json() {
-    usage(&invoke(&["analyze", "missing.mp4", "--measure"]));
+fn analyze_statistics_are_available_in_readable_results() {
+    let input =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bbb/clip.mp4");
+    let result = invoke(&[
+        "analyze",
+        input.to_str().unwrap(),
+        "--stats",
+        "--progress",
+        "off",
+    ]);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let text = String::from_utf8(result.stdout).unwrap();
+    assert!(text.contains("\nStatistics\n"), "{text}");
+    assert!(
+        !text.starts_with('{'),
+        "readable output must remain readable"
+    );
 }
 
 #[cfg(unix)]
@@ -102,11 +121,11 @@ fn saved_plan_refuses_a_shared_writable_parent_before_reading_media() {
     let result = invoke(&[
         "plan",
         input.to_str().unwrap(),
-        "--to",
+        "--encryption",
         "clear",
-        "--format",
+        "--output-format",
         "dash",
-        "--output",
+        "--output-dir",
         output.to_str().unwrap(),
         "--save",
         plan.to_str().unwrap(),
@@ -125,7 +144,7 @@ fn source_analysis_and_saved_planning_keep_invalid_key_configuration_private() {
     let keys = root.path().join("confidential-sentinel.json");
     drmr_core::native::create_private_new(&keys)
         .unwrap()
-        .write_all(br#"{"schema_version":1,"output":{"key":"confidential-sentinel"}}"#)
+        .write_all(br#"{"schema_version":2,"outputs":{"default":{"key":"confidential-sentinel"}}}"#)
         .unwrap();
     let result = invoke(&[
         "analyze",
@@ -140,9 +159,9 @@ fn source_analysis_and_saved_planning_keep_invalid_key_configuration_private() {
     let result = invoke(&[
         "plan",
         "missing.mp4",
-        "--to",
+        "--encryption",
         "clear",
-        "--output",
+        "--output-file",
         output.to_str().unwrap(),
         "--save",
         plan.to_str().unwrap(),
@@ -163,7 +182,7 @@ fn saving_a_plan_requires_a_result_destination_and_one_output_format() {
     usage(&invoke(&[
         "plan",
         "missing.mp4",
-        "--to",
+        "--encryption",
         "clear",
         "--save",
         plan.to_str().unwrap(),
@@ -171,19 +190,19 @@ fn saving_a_plan_requires_a_result_destination_and_one_output_format() {
     usage(&invoke(&[
         "plan",
         "missing.mp4",
-        "--to",
+        "--encryption",
         "clear",
-        "--output",
+        "--output-file",
         output.to_str().unwrap(),
     ]));
     let result = invoke(&[
         "plan",
         "confidential-sentinel.m3u8",
-        "--to",
+        "--encryption",
         "cbcs",
-        "--format",
-        "dash,hls",
-        "--output",
+        "--output-format",
+        "dash,hls-fmp4",
+        "--output-dir",
         output.to_str().unwrap(),
         "--save",
         plan.to_str().unwrap(),
@@ -199,7 +218,7 @@ fn legacy_plan_modes_refuse_execution_only_options() {
     usage(&invoke(&[
         "plan",
         "missing.mp4",
-        "--to",
+        "--encryption",
         "clear",
         "--keys-file",
         "keys.json",
@@ -210,13 +229,13 @@ fn legacy_plan_modes_refuse_execution_only_options() {
         "missing.mpd",
         "--save",
         "plan.json",
-        "--output",
+        "--output-file",
         "result",
     ]));
     usage(&invoke(&[
         "plan",
         "missing.mp4",
-        "--to",
+        "--encryption",
         "clear",
         "--packager-bin",
         "packager",
@@ -224,7 +243,7 @@ fn legacy_plan_modes_refuse_execution_only_options() {
     usage(&invoke(&[
         "plan",
         "missing.mp4",
-        "--to",
+        "--encryption",
         "clear",
         "--max-workers",
         "1",
@@ -235,26 +254,32 @@ fn legacy_plan_modes_refuse_execution_only_options() {
 fn convert_plan_refuses_every_media_intent_override() {
     for extra in [
         vec!["input.mp4"],
-        vec!["--to", "clear"],
-        vec!["--format", "dash"],
-        vec!["--output", "result"],
+        vec!["--encryption", "clear"],
+        vec!["--output-format", "dash"],
+        vec!["--output-file", "result"],
+        vec!["--output-dir", "result"],
         vec!["--download-dir", "source"],
-        vec!["--fetch-policy", "fetch.json"],
+        vec!["--fetch-config", "fetch.json"],
     ] {
-        let mut args = vec!["convert", "--plan", "plan.json"];
+        let mut args = vec!["convert", "--plan-file", "plan.json"];
         args.extend(extra);
         usage(&invoke(&args));
     }
     usage(&invoke(&["convert"]));
-    usage(&invoke(&["convert", "input.mp4", "--to", "clear"]));
+    usage(&invoke(&["convert", "input.mp4", "--encryption", "clear"]));
 }
 
 #[test]
 fn verify_plan_refuses_source_and_result_overrides() {
-    usage(&invoke(&["verify", "--plan", "plan.json", "result.mpd"]));
     usage(&invoke(&[
         "verify",
-        "--plan",
+        "--plan-file",
+        "plan.json",
+        "result.mpd",
+    ]));
+    usage(&invoke(&[
+        "verify",
+        "--plan-file",
         "plan.json",
         "--source",
         "source.m3u8",
@@ -268,7 +293,13 @@ fn legacy_intent_json_is_not_accepted_as_an_execution_plan() {
     let root = drmr_core::native::private_tempdir().unwrap();
     let source = root.path().join("input.m3u8");
     std::fs::write(&source, "#EXTM3U\n#EXTINF:2,\nmissing.ts\n#EXT-X-ENDLIST\n").unwrap();
-    let described = invoke(&["plan", source.to_str().unwrap(), "--to", "clear", "--json"]);
+    let described = invoke(&[
+        "plan",
+        source.to_str().unwrap(),
+        "--encryption",
+        "clear",
+        "--json",
+    ]);
     assert!(described.status.success());
     let plan = root.path().join("confidential-sentinel.json");
     drmr_core::native::create_private_new(&plan)
@@ -276,7 +307,7 @@ fn legacy_intent_json_is_not_accepted_as_an_execution_plan() {
         .write_all(&described.stdout)
         .unwrap();
     for command in ["convert", "verify"] {
-        let result = invoke(&[command, "--plan", plan.to_str().unwrap(), "--json"]);
+        let result = invoke(&[command, "--plan-file", plan.to_str().unwrap(), "--json"]);
         failure(&result, command, "execution-plan-invalid", 2);
     }
     assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 2);

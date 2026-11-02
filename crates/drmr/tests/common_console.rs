@@ -203,7 +203,7 @@ fn prepare_fragmented_video(source: &Path) {
 
 fn verify_exported_plan(saved: &Path, plan_id: &str) {
     let external = Command::new(env!("CARGO_BIN_EXE_drmr"))
-        .args(["verify", "--decode", "--plan"])
+        .args(["verify", "--decode", "--plan-file"])
         .arg(saved)
         .arg("--json")
         .output()
@@ -262,8 +262,8 @@ fn real_http_flow_saves_exports_executes_and_independently_verifies_the_same_cli
     ));
     assert_eq!(analysis["report"]["input_admitted"], true);
     let planned = client.job(&submit(2, json!({"kind":"plan","analysis_ref":analyzed["analysis_ref"],"output_parent_ref":parent_ref,"destination_name":"results","outputs":[
-        {"id":"dash","format":"dash","target":"clear","drms":[],"conformance":"none","processing":"auto"},
-        {"id":"hls","format":"hls","target":"clear","drms":[],"conformance":"none","processing":"stitch"}
+        {"id":"dash","output_format":"dash","encryption":"clear","drms":[],"external_manifest_check":false,"processing":"auto"},
+        {"id":"hls","output_format":"hls-fmp4","encryption":"clear","drms":[],"external_manifest_check":false,"processing":"stitch"}
     ]})), "succeeded");
     let plan_ref = planned["plan_ref"].clone();
     let plan = client.get(&format!("/api/common/plans/{}", plan_ref.as_str().unwrap()));
@@ -371,7 +371,7 @@ fn a_valid_source_changed_after_analysis_cannot_publish_a_new_plan() {
     let qualified: Value = serde_json::from_slice(&changed.stdout).unwrap();
     assert_eq!(qualified["input_admitted"], true);
 
-    let rejected = client.job(&submit(2, json!({"kind":"plan","analysis_ref":analyzed["analysis_ref"],"output_parent_ref":parent_ref,"destination_name":"rejected","outputs":[{"id":"clear","format":"mp4","target":"clear","drms":[],"conformance":"none"}]})), "failed");
+    let rejected = client.job(&submit(2, json!({"kind":"plan","analysis_ref":analyzed["analysis_ref"],"output_parent_ref":parent_ref,"destination_name":"rejected","outputs":[{"id":"clear","output_format":"mp4","encryption":"clear","drms":[],"external_manifest_check":false}]})), "failed");
     assert_eq!(rejected["error"]["code"], "analysis-source-changed");
     assert_eq!(rejected["plan_ref"], Value::Null);
     let current = client.get(&format!(

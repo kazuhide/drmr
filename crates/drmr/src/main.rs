@@ -5,6 +5,8 @@
 mod analyze_cli;
 mod bundle_cli;
 mod cancellation;
+#[cfg(test)]
+mod cli_contract_tests;
 mod common_job;
 mod conversion_summary;
 mod convert_cli;
@@ -14,10 +16,11 @@ mod inspect_cli;
 mod output_cli;
 mod plan_cli;
 mod progress;
+mod reporting;
 
 use clap::{Parser, Subcommand};
 use drmr_server::{JobCli, ServeArgs};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 const EXIT_INVALID: u8 = 2;
@@ -26,12 +29,19 @@ const EXIT_INVALID: u8 = 2;
 #[command(
     name = "drmr",
     version,
-    about = "Inspect and repackage streaming media with digital rights management (DRM)",
-    after_help = "Getting started:\n  drmr doctor                       Check external media tools\n  drmr analyze media.mp4 --metadata-only  Read metadata without keys or media tools\n  drmr analyze media.mp4             Check the complete source media\n  drmr plan media.mp4 --to cbcs       Describe conversion intent\n  drmr convert input.mpd --to clear --output clear-media\n  drmr verify clear-media/manifest.mpd --source input.mpd\n\nSaved-plan workflow:\n  drmr analyze URL --download-dir SOURCE_DIR\n  drmr plan SOURCE_DIR/input.m3u8 --to cbcs --format dash --output RESULT_DIR --save PLAN.json\n  drmr convert --plan PLAN.json --keys-file KEYS.json\n  drmr verify --plan PLAN.json --keys-file KEYS.json\n\nRetained entrypoints are SOURCE_DIR/input.m3u8 (HLS), input.mpd (DASH), or input.mp4 (MP4).\nFor URL metadata without retaining a source, use 'drmr analyze URL --metadata-only'.\nSupported URL input also works directly with 'drmr convert URL --download-dir SOURCE_DIR'.\nDASH and HLS describe streaming media using manifests or playlists.\nUse 'drmr help <COMMAND>' for detailed command help."
+    about = "Analyze, convert and verify content encryption in MP4, HLS and DASH",
+    after_help = "Getting started:\n  drmr doctor                       Check external media tools\n  drmr analyze media.mp4 --metadata-only  Read metadata without keys or media tools\n  drmr analyze media.mp4             Check the complete source media\n  drmr plan media.mp4 --encryption cbcs       Describe conversion intent\n  drmr convert input.mpd --encryption clear --output-dir clear-media\n  drmr verify clear-media/manifest.mpd --source input.mpd\n\nSaved-plan workflow:\n  drmr analyze URL --download-dir SOURCE_DIR\n  drmr plan SOURCE_DIR/input.m3u8 --encryption cbcs --output-format dash --output-dir RESULT_DIR --save PLAN.json\n  drmr convert --plan-file PLAN.json --keys-file KEYS.json\n  drmr verify --plan-file PLAN.json --keys-file KEYS.json\n\nRetained entrypoints are SOURCE_DIR/input.m3u8 (HLS), input.mpd (DASH), or input.mp4 (MP4).\nFor URL metadata without retaining a source, use 'drmr analyze URL --metadata-only'.\nSupported URL input also works directly with 'drmr convert URL --download-dir SOURCE_DIR'.\nDASH and HLS describe streaming media using manifests or playlists.\nUse 'drmr help <COMMAND>' for detailed command help."
 )]
 struct Cli {
     /// Progress on stderr: auto shows text interactively and keeps redirected JSON quiet.
-    #[arg(long, global = true, value_enum, default_value = "auto")]
+    #[arg(
+        long,
+        global = true,
+        value_enum,
+        default_value = "auto",
+        value_name = "MODE",
+        help_heading = "Reporting"
+    )]
     progress: progress::Mode,
     #[command(subcommand)]
     command: Command,
@@ -58,6 +68,12 @@ enum Command {
         /// Check a route's native tools, adding decoder tools with --decode; other tools are optional.
         #[arg(long, default_value = "all", value_parser = ["all", "progressive-mp4", "fragmented-mp4", "dash-presentation", "fmp4-hls-presentation", "mpeg-ts-hls", "mpeg-ts-dash", "mpeg-ts-sample-aes-hls", "mpeg-ts-hls-ts", "fmp4-hls-ts", "fmp4-segments", "mpeg-ts-segments"])]
         route: String,
+        /// Derive conservative tool requirements from a canonical output configuration.
+        #[arg(long = "output-config", conflicts_with = "route")]
+        outputs: Option<PathBuf>,
+        /// Write the same structured result to a new private JSON file.
+        #[arg(long)]
+        report_file: Option<PathBuf>,
     },
     /// Read metadata or check complete MP4, DASH, or HLS input media.
     Analyze(analyze_cli::AnalyzeArgs),
@@ -67,7 +83,7 @@ enum Command {
     Verify(convert_cli::VerifyArgs),
     /// Describe conversion intent or save an execution plan.
     #[command(
-        after_help = "With INPUT: describe a requested conversion without executing it.\nWith --save FILE and --output PATH: validate the complete source and save its fingerprints and output intent. Use --outputs FILE for several results with separate DRM and manifest-check policies. Keys remain separate.\n\nExamples:\n  drmr plan source/input.m3u8 --outputs outputs.json --output converted --save conversion.plan.json\n  drmr convert --plan conversion.plan.json --keys-file keys.json\n  drmr verify --plan conversion.plan.json --keys-file keys.json"
+        after_help = "With INPUT: describe a requested conversion without executing it.\nWith --save FILE and --output-dir PATH: validate the complete source and save its fingerprints and output intent. Use --output-config FILE for several results with separate DRM and manifest-check policies. Keys remain separate.\n\nExamples:\n  drmr plan source/input.m3u8 --output-config outputs.json --output-dir converted --save conversion.plan.json\n  drmr convert --plan-file conversion.plan.json --keys-file keys.json\n  drmr verify --plan-file conversion.plan.json --keys-file keys.json"
     )]
     Plan(inspect_cli::PlanArgs),
     /// Start the local web console, configured using DRMR_* environment variables.
@@ -114,6 +130,25 @@ fn main() -> ExitCode {
         Command::Serve(_) => "serve",
     };
     progress::configure(cli.progress, command_name);
+    let (report_file, as_json) = match &command {
+        Command::Doctor {
+            report_file, json, ..
+        } => (report_file.as_deref(), *json),
+        Command::Analyze(args) => (args.report_file.as_deref(), args.json),
+        Command::Plan(args) => (args.report_file.as_deref(), args.json),
+        Command::Convert(args) => (args.report_file.as_deref(), args.json),
+        Command::Verify(args) => (args.report_file.as_deref(), args.json),
+        Command::Version | Command::Serve(_) => (None, false),
+    };
+    if let Err(cause) = reporting::configure(report_file).and_then(|()| protect_report(&command)) {
+        return convert_cli::error(
+            command_name,
+            cause,
+            as_json,
+            &progress::Progress::new(!as_json),
+            Some(2),
+        );
+    }
     match command {
         Command::Version => {
             println!("drmr {}", drmr_core::VERSION);
@@ -124,13 +159,98 @@ fn main() -> ExitCode {
             probe,
             decode,
             route,
-        } => doctor::run(json, probe, decode, &route),
+            outputs,
+            report_file: _,
+        } => doctor::run(json, probe, decode, &route, outputs.as_deref()),
         Command::Analyze(args) => analyze_cli::analyze(&args),
         Command::Convert(args) => convert_cli::convert(&args),
         Command::Verify(args) => convert_cli::verify(&args),
         Command::Plan(args) => inspect_cli::plan(&args),
         Command::Serve(args) => serve(&args),
     }
+}
+
+fn protect_report(command: &Command) -> Result<(), drmr_core::conversion::ConversionError> {
+    if !reporting::enabled() {
+        return Ok(());
+    }
+    let source = |path: &Path| match crate::download_cli::Input::parse(path.as_os_str())? {
+        crate::download_cli::Input::Url(_) => Ok(()),
+        crate::download_cli::Input::Local(path) => reporting::protect_source(&path),
+    };
+    let files = |paths: &[Option<&PathBuf>]| -> Result<(), drmr_core::conversion::ConversionError> {
+        for path in paths.iter().flatten() {
+            reporting::protect(path, false)?;
+        }
+        Ok(())
+    };
+    match command {
+        Command::Analyze(args) => {
+            source(&args.input)?;
+            files(&[args.keys_file.as_ref(), args.fetch_policy.as_ref()])?;
+            if let Some(path) = &args.download_dir {
+                reporting::protect(path, true)?;
+            }
+        }
+        Command::Plan(args) => {
+            source(&args.input)?;
+            files(&[
+                args.keys_file.as_ref(),
+                args.fetch_policy.as_ref(),
+                args.outputs.as_ref(),
+                args.save.as_ref(),
+            ])?;
+            for path in [&args.download_dir, &args.output_dir, &args.output_file]
+                .into_iter()
+                .flatten()
+            {
+                reporting::protect(path, true)?;
+            }
+        }
+        Command::Convert(args) => {
+            if let Some(input) = &args.input {
+                source(input)?;
+            }
+            files(&[
+                args.keys_file.as_ref(),
+                args.fetch_policy.as_ref(),
+                args.outputs.as_ref(),
+                args.plan.as_ref(),
+            ])?;
+            for path in [&args.download_dir, &args.output_dir, &args.output_file]
+                .into_iter()
+                .flatten()
+            {
+                reporting::protect(path, true)?;
+            }
+        }
+        Command::Verify(args) => {
+            if let Some(input) = &args.source {
+                source(input)?;
+            }
+            if let Some(output) = &args.output {
+                reporting::protect(output, true)?;
+            }
+            files(&[
+                args.keys_file.as_ref(),
+                args.outputs.as_ref(),
+                args.plan.as_ref(),
+            ])?;
+        }
+        Command::Doctor { outputs, .. } => files(&[outputs.as_ref()])?,
+        Command::Version | Command::Serve(_) => {}
+    }
+    let pending_paths = match command {
+        Command::Plan(args) => args.outputs.is_some(),
+        Command::Convert(args) => args.plan.is_some() || args.outputs.is_some(),
+        Command::Verify(args) => args.plan.is_some() || args.outputs.is_some(),
+        Command::Doctor { outputs, .. } => outputs.is_some(),
+        Command::Analyze(_) | Command::Version | Command::Serve(_) => false,
+    };
+    if !pending_paths {
+        reporting::ready();
+    }
+    Ok(())
 }
 
 /// Start the local console with this executable for its shared CLI operations.

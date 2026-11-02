@@ -69,14 +69,14 @@ fn real_convert_and_verify_keep_json_machine_readable_and_keys_private() {
     );
     private_config(
         &keys,
-        r#"{"schema_version":1,"output":{"kid":"00000000000000000000000000000002","key":"22222222222222222222222222222222"}}"#,
+        r#"{"schema_version":2,"outputs":{"default":{"kid":"00000000000000000000000000000002","key":"22222222222222222222222222222222"}}}"#,
     );
     let result = run(&[
         "convert",
         source.to_str().unwrap(),
-        "--to",
+        "--encryption",
         "cbcs",
-        "--output",
+        "--output-file",
         output.to_str().unwrap(),
         "--keys-file",
         keys.to_str().unwrap(),
@@ -90,7 +90,7 @@ fn real_convert_and_verify_keep_json_machine_readable_and_keys_private() {
     assert!(!text(&result.stderr).contains("222222"));
     private_config(
         &verify_keys,
-        r#"{"schema_version":1,"output":{"kid":"00000000000000000000000000000002","key":"22222222222222222222222222222222"}}"#,
+        r#"{"schema_version":2,"outputs":{"default":{"kid":"00000000000000000000000000000002","key":"22222222222222222222222222222222"}}}"#,
     );
     let result = run(&[
         "verify",
@@ -115,14 +115,14 @@ fn invalid_key_configuration_fails_without_echoing_secrets_or_publishing_output(
     let output = dir.path().join("output.mp4");
     private_config(
         &keys,
-        r#"{"schema_version":1,"output":{"kid":"x","key":"secret-sentinel"}}"#,
+        r#"{"schema_version":2,"outputs":{"default":{"kid":"x","key":"secret-sentinel"}}}"#,
     );
     let result = run(&[
         "convert",
         "source.mp4",
-        "--to",
+        "--encryption",
         "cbcs",
-        "--output",
+        "--output-file",
         output.to_str().unwrap(),
         "--keys-file",
         keys.to_str().unwrap(),
@@ -143,9 +143,9 @@ fn generic_worker_limits_are_optional_positive_upper_bounds() {
         let result = run(&[
             "convert",
             "source.mp4",
-            "--to",
+            "--encryption",
             "clear",
-            "--output",
+            "--output-file",
             "new.mp4",
             "--max-workers",
             limit,

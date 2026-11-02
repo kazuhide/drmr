@@ -24,12 +24,11 @@ fn real_two_key_finite_convert_and_verify_use_the_input_key_domain_only() {
     drmr_core::native::create_private_dir_all(&root).unwrap();
     let keyfile = root.join("operator.json");
     let body = serde_json::json!({
-        "schema_version": 1,
+        "schema_version": 2,
         "input": { "keys": [
             {"kid": "000102030405060708090a0b0c0d0e0f", "key": VIDEO_KEY},
             {"kid": "303132333435363738393a3b3c3d3e3f", "key": AUDIO_KEY}
-        ] }
-    })
+        ] },"outputs":{}})
     .to_string();
     drmr_core::native::create_private_new(&keyfile)
         .unwrap()
@@ -42,7 +41,13 @@ fn real_two_key_finite_convert_and_verify_use_the_input_key_domain_only() {
         .arg("convert")
         .arg("--decode")
         .arg(&source)
-        .args(["--to", "clear", "--format", "mp4", "--output"])
+        .args([
+            "--encryption",
+            "clear",
+            "--output-format",
+            "mp4",
+            "--output-file",
+        ])
         .arg(&output)
         .arg("--keys-file")
         .arg(&keyfile)

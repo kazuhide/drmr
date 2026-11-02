@@ -56,8 +56,15 @@ fn planning_requires_a_media_input_and_rejects_catalog_only_flags() {
     );
     for args in [
         vec!["plan", "--mpd", "manifest.mpd"],
-        vec!["plan", "media.mp4", "--to", "clear", "--asset-id", "asset"],
-        vec!["plan", "--to", "clear"],
+        vec![
+            "plan",
+            "media.mp4",
+            "--encryption",
+            "clear",
+            "--asset-id",
+            "asset",
+        ],
+        vec!["plan", "--encryption", "clear"],
     ] {
         assert_eq!(drmr(&args).status.code(), Some(2), "{args:?}");
     }

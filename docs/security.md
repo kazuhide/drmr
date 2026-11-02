@@ -108,6 +108,9 @@ from successful JSON reports or sanitize the original downloaded manifests.
 `--report-file` saves the same result JSON and can therefore retain local paths
 and file fingerprints. It creates a new file outside the input and output trees
 and refuses to replace another file, including a plan or configuration file.
+Manifest inputs protect their containing directory even without a filename
+extension. If a plan or configuration cannot be loaded safely, the failure is
+printed without creating a report file.
 Protect this report before sharing it. `--stats` adds numeric measurements;
 it does not permit keys, request headers or source URLs in the report.
 

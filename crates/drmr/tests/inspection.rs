@@ -75,7 +75,13 @@ fn plan_separates_input_and_output_key_roles_and_explains_incompatible_formats()
         r#"<MPD xmlns="urn:mpeg:dash:schema:mpd:2011"><Period><AdaptationSet contentType="video"><ContentProtection schemeIdUri="urn:mpeg:dash:mp4protection:2011" value="cenc"/><Representation id="v0" codecs="avc1.64001f"/></AdaptationSet></Period></MPD>"#,
     );
     let output = run(&[
-        "plan", &input, "--to", "cbcs", "--format", "hls,dash", "--json",
+        "plan",
+        &input,
+        "--encryption",
+        "cbcs",
+        "--output-format",
+        "hls-fmp4,dash",
+        "--json",
     ]);
     assert!(
         output.status.success(),
@@ -92,9 +98,9 @@ fn plan_separates_input_and_output_key_roles_and_explains_incompatible_formats()
     let incompatible = run(&[
         "plan",
         &input,
-        "--to",
+        "--encryption",
         "hls-aes128",
-        "--format",
+        "--output-format",
         "mp4",
         "--json",
     ]);
@@ -118,7 +124,7 @@ fn errors_do_not_echo_secret_source_urls_and_new_plan_requires_a_target() {
     assert!(!String::from_utf8_lossy(&output.stdout).contains("do-not-print"));
     let output = run(&["plan", "source.mpd"]);
     assert_eq!(output.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("--to"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--encryption"));
 }
 
 #[test]
@@ -129,7 +135,14 @@ fn human_plan_explains_unknown_sample_coverage_and_conditional_tools_without_run
         "input.mpd",
         r#"<MPD><Period><AdaptationSet contentType="video"><ContentProtection schemeIdUri="urn:mpeg:dash:mp4protection:2011" value="cenc"/><Representation codecs="avc1.64001f"/></AdaptationSet></Period></MPD>"#,
     );
-    let output = run(&["plan", &input, "--to", "cbcs", "--format", "hls"]);
+    let output = run(&[
+        "plan",
+        &input,
+        "--encryption",
+        "cbcs",
+        "--output-format",
+        "hls-fmp4",
+    ]);
     assert!(output.status.success());
     let text = String::from_utf8(output.stdout).unwrap();
     assert!(text.contains("AES-128 in counter mode"));
@@ -157,7 +170,13 @@ fn known_text_declarations_have_no_candidate_in_human_or_json_plan() {
         "<MPD><Period><AdaptationSet contentType=\"text\"><Representation codecs=\"wvtt\"/></AdaptationSet></Period></MPD>",
     );
     let output = run(&[
-        "plan", &input, "--to", "clear", "--format", "dash", "--json",
+        "plan",
+        &input,
+        "--encryption",
+        "clear",
+        "--output-format",
+        "dash",
+        "--json",
     ]);
     assert_eq!(output.status.code(), Some(1));
     let report = json(&output);
@@ -171,7 +190,14 @@ fn known_text_declarations_have_no_candidate_in_human_or_json_plan() {
             .iter()
             .any(|finding| { finding["code"] == "no-supported-processing-route" })
     );
-    let output = run(&["plan", &input, "--to", "clear", "--format", "dash"]);
+    let output = run(&[
+        "plan",
+        &input,
+        "--encryption",
+        "clear",
+        "--output-format",
+        "dash",
+    ]);
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stdout).contains("Plan status: unsupported"));
     assert!(
@@ -191,7 +217,13 @@ fn several_supported_output_intents_remain_conditional_separate_commands() {
         "<MPD><Period><AdaptationSet contentType=\"video\"><Representation codecs=\"avc1.64001f\"/></AdaptationSet></Period></MPD>",
     );
     let output = run(&[
-        "plan", &input, "--to", "clear", "--format", "dash,hls", "--json",
+        "plan",
+        &input,
+        "--encryption",
+        "clear",
+        "--output-format",
+        "dash,hls-fmp4",
+        "--json",
     ]);
     assert!(output.status.success());
     let report = json(&output);
@@ -201,7 +233,14 @@ fn several_supported_output_intents_remain_conditional_separate_commands() {
         report["processing"]["candidates"].as_array().unwrap().len(),
         2
     );
-    let output = run(&["plan", &input, "--to", "clear", "--format", "dash,hls"]);
+    let output = run(&[
+        "plan",
+        &input,
+        "--encryption",
+        "clear",
+        "--output-format",
+        "dash,hls-fmp4",
+    ]);
     assert!(output.status.success());
     assert!(String::from_utf8_lossy(&output.stdout).contains("Plan status: conditional"));
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
@@ -216,7 +255,13 @@ fn each_requested_output_format_needs_its_own_candidate() {
         "<MPD><Period><AdaptationSet contentType=\"video\" codecs=\"avc1.64001f\"><Representation id=\"v1\"/><Representation id=\"v2\"/></AdaptationSet></Period></MPD>",
     );
     let output = run(&[
-        "plan", &input, "--to", "clear", "--format", "mp4,dash", "--json",
+        "plan",
+        &input,
+        "--encryption",
+        "clear",
+        "--output-format",
+        "mp4,dash",
+        "--json",
     ]);
     assert_eq!(output.status.code(), Some(1));
     let report = json(&output);
@@ -250,9 +295,9 @@ fn ts_output_plan_is_explicit_conditional_and_keeps_key_references_private() {
     let output = run(&[
         "plan",
         &input,
-        "--to",
+        "--encryption",
         "hls-sample-aes",
-        "--format",
+        "--output-format",
         "hls-ts",
         "--json",
     ]);
@@ -276,9 +321,9 @@ fn ts_output_plan_is_explicit_conditional_and_keeps_key_references_private() {
     let human = run(&[
         "plan",
         &input,
-        "--to",
+        "--encryption",
         "hls-sample-aes",
-        "--format",
+        "--output-format",
         "hls-ts",
     ]);
     assert!(human.status.success());
@@ -289,7 +334,13 @@ fn ts_output_plan_is_explicit_conditional_and_keeps_key_references_private() {
     );
     for target in ["cbcs", "cenc"] {
         let output = run(&[
-            "plan", &input, "--to", target, "--format", "hls-ts", "--json",
+            "plan",
+            &input,
+            "--encryption",
+            target,
+            "--output-format",
+            "hls-ts",
+            "--json",
         ]);
         assert_eq!(output.status.code(), Some(1));
         assert_eq!(json(&output)["compatible"], false);
@@ -304,11 +355,11 @@ fn ts_conversion_passes_the_hls_key_uri_in_its_own_key_role() {
     let config_path = dir.path().join("keys.json");
     let output_path = dir.path().join("result");
     for target in ["hls-aes128", "hls-sample-aes"] {
-        let mut config = serde_json::json!({"schema_version":1,"output":{
+        let mut config = serde_json::json!({"schema_version":2,"outputs":{"default":{
             "key":"22222222222222222222222222222222", "hls_key_uri":"skd://private-sentinel"
-        }});
+        }}});
         if target == "hls-sample-aes" {
-            config["output"]["iv"] = "33333333333333333333333333333333".into();
+            config["outputs"]["default"]["iv"] = "33333333333333333333333333333333".into();
         }
         drmr_core::native::create_private_or_truncate(&config_path)
             .unwrap()
@@ -317,11 +368,11 @@ fn ts_conversion_passes_the_hls_key_uri_in_its_own_key_role() {
         let output = run(&[
             "convert",
             "missing-source.m3u8",
-            "--to",
+            "--encryption",
             target,
-            "--format",
+            "--output-format",
             "hls-ts",
-            "--output",
+            "--output-dir",
             output_path.to_str().unwrap(),
             "--keys-file",
             config_path.to_str().unwrap(),

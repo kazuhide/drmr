@@ -135,7 +135,7 @@ fn native_manifest_workers_are_bounded_and_media_arguments_stay_disallowed() {
         vec!["--max-workers", "65"],
         vec!["--source", "private-source"],
         vec!["--keys-file", "private-key-file"],
-        vec!["--plan", "private-plan"],
+        vec!["--plan-file", "private-plan"],
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_drmr"))
             .arg("verify")
@@ -173,7 +173,7 @@ fn external_validation_requires_its_explicit_flag_and_failure_retains_native_evi
         .arg(&input)
         .args([
             "--manifest-only",
-            "--external-validator",
+            "--external-manifest-check",
             "--json",
             "--hls-validator-bin",
         ])
@@ -194,7 +194,7 @@ fn external_validation_requires_its_explicit_flag_and_failure_retains_native_evi
     let output = Command::new(env!("CARGO_BIN_EXE_drmr"))
         .arg("verify")
         .arg(&input)
-        .args(["--external-validator", "--json"])
+        .args(["--external-manifest-check", "--json"])
         .env("PATH", &empty_path)
         .output()
         .unwrap();
@@ -202,7 +202,7 @@ fn external_validation_requires_its_explicit_flag_and_failure_retains_native_evi
     let output = Command::new(env!("CARGO_BIN_EXE_drmr"))
         .arg("verify")
         .arg(&input)
-        .args(["--external-validator", "--source"])
+        .args(["--external-manifest-check", "--source"])
         .arg(&input)
         .args(["--json"])
         .env("PATH", &empty_path)
@@ -522,7 +522,7 @@ fn apple_profile_and_explicit_external_evidence_are_reported_separately() {
     std::fs::write(&validator, format!("#!/bin/sh\nprintf '.\\n' >> '{quoted}'\ncase \"$6\" in\n*/master.m3u8) printf '{parent}' \"$6\";;\n*) printf '{child}' \"$6\";;\nesac\n")).unwrap();
     std::fs::set_permissions(&validator, std::fs::Permissions::from_mode(0o700)).unwrap();
     let result = profile_command(&input, &empty_path, "apple-vod")
-        .args(["--external-validator", "--hls-validator-bin"])
+        .args(["--external-manifest-check", "--hls-validator-bin"])
         .arg(&validator)
         .output()
         .unwrap();

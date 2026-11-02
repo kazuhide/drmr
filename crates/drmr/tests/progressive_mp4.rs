@@ -70,11 +70,11 @@ fn finite_bbb_audio_and_joint_video_convert_and_verify_against_the_whole_origina
         let result = command(&[
             "convert",
             original.to_str().unwrap(),
-            "--to",
+            "--encryption",
             "clear",
-            "--format",
+            "--output-format",
             "mp4",
-            "--output",
+            "--output-file",
             output.to_str().unwrap(),
             "--json",
             "--packager-bin",
@@ -120,9 +120,9 @@ fn convert(source: &Path, output: &Path) -> Output {
     command(&[
         "convert",
         source.to_str().unwrap(),
-        "--to",
+        "--encryption",
         "clear",
-        "--output",
+        "--output-file",
         output.to_str().unwrap(),
         "--json",
     ])
@@ -466,11 +466,11 @@ fn protected_mp4(source: &Path, output: &Path, target: &str, keys: Option<&Path>
     let mut args = vec![
         "convert",
         source.to_str().unwrap(),
-        "--to",
+        "--encryption",
         target,
-        "--format",
+        "--output-format",
         "mp4",
-        "--output",
+        "--output-file",
         output.to_str().unwrap(),
         "--json",
     ];
@@ -530,9 +530,11 @@ fn finite_encrypted_audio_converts_and_verifies_without_overwriting_existing_out
     let before = std::fs::read(&original).unwrap();
     let keys = root.path().join("private/keys.json");
     drmr_core::native::create_private_dir_all(keys.parent().unwrap()).unwrap();
-    let key_bytes = serde_json::to_vec(&serde_json::json!({"schema_version": 1, "output": {
-        "kid": "00000000000000000000000000000001", "key": "11111111111111111111111111111111"
-    }}))
+    let key_bytes = serde_json::to_vec(
+        &serde_json::json!({"schema_version": 2, "outputs": {"default":{
+            "kid": "00000000000000000000000000000001", "key": "11111111111111111111111111111111"
+        }}}),
+    )
     .unwrap();
     drmr_core::native::create_private_new(&keys)
         .unwrap()
@@ -952,7 +954,7 @@ fn independently_verified_progressive_cenc_retains_the_same_finite_windows() {
     native_cenc(&original, &encrypted, kid, key);
     let keys = root.path().join("private/keys.json");
     drmr_core::native::create_private_dir_all(keys.parent().unwrap()).unwrap();
-    let body = serde_json::json!({"schema_version":1,"output":{"kid":kid,"key":key}});
+    let body = serde_json::json!({"schema_version":2,"outputs":{"default":{"kid":kid,"key":key}}});
     drmr_core::native::create_private_new(&keys)
         .unwrap()
         .write_all(serde_json::to_string(&body).unwrap().as_bytes())
@@ -1226,10 +1228,10 @@ fn encrypted_references_keep_finite_windows_display_sizes_and_metadata_strict() 
         ("cenc", &protected_output, true),
     ] {
         let keys = private.join(format!("{name}.json"));
-        let mut config = serde_json::json!({"schema_version":1,
-            "input":{"keys":[{"kid":input_kid,"key":input_key}]}});
+        let mut config = serde_json::json!({"schema_version":2,
+            "input":{"keys":[{"kid":input_kid,"key":input_key}]},"outputs":{}});
         if protected {
-            config["output"] = serde_json::json!({"kid":output_kid,"key":output_key});
+            config["outputs"]["default"] = serde_json::json!({"kid":output_kid,"key":output_key});
         }
         drmr_core::native::create_private_new(&keys)
             .unwrap()
@@ -1407,7 +1409,7 @@ fn mixed_reference_checks(clear_index: usize) {
     let private = root.path().join("private");
     drmr_core::native::create_private_dir_all(&private).unwrap();
     let keys = private.join("keys.json");
-    let config = serde_json::json!({"schema_version":1,"input":{"keys":[{"kid":kid,"key":key}]}});
+    let config = serde_json::json!({"schema_version":2,"input":{"keys":[{"kid":kid,"key":key}]},"outputs":{}});
     drmr_core::native::create_private_new(&keys)
         .unwrap()
         .write_all(config.to_string().as_bytes())

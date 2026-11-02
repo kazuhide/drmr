@@ -2,7 +2,7 @@
 use super::{destination, files};
 use crate::conversion::ConversionError;
 use std::{
-    io::Write as _,
+    io::{Read as _, Write as _},
     path::{Path, PathBuf},
 };
 
@@ -10,6 +10,19 @@ const EXISTS: ConversionError = ConversionError("report-destination-exists");
 const UNSAFE: ConversionError = ConversionError("report-destination-unsafe");
 const WRITE: ConversionError = ConversionError("report-destination-write-failed");
 const LIMIT: usize = 32 * 1024 * 1024;
+
+/// Manifest resources share the source parent, including extensionless entrypoints.
+/// Only a safely opened, recognizable MP4 may protect just its selected file.
+pub fn report_source_requires_parent_guard(path: &Path) -> bool {
+    let mut prefix = [0; 64];
+    let Ok(count) = files::regular_input(path).and_then(|mut file| {
+        file.read(&mut prefix)
+            .map_err(|_| ConversionError("input-unreadable"))
+    }) else {
+        return true;
+    };
+    crate::inspection::format_hint(&prefix[..count]) != Some(crate::inspection::InputFormat::Mp4)
+}
 
 /// Resolve a new report path and check its parent without creating or replacing an entry.
 pub fn report_destination(path: &Path) -> Result<PathBuf, ConversionError> {
@@ -70,6 +83,22 @@ pub fn write_report_new(path: &Path, value: &serde_json::Value) -> Result<(), Co
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn report_source_guard_uses_bytes_and_defaults_to_parent_protection() {
+        let root = crate::native::private_tempdir().unwrap();
+        let source = root.path().join("source");
+        std::fs::write(&source, b"#EXTM3U\n").unwrap();
+        assert!(report_source_requires_parent_guard(&source));
+        std::fs::write(&source, b"<MPD/>").unwrap();
+        assert!(report_source_requires_parent_guard(&source));
+        std::fs::write(&source, b"\0\0\0\x08ftyp").unwrap();
+        assert!(!report_source_requires_parent_guard(&source));
+        assert!(report_source_requires_parent_guard(root.path()));
+        assert!(report_source_requires_parent_guard(
+            &root.path().join("missing")
+        ));
+    }
+
     #[test]
     fn report_is_private_new_and_not_replaced() {
         let root = crate::native::private_tempdir().unwrap();

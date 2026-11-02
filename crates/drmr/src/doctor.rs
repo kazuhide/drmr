@@ -21,6 +21,14 @@ pub fn run(
             return crate::convert_cli::error("doctor", error, as_json, &progress, Some(2));
         }
     };
+    if let Some(path) = configuration
+        .as_ref()
+        .and_then(|config| config.output_dir.as_deref())
+        && let Err(error) = crate::reporting::protect(path, true)
+    {
+        return crate::convert_cli::error("doctor", error, as_json, &progress, Some(2));
+    }
+    crate::reporting::ready();
     progress.mark("tool-check");
     let cancellation = match cancellation(probe, &progress) {
         Ok(value) => value,

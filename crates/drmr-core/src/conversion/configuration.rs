@@ -182,7 +182,7 @@ impl Expected {
                 "Use an array of one to eight output objects with distinct safe IDs."
             }
             Self::OutputObject => {
-                "Use a supported combination of format, target, DRM systems, processing and manifest checks."
+                "Use a supported combination of output_format, encryption, DRM systems, processing and manifest checks."
             }
             Self::OutputId => {
                 "Use a unique ID of 1 to 32 characters: a lowercase ASCII letter, followed by lowercase letters, digits or hyphens. Reserved device names are refused."
@@ -191,10 +191,10 @@ impl Expected {
                 "Use the string mp4, dash, hls-fmp4 or hls-ts in current output configurations."
             }
             Self::TargetProtection => {
-                "Use a supported target: clear, cenc, cbcs, hls-aes128 or hls-sample-aes."
+                "Use supported encryption: clear, cenc, cbcs, hls-aes128 or hls-sample-aes."
             }
             Self::Drms => {
-                "Use an array of at most three distinct DRM systems compatible with format and target; use [] for no DRM declarations."
+                "Use an array of at most three distinct DRM systems compatible with output_format and encryption; use [] for no DRM declarations."
             }
             Self::DrmSystem => "Use the string widevine, playready or fairplay.",
             Self::Conformance => {
