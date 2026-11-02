@@ -83,7 +83,7 @@ enum Command {
     Verify(convert_cli::VerifyArgs),
     /// Describe conversion intent or save an execution plan.
     #[command(
-        after_help = "With INPUT: describe a requested conversion without executing it.\nWith --save FILE and --output-dir PATH: validate the complete source and save its fingerprints and output intent. Use --output-config FILE for several results with separate DRM and manifest-check policies. Keys remain separate.\n\nExamples:\n  drmr plan source/input.m3u8 --output-config outputs.json --output-dir converted --save conversion.plan.json\n  drmr convert --plan-file conversion.plan.json --keys-file keys.json\n  drmr verify --plan-file conversion.plan.json --keys-file keys.json"
+        after_help = "With INPUT: describe a requested conversion without executing it.\nWith --save FILE: validate the complete source and save its fingerprints and output intent. Choose --output-file for one MP4 or --output-dir for streaming results. Use --output-config FILE for several results with separate DRM and manifest-check policies. Keys remain separate.\n\nExamples:\n  drmr plan source/input.m3u8 --output-config outputs.json --output-dir converted --save conversion.plan.json\n  drmr convert --plan-file conversion.plan.json --keys-file keys.json\n  drmr verify --plan-file conversion.plan.json --keys-file keys.json"
     )]
     Plan(inspect_cli::PlanArgs),
     /// Start the local web console, configured using DRMR_* environment variables.
@@ -229,7 +229,7 @@ fn protect_report(command: &Command) -> Result<(), drmr_core::conversion::Conver
                 source(input)?;
             }
             if let Some(output) = &args.output {
-                reporting::protect(output, true)?;
+                reporting::protect_source(output)?;
             }
             files(&[
                 args.keys_file.as_ref(),

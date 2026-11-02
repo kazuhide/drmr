@@ -246,7 +246,7 @@ source metadata are retained, so total memory still grows with tracks and segmen
 Build and measure fresh capture-test processes, separately from compilation:
 
 ```sh
-python3 tools/measure_capture.py --output-dir capture-measurements.json
+python3 tools/measure_capture.py --output capture-measurements.json
 ```
 
 Use the project's Rust toolchain on `PATH`. The default runs five processes; each child

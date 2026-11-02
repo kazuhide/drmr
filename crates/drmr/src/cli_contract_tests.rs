@@ -208,3 +208,34 @@ fn doctor_accepts_output_config_without_an_internal_route_name() {
         }
     ));
 }
+
+#[test]
+fn plan_decode_requires_saved_complete_source_checks() {
+    let error = Cli::try_parse_from([
+        "drmr",
+        "plan",
+        "original.mp4",
+        "--encryption",
+        "clear",
+        "--decode",
+    ])
+    .err()
+    .unwrap();
+    assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+    let Command::Plan(args) = parse(&[
+        "plan",
+        "original.mp4",
+        "--encryption",
+        "clear",
+        "--output-file",
+        "new.mp4",
+        "--save",
+        "plan.json",
+        "--decode",
+    ])
+    .command
+    else {
+        panic!("expected plan")
+    };
+    assert!(args.decoding.decode);
+}

@@ -57,7 +57,8 @@ Save this as `outputs.json` to request one unencrypted MP4:
 Use a supported unencrypted `original.mp4`. Choose a new `result` directory under an existing parent:
 
 ```sh
-drmr convert original.mp4 --output-config outputs.json --output-dir result
+drmr convert original.mp4 --output-config outputs.json \
+  --output-dir result
 ```
 
 The entrypoint is `result/mp4/media.mp4`. The output ID `mp4` names its directory. Clear input and output need no key file. A single `convert` checks the source, converts it and compares the result with the original. HLS/DASH also receive native manifest checks; explicitly selected DRM declarations are checked too. Separate `analyze`, `plan` and `verify` commands are optional.
@@ -409,9 +410,12 @@ CLI relative paths use the working directory; JSON `output_dir` uses the configu
 drmr analyze --metadata-only media.mp4
 drmr analyze --metadata-only source/manifest.mpd --json
 drmr analyze --metadata-only source/master.m3u8 --json
-drmr analyze --metadata-only "https://example.com/vod/master.m3u8" --json
-drmr analyze --metadata-only "https://example.com/vod/manifest.mpd" --json
-drmr analyze --metadata-only "https://example.com/vod/media.mp4" --json
+drmr analyze --metadata-only \
+  "https://example.com/vod/master.m3u8" --json
+drmr analyze --metadata-only \
+  "https://example.com/vod/manifest.mpd" --json
+drmr analyze --metadata-only \
+  "https://example.com/vod/media.mp4" --json
 ```
 
 `analyze --metadata-only` reads MP4 metadata or DASH/HLS declarations without keys, a decoder or Shaka Packager. It identifies format, declared protection, known key identifiers and DRM labels, while excluding keys, IVs and key/license addresses from the report. It does not decrypt, decode or check every sample; `media_verified` remains false. Unknown protection stays unknown. An HLS SAMPLE-AES declaration alone does not establish an MP4 encryption scheme.
@@ -450,8 +454,10 @@ drmr plan "https://example.com/vod/master.m3u8" \
 ```
 
 ```sh
-drmr plan media.mp4 --encryption cbcs --output-format dash --json
-drmr plan source/master.m3u8 --encryption clear --output-format dash,hls-fmp4
+drmr plan media.mp4 --encryption cbcs --output-format dash \
+  --json
+drmr plan source/master.m3u8 --encryption clear \
+  --output-format dash,hls-fmp4
 ```
 
 Without `--save`, `plan` reports requested formats, key roles and candidate processing routes. Comma-separated formats in this mode describe alternatives. Use `--output-config` below to request several actual outputs. Every requested format must have a candidate. Unsupported or empty candidate sets are incompatible; source-profile admission remains a runtime condition. This metadata-only JSON is not an execution plan and is refused by `convert --plan-file`.
@@ -459,10 +465,13 @@ Without `--save`, `plan` reports requested formats, key roles and candidate proc
 For a single output, use `--save` with a new result destination to check the complete source and save one resolved format:
 
 ```sh
-drmr plan source/input.m3u8 --encryption cbcs --output-format dash \
+drmr plan source/input.m3u8 --encryption cbcs --output-format \
+  dash \
   --output-dir converted-dash --save conversion.plan.json --json
-drmr convert --plan-file conversion.plan.json --keys-file config/keys.json --json
-drmr verify --plan-file conversion.plan.json --keys-file config/keys.json --json
+drmr convert --plan-file conversion.plan.json --keys-file \
+  config/keys.json --json
+drmr verify --plan-file conversion.plan.json --keys-file \
+  config/keys.json --json
 ```
 
 Saved plans bind source fingerprints, output paths and names, processing, DASH references and the minimum verification depth. Manifest-profile plans also bind their rule profile. The minimum is native by default; `--decode` can strengthen it during saving or later execution. Existing plans remain readable with their recorded conditions; see [plan versions](https://github.com/kazuhide/drmr/blob/main/docs/releases.md#compatibility-from-12).
@@ -495,7 +504,8 @@ Use `--dash-addressing` with direct conversion or a saved plan:
 A nominal duration describes an approximate grid; actual AAC frame boundaries can differ. Use an explicit timeline when those exact boundaries must be declared. Every form retains the required sample, clock and playback-window checks. Encryption and DRM signaling are selected separately. An unrepresentable timing profile fails; the tool does not silently substitute another addressing form. See [DASH references](https://github.com/kazuhide/drmr/blob/main/docs/dash-addressing.md).
 
 ```sh
-drmr plan source/input.m3u8 --encryption clear --output-format dash --dash-addressing list \
+drmr plan source/input.m3u8 --encryption clear --output-format \
+  dash --dash-addressing list \
   --output-dir result --save conversion.plan.json
 drmr convert --plan-file conversion.plan.json
 drmr verify --plan-file conversion.plan.json
@@ -512,8 +522,10 @@ drmr analyze "https://example.com/vod/master.m3u8" \
   --download-dir source &&
 drmr plan source/input.m3u8 --output-config outputs.json \
   --output-dir result --save conversion.plan.json &&
-drmr convert --plan-file conversion.plan.json --keys-file keys.json &&
-drmr verify --plan-file conversion.plan.json --keys-file keys.json
+drmr convert --plan-file conversion.plan.json --keys-file \
+  keys.json &&
+drmr verify --plan-file conversion.plan.json --keys-file \
+  keys.json
 ```
 
 Clear input needs no keys during analysis or planning. For encrypted input, pass the input-key file to both. DASH/MP4 use `source/input.mpd` or `source/input.mp4` instead.
@@ -604,9 +616,9 @@ Encrypted input requires its `input.keys` or `input.hls_keys` mapping. See chapt
 
 ## Select other outputs
 
-For CENC DASH/HLS, select `target: "cenc"` and `drms: ["widevine", "playready"]`. Omit FairPlay and `hls_key_uri` from HLS settings; any PSSH scheme declaration must match cenc. FairPlay is not available with CENC.
+For CENC DASH/HLS, select `encryption: "cenc"` and `drms: ["widevine", "playready"]`. Omit FairPlay and `hls_key_uri` from HLS settings; any PSSH scheme declaration must match cenc. FairPlay is not available with CENC.
 
-For FairPlay TS, use `format: "hls-ts"`, `target: "hls-sample-aes"`, `drms: ["fairplay"]` and an output key entry with `key`, explicit `iv`, `hls_key_uri` and FairPlay signaling, without an MP4 KID. Chapter 8 has TS output recipes. See the [multiple-output guide](https://github.com/kazuhide/drmr/blob/main/docs/multiple-outputs.md).
+For FairPlay TS, use `output_format: "hls-ts"`, `encryption: "hls-sample-aes"`, `drms: ["fairplay"]` and an output key entry with `key`, explicit `iv`, `hls_key_uri` and FairPlay signaling, without an MP4 KID. Chapter 8 has TS output recipes. See the [multiple-output guide](https://github.com/kazuhide/drmr/blob/main/docs/multiple-outputs.md).
 
 The older single-output `system: "playready"` has separate source conditions. Distinguish it from these `system: "multi-drm"` examples. See [DRM signaling](https://github.com/kazuhide/drmr/blob/main/docs/drm-signaling.md).
 
@@ -682,15 +694,18 @@ Prepare a protected configuration directory as described in chapter 5 and save t
 ```sh
 chmod 600 config/fetch.json
 drmr analyze "https://example.com/vod/master.m3u8" \
-  --download-dir analyzed-source --fetch-config config/fetch.json --json
+  --download-dir analyzed-source --fetch-config \
+  config/fetch.json --json
 ```
 
 The same file can be used for direct conversion:
 
 ```sh
 drmr convert "https://example.com/vod/master.m3u8" \
-  --download-dir authenticated-source --fetch-config config/fetch.json \
-  --encryption clear --output-format hls-fmp4 --output-dir clear-result
+  --download-dir authenticated-source --fetch-config \
+  config/fetch.json \
+  --encryption clear --output-format hls-fmp4 --output-dir \
+  clear-result
 ```
 
 Unknown fields, duplicates, present null values and invalid ranges are refused. Headers are scoped to exact origins; redirects and referenced resources must remain allowed. `max_playlist_bytes` bounds each HLS playlist or DASH MPD; MP4 and media resources use `max_resource_bytes`, and `max_total_bytes` applies to the whole download. Admission includes destination relationships, resource counts, bytes and deadlines. A successful plan does not establish these remote conditions.
@@ -847,7 +862,8 @@ Full `analyze`, `plan --save`, `convert` and `verify` select workers from availa
 
 ```sh
 drmr convert source.mpd --encryption cbcs --output-format dash \
-  --output-dir result --keys-file config/keys.json --max-workers 2
+  --output-dir result --keys-file config/keys.json \
+  --max-workers 2
 drmr verify result/manifest.mpd --source source.mpd \
   --keys-file config/keys.json --max-workers 1 --json --stats
 ```
@@ -922,7 +938,8 @@ docker run --rm --init --user "$(id -u):$(id -g)" \
   --mount "type=bind,src=$PWD/config,dst=/config,readonly" \
   --mount "type=bind,src=$PWD/output,dst=/output" \
   drmr:local convert /input/manifest.mpd \
-  --encryption cbcs --output-format dash --output-dir /output/protected-dash \
+  --encryption cbcs --output-format dash --output-dir \
+  /output/protected-dash \
   --keys-file /config/keys.json
 ```
 
@@ -936,7 +953,8 @@ docker run --rm --init --user "$(id -u):$(id -g)" \
   --mount "type=bind,src=$PWD/config,dst=/config,readonly" \
   --mount "type=bind,src=$PWD/output,dst=/output,readonly" \
   drmr:local verify /output/protected-dash/manifest.mpd \
-  --source /input/manifest.mpd --keys-file /config/keys.json --json
+  --source /input/manifest.mpd --keys-file /config/keys.json \
+  --json
 ```
 
 Docker does not expand the media profile. URL conversion additionally requires a separate writable retained-download mount and its allowed connection policy. Readable container CPU/memory limits inform worker admission; they are not a promise of an exact memory maximum.
@@ -1056,10 +1074,12 @@ function Set-OwnerOnlyAcl($path, $security) {
 Apply the ACL to the directory and file, then enter keys:
 
 ```powershell
-Set-OwnerOnlyAcl $private ([Security.AccessControl.DirectorySecurity]::new())
+Set-OwnerOnlyAcl $private `
+  ([Security.AccessControl.DirectorySecurity]::new())
 $keyFile = Join-Path $private 'keys.json'
 New-Item -ItemType File -Path $keyFile | Out-Null
-Set-OwnerOnlyAcl $keyFile ([Security.AccessControl.FileSecurity]::new())
+Set-OwnerOnlyAcl $keyFile `
+  ([Security.AccessControl.FileSecurity]::new())
 notepad $keyFile
 ```
 
@@ -1069,11 +1089,13 @@ The function verifies that you already own each path and changes only its access
 
 ```powershell
 .\drmr.exe analyze --metadata-only 'C:\media\source.mp4' --json
-.\drmr.exe plan 'C:\media\source.mp4' --encryption cbcs --output-format mp4
+.\drmr.exe plan 'C:\media\source.mp4' --encryption cbcs `
+  --output-format mp4
 $outDir = Join-Path $env:LOCALAPPDATA 'drmr-output'
 New-Item -ItemType Directory -Path $outDir -Force | Out-Null
 $result = Join-Path $outDir 'protected.mp4'
-.\drmr.exe convert 'C:\media\source.mp4' --encryption cbcs --output-format mp4 `
+.\drmr.exe convert 'C:\media\source.mp4' --encryption cbcs `
+  --output-format mp4 `
   --output-dir $result --keys-file $keyFile
 .\drmr.exe verify $result --source 'C:\media\source.mp4' `
   --keys-file $keyFile --json
@@ -1277,7 +1299,8 @@ With `--json`, `>result.json` keeps terminal progress; `2>errors.log` suppresses
 
 ```sh
 drmr analyze original.mp4 --metadata-only --json --progress text
-drmr analyze original.mp4 --metadata-only --json --progress json \
+drmr analyze original.mp4 --metadata-only --json --progress \
+  json \
   >metadata.json 2>progress.jsonl
 drmr analyze original.mp4 --metadata-only --progress off
 ```
@@ -1421,16 +1444,21 @@ With source and media tools installed, run from the repository root:
 
 ```sh
 cargo test --locked -p drmr --test bbb_media -- --nocapture
-cargo test --locked -p drmr-core --test conversion_ts_output -- --nocapture
+cargo test --locked -p drmr-core --test conversion_ts_output \
+  -- --nocapture
 cargo test --locked -p drmr-core --test conversion_ts_output \
   audio_hls -- --nocapture
-cargo test --locked -p drmr --test conversion_ts_dash -- --nocapture
-cargo test --locked -p drmr-core --test conversion_finite_outputs \
+cargo test --locked -p drmr --test conversion_ts_dash -- \
+  --nocapture
+cargo test --locked -p drmr-core --test \
+  conversion_finite_outputs \
   -- --nocapture
-cargo test --locked -p drmr --test conversion_finite_outputs -- --nocapture
+cargo test --locked -p drmr --test conversion_finite_outputs \
+  -- --nocapture
 cargo test --locked -p drmr-core --test conversion_multi_drm \
   --test conversion_large_signaling -- --nocapture
-cargo test --locked -p drmr-core --test conversion_bundle_encryption \
+cargo test --locked -p drmr-core --test \
+  conversion_bundle_encryption \
   --test conversion_bundle_publication -- --nocapture
 ```
 

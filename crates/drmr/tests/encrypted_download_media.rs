@@ -460,7 +460,11 @@ fn encrypted_url_roundtrip(profile: Profile) {
         refuse_ts_counter_mode(&download, &input, &keys);
     }
     if profile == Profile::AesTs {
-        refuse_single_output_bundle_keys(root.path(), &input, &keys);
+        single_output_accepts_input_keys_and_refuses_unknown_output_domains(
+            root.path(),
+            &input,
+            &keys,
+        );
     }
     offline_plan(root.path(), &input, &keys);
     if profile == Profile::CencFmp4 {
@@ -488,9 +492,37 @@ fn refuse_ts_counter_mode(download: &Path, input: &Path, keys: &Path) {
     std::fs::write(playlist, original).unwrap();
 }
 
-fn refuse_single_output_bundle_keys(root: &Path, input: &Path, keys: &Path) {
+fn single_output_accepts_input_keys_and_refuses_unknown_output_domains(
+    root: &Path,
+    input: &Path,
+    keys: &Path,
+) {
+    let accepted = root.join("single-with-canonical-input-keys");
+    let result = invoke("convert", input, Some(keys))
+        .args([
+            "--encryption",
+            "clear",
+            "--output-format",
+            "dash",
+            "--output-dir",
+        ])
+        .arg(&accepted)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(checked(&result)["verification"]["passed"], true);
+    assert!(accepted.join("manifest.mpd").is_file());
+
+    let unknown_keys = root.join("single-unknown-output-domain.json");
+    let mut config: Value = serde_json::from_slice(&std::fs::read(keys).unwrap()).unwrap();
+    config["outputs"] = json!({"unexpected":{"kid":KID,"key":KEY}});
+    private_json(&unknown_keys, &config);
     let single = root.join("single-must-not-exist");
-    let refused = invoke("convert", input, Some(keys))
+    let refused = invoke("convert", input, Some(&unknown_keys))
         .args([
             "--encryption",
             "clear",

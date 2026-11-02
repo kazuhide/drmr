@@ -140,7 +140,7 @@ fn bind_manifest_policy(output: &Value, row: &Value, proof: &Value, bundle: bool
         } else {
             &proof["external_manifest"]
         };
-        if external["passed"] != true || external["checks"].as_array().is_none_or(Vec::is_empty) {
+        if !super::conformance_passed(external) {
             return Err(bad());
         }
     }
@@ -226,6 +226,8 @@ mod tests {
         for changed in [
             serde_json::json!({"passed":false,"checks":[{}]}),
             serde_json::json!({"passed":true,"checks":[]}),
+            serde_json::json!({"passed":true,"checks":[{"passed":false}]}),
+            serde_json::json!({"passed":true,"checks":[{"passed":true},{"passed":false}]}),
         ] {
             assert!(
                 bind_manifest_policy(

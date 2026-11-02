@@ -115,7 +115,7 @@ See [DASH references and timing](dash-addressing.md) for each form's conditions.
 ```sh
 drmr analyze media.mp4 --metadata-only
 drmr analyze master.m3u8 --metadata-only --json
-drmr plan manifest.mpd --encryption cbcs --output-format dash,hls --json
+drmr plan manifest.mpd --encryption cbcs --output-format dash,hls-fmp4 --json
 ```
 
 `analyze --metadata-only` detects MP4, DASH, and HLS by their contents. It needs no keys, decoder or Shaka Packager. The JSON report has `schema_version: 1`, a format, protection per track or sample description, known key identifiers, DRM system labels, and explanation tokens in `findings`. It excludes encryption keys, initialization vectors, license URLs, and key URLs. Generated track identifiers are local to the report.

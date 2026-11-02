@@ -208,7 +208,11 @@ fn external_validation_requires_its_explicit_flag_and_failure_retains_native_evi
         .env("PATH", &empty_path)
         .output()
         .unwrap();
-    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.status.code(), Some(1));
+    let report = safe_report(&output);
+    assert_eq!(report["status"], "failed");
+    assert_eq!(report["error"]["code"], "hls-drm-signaling-invalid");
+    assert_ne!(report["passed"], true);
 }
 
 const DASH: &str = r#"<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static" profiles="urn:mpeg:dash:profile:isoff-live:2011" minBufferTime="PT1S" mediaPresentationDuration="PT2S"><Period><AdaptationSet mimeType="video/mp4" codecs="avc1.4d401f"><SegmentTemplate timescale="1000" media="seg-$Number$.m4s" initialization="init.mp4"><SegmentTimeline><S t="0" d="2000"/></SegmentTimeline></SegmentTemplate><Representation id="v1" bandwidth="1000000"/></AdaptationSet></Period></MPD>"#;
@@ -474,7 +478,7 @@ fn apple_authoring_profile_is_explicit_and_preserves_the_multiple_video_bitrate_
 }
 
 #[test]
-fn apple_profile_rejects_dash_and_profiles_require_manifest_only_scope() {
+fn apple_profile_rejects_dash_and_full_checks_still_require_source_media() {
     let root = drmr_core::native::private_tempdir().unwrap();
     let empty_path = root.path().join("empty-path");
     std::fs::create_dir(&empty_path).unwrap();
@@ -494,9 +498,14 @@ fn apple_profile_rejects_dash_and_profiles_require_manifest_only_scope() {
             .arg(&input)
             .args(["--manifest-profile", profile, "--source"])
             .arg(&input)
+            .arg("--json")
             .output()
             .unwrap();
-        assert_eq!(result.status.code(), Some(2));
+        assert_eq!(result.status.code(), Some(1));
+        let report = safe_report(&result);
+        assert_eq!(report["status"], "failed");
+        assert_eq!(report["error"]["code"], "dash-resource-unreadable");
+        assert_ne!(report["passed"], true);
     }
 }
 

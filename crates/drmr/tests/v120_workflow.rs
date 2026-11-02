@@ -723,3 +723,70 @@ fn extensionless_mp4_metadata_can_save_a_sibling_report_without_mutating_the_inp
     assert_eq!(recorded, value);
     assert_eq!(std::fs::read(&input).unwrap(), original);
 }
+
+#[test]
+fn direct_manifest_result_reports_stay_outside_the_result_tree_before_key_loading() {
+    let owner = drmr_core::native::private_tempdir().unwrap();
+    let root = owner.path();
+    let (input, original) = source(root);
+    let output = root.join("result");
+    std::fs::create_dir(&output).unwrap();
+    let missing_keys = root.join("missing-keys.json");
+    for (name, bytes) in [
+        (
+            "master.m3u8",
+            "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\nmissing.ts\n#EXT-X-ENDLIST\n",
+        ),
+        ("manifest.mpd", "<MPD/>"),
+        (
+            "manifest",
+            "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\nmissing.ts\n#EXT-X-ENDLIST\n",
+        ),
+    ] {
+        let manifest = output.join(name);
+        std::fs::write(&manifest, bytes).unwrap();
+        for manifest_only in [false, true] {
+            let report = output.join("missing.ts");
+            let mut args = vec![
+                "verify",
+                path(&manifest),
+                "--json",
+                "--report-file",
+                path(&report),
+            ];
+            if manifest_only {
+                args.push("--manifest-only");
+            } else {
+                args.extend(["--source", path(&input), "--keys-file", path(&missing_keys)]);
+            }
+            let refused = cli(root, &args);
+            assert_eq!(refused.status.code(), Some(2));
+            assert_eq!(
+                result(&refused)["error"]["code"],
+                "report-destination-overlap"
+            );
+            assert!(!report.exists());
+            assert_eq!(std::fs::read(&manifest).unwrap(), bytes.as_bytes());
+        }
+    }
+    let report = root.join("safe-key-error.json");
+    let failed = cli(
+        root,
+        &[
+            "verify",
+            path(&output.join("manifest")),
+            "--source",
+            path(&input),
+            "--keys-file",
+            path(&missing_keys),
+            "--report-file",
+            path(&report),
+            "--json",
+        ],
+    );
+    assert!(!failed.status.success());
+    assert_eq!(result(&failed)["error"]["code"], "key-file-invalid");
+    let recorded: Value = serde_json::from_slice(&std::fs::read(&report).unwrap()).unwrap();
+    assert_eq!(recorded, result(&failed));
+    assert_eq!(std::fs::read(&input).unwrap(), original);
+}

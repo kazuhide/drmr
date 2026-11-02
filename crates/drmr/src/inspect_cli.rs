@@ -23,7 +23,7 @@ pub struct PlanArgs {
     )]
     #[arg(help_heading = "Output", value_name = "MODE")]
     pub to: Option<TargetProtection>,
-    /// Output packaging: mp4, dash, hls, hls-ts, or a comma-separated list.
+    /// Output packaging: mp4, dash, hls-fmp4, hls-ts, or a comma-separated list.
     #[arg(long = "output-format", value_delimiter = ',', value_parser = crate::output_cli::parse_format)]
     #[arg(help_heading = "Output", value_name = "FORMAT")]
     pub format: Vec<OutputFormat>,
@@ -40,7 +40,7 @@ pub struct PlanArgs {
     #[arg(long)]
     #[arg(help_heading = "Reporting")]
     pub json: bool,
-    /// New private execution-plan file; requires --output-dir and one intent or --output-config.
+    /// New private execution-plan file; fixes the output destination and conversion intent.
     #[arg(long)]
     #[arg(help_heading = "Plan", value_name = "FILE")]
     pub save: Option<PathBuf>,

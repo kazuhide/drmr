@@ -28,3 +28,11 @@ test('all literal common-view and report labels resolve without exposing an untr
     for (const key of keys) assert.ok(en.has(key), file + ': ' + key);
   }
 });
+
+test('configuration schema hints match the accepted operator file versions', () => {
+  for (const lang of ['en', 'ja']) {
+    const copy = dictionary(lang);
+    assert.deepEqual(copy.t('commonConfigurationExpected_keys-object').match(/[0-9]+/g), ['64', '2']);
+    assert.deepEqual(copy.t('commonConfigurationExpected_outputs-object').match(/[0-9]+/g), ['64', '4']);
+  }
+});

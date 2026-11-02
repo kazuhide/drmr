@@ -16,6 +16,18 @@ SPEC.loader.exec_module(builder)
 
 
 class GuideBuilderTests(unittest.TestCase):
+    def test_shell_examples_fit_narrow_viewports_without_excessive_horizontal_traversal(self):
+        import re
+
+        for locale in ("en", "ja"):
+            source = (TOOLS.parent / f"site-content/guide/{locale}.md").read_text(encoding="utf-8")
+            examples = re.findall(r'^```sh\n(.*?)^```', source, re.M | re.S)
+            self.assertTrue(examples)
+            for number, example in enumerate(examples, 1):
+                for line in example.splitlines():
+                    with self.subTest(locale=locale, example=number, line=line):
+                        self.assertLessEqual(len(line), 64)
+
     def test_real_sources_render_reciprocal_chapters_and_semantic_examples(self):
         pages = builder.render(TOOLS.parent)
         self.assertEqual(set(pages), {"guide/index.html", "ja/guide/index.html"})

@@ -57,7 +57,8 @@ drmr は映像・音声の符号化データを維持しながら、ファイル
 対応条件を満たす非暗号化の `original.mp4` を変換します。`result` はまだ存在しない出力先を指定してください。親ディレクトリは事前に用意します。
 
 ```sh
-drmr convert original.mp4 --output-config outputs.json --output-dir result
+drmr convert original.mp4 --output-config outputs.json \
+  --output-dir result
 ```
 
 MP4 は `result/mp4/media.mp4` に生成されます。`mp4` は出力 ID で、生成先のディレクトリ名になります。入力も出力も clear のため、鍵ファイルは不要です。`convert` は入力検査、変換、原本とのメディア比較を一回の操作で行います。HLS/DASH では内蔵マニフェスト検査、DRM を指定した出力ではその宣言の照合も行います。別コマンドの `analyze`・`plan`・`verify` は必須手順ではありません。
@@ -445,9 +446,12 @@ CLI の相対パスは起動場所、JSON の `output_dir` は設定ファイル
 drmr analyze --metadata-only media.mp4
 drmr analyze --metadata-only source/manifest.mpd --json
 drmr analyze --metadata-only source/master.m3u8 --json
-drmr analyze --metadata-only "https://example.com/vod/master.m3u8" --json
-drmr analyze --metadata-only "https://example.com/vod/manifest.mpd" --json
-drmr analyze --metadata-only "https://example.com/vod/media.mp4" --json
+drmr analyze --metadata-only \
+  "https://example.com/vod/master.m3u8" --json
+drmr analyze --metadata-only \
+  "https://example.com/vod/manifest.mpd" --json
+drmr analyze --metadata-only \
+  "https://example.com/vod/media.mp4" --json
 ```
 
 `analyze --metadata-only` は MP4 のメタデータや DASH/HLS の宣言を読み取ります。鍵、デコーダー、Shaka Packager は不要です。入力形式は内容から判定します。JSON は `schema_version: 1` を持ち、形式、トラック・サンプル記述ごとの保護方式、既知の KID、DRM システム名、`findings` の説明トークンなどを返します。鍵、IV、ライセンス URL、鍵 URL は含めません。
@@ -482,8 +486,10 @@ drmr analyze encrypted.mp4 --keys-file config/keys.json --json
 ## plan による変換条件の確認と保存
 
 ```sh
-drmr plan media.mp4 --encryption cbcs --output-format dash --json
-drmr plan source/master.m3u8 --encryption clear --output-format dash,hls-fmp4
+drmr plan media.mp4 --encryption cbcs --output-format dash \
+  --json
+drmr plan source/master.m3u8 --encryption clear \
+  --output-format dash,hls-fmp4
 ```
 
 `--save` を付けない `plan INPUT` は入力の宣言情報を使って変換先の候補と必要な条件を確認するモードです。`--encryption` は必須で、`--output-format` を省略すると入力形式を引き継ぎます。このモードではカンマで区切って指定した形式をそれぞれ変換候補として示します。複数の出力を実際にまとめて作るには、後述の `--output-config` を使います。
@@ -497,10 +503,13 @@ drmr plan source/master.m3u8 --encryption clear --output-format dash,hls-fmp4
 単一出力の実行用計画は新規の出力先と `--save` を指定して保存します。原本全体を確認し、解決後の出力形式を一つ記録します。
 
 ```sh
-drmr plan source/input.m3u8 --encryption cbcs --output-format dash \
+drmr plan source/input.m3u8 --encryption cbcs --output-format \
+  dash \
   --output-dir converted-dash --save conversion.plan.json --json
-drmr convert --plan-file conversion.plan.json --keys-file config/keys.json --json
-drmr verify --plan-file conversion.plan.json --keys-file config/keys.json --json
+drmr convert --plan-file conversion.plan.json --keys-file \
+  config/keys.json --json
+drmr verify --plan-file conversion.plan.json --keys-file \
+  config/keys.json --json
 ```
 
 計画にはローカルのプレイリスト・メディア、それぞれのサイズと SHA-256 ハッシュ、出力形式・暗号方式、出力先の絶対パスを記録します。SHA-256 は内容の変更を確認する値です。パスは保存時のマシンと配置に依存するため、計画は所有者専用にし、原本・出力のディレクトリ外へ保管してください。未対応のバージョン、不明なフィールド、計画 ID の不整合、原本の変更、安全でない保存先は拒否します。ID は整合性の確認用であり、第三者の署名や実行許可ではありません。
@@ -533,7 +542,8 @@ DASH 出力には、直接変換または計画保存時の `--dash-addressing` 
 公称時間は区間を近似する値で、実際の AAC フレームの境界とは少し異なることがあります。索引は一つのファイル内の各区間の位置と時刻を示す情報です。正確な区切りをマニフェストにも記録する場合は、時系列を明示する形式を選んでください。どの形式でもサンプル、時刻、再生範囲の必須検査を行います。暗号方式と DRM の情報は別に指定します。区間の時刻を指定形式で表現できない場合は失敗とし、別の形式へ自動で切り替えません。[DASH の参照形式と条件（英語）](https://github.com/kazuhide/drmr/blob/main/docs/dash-addressing.md)。
 
 ```sh
-drmr plan source/input.m3u8 --encryption clear --output-format dash --dash-addressing list \
+drmr plan source/input.m3u8 --encryption clear --output-format \
+  dash --dash-addressing list \
   --output-dir result --save conversion.plan.json
 drmr convert --plan-file conversion.plan.json
 drmr verify --plan-file conversion.plan.json
@@ -550,8 +560,10 @@ drmr analyze "https://example.com/vod/master.m3u8" \
   --download-dir source &&
 drmr plan source/input.m3u8 --output-config outputs.json \
   --output-dir result --save conversion.plan.json &&
-drmr convert --plan-file conversion.plan.json --keys-file keys.json &&
-drmr verify --plan-file conversion.plan.json --keys-file keys.json
+drmr convert --plan-file conversion.plan.json --keys-file \
+  keys.json &&
+drmr verify --plan-file conversion.plan.json --keys-file \
+  keys.json
 ```
 
 この例の入力は clear なので `analyze` と `plan` に鍵は不要です。暗号化入力では入力鍵を含むファイルを両方に渡します。DASH と MP4 を取得した場合は、計画する入力を `source/input.mpd` または `source/input.mp4` に替えます。
@@ -644,9 +656,9 @@ drmr convert source/input.m3u8 --output-config outputs.json \
 
 ## ほかの出力への変更
 
-CENC の DASH/HLS では `target: "cenc"` と `drms: ["widevine", "playready"]` を選びます。HLS の FairPlay 設定と `hls_key_uri` は省き、PSSH に暗号方式が含まれる場合は cenc に合わせます。FairPlay は CENC では使えません。
+CENC の DASH/HLS では `encryption: "cenc"` と `drms: ["widevine", "playready"]` を選びます。HLS の FairPlay 設定と `hls_key_uri` は省き、PSSH に暗号方式が含まれる場合は cenc に合わせます。FairPlay は CENC では使えません。
 
-FairPlay TS は `format: "hls-ts"`、`target: "hls-sample-aes"`、`drms: ["fairplay"]` を指定し、鍵設定は `key`・明示 `iv`・`hls_key_uri`・FairPlay の `signaling` にします。MP4 の `kid` は指定しません。第8章の TS 出力例と[複数出力の説明（英語）](https://github.com/kazuhide/drmr/blob/main/docs/multiple-outputs.md)を参照してください。
+FairPlay TS は `output_format: "hls-ts"`、`encryption: "hls-sample-aes"`、`drms: ["fairplay"]` を指定し、鍵設定は `key`・明示 `iv`・`hls_key_uri`・FairPlay の `signaling` にします。MP4 の `kid` は指定しません。第8章の TS 出力例と[複数出力の説明（英語）](https://github.com/kazuhide/drmr/blob/main/docs/multiple-outputs.md)を参照してください。
 
 従来の単一出力 `system: "playready"` は別の入力条件を持ちます。新しい例の `system: "multi-drm"` と混同しないでください。[DRM 情報の指定と条件（英語）](https://github.com/kazuhide/drmr/blob/main/docs/drm-signaling.md)に記載しています。
 
@@ -728,13 +740,16 @@ drmr convert source/input.m3u8 --output-config outputs.json \
 ```sh
 chmod 600 config/fetch.json
 drmr analyze "https://example.com/vod/master.m3u8" \
-  --download-dir analyzed-source --fetch-config config/fetch.json --json
+  --download-dir analyzed-source --fetch-config \
+  config/fetch.json --json
 ```
 
 ```sh
 drmr convert "https://example.com/vod/master.m3u8" \
-  --download-dir authenticated-source --fetch-config config/fetch.json \
-  --encryption clear --output-format hls-fmp4 --output-dir clear-result
+  --download-dir authenticated-source --fetch-config \
+  config/fetch.json \
+  --encryption clear --output-format hls-fmp4 --output-dir \
+  clear-result
 ```
 
 ヘッダーは設定した origin にだけ送ります。リダイレクト先と子参照にも許可が必要です。HTTP とプライベートネットワークへの接続は既定で無効で、必要な場合だけ `allow_http`、`allow_private_network` を明示します。JSON に認証情報がある場合は、鍵設定と同じく秘密として扱います。
@@ -914,7 +929,8 @@ Shaka Packager はメディアの時刻を基準に区切るため、音声の�
 
 ```sh
 drmr convert source.mpd --encryption cbcs --output-format dash \
-  --output-dir result --keys-file config/keys.json --max-workers 2
+  --output-dir result --keys-file config/keys.json \
+  --max-workers 2
 drmr verify result/manifest.mpd --source source.mpd \
   --keys-file config/keys.json --max-workers 1 --json --stats
 ```
@@ -990,7 +1006,8 @@ docker run --rm --init --user "$(id -u):$(id -g)" \
   --mount "type=bind,src=$PWD/config,dst=/config,readonly" \
   --mount "type=bind,src=$PWD/output,dst=/output" \
   drmr:local convert /input/manifest.mpd \
-  --encryption cbcs --output-format dash --output-dir /output/protected-dash \
+  --encryption cbcs --output-format dash --output-dir \
+  /output/protected-dash \
   --keys-file /config/keys.json
 ```
 
@@ -1004,7 +1021,8 @@ docker run --rm --init --user "$(id -u):$(id -g)" \
   --mount "type=bind,src=$PWD/config,dst=/config,readonly" \
   --mount "type=bind,src=$PWD/output,dst=/output,readonly" \
   drmr:local verify /output/protected-dash/manifest.mpd \
-  --source /input/manifest.mpd --keys-file /config/keys.json --json
+  --source /input/manifest.mpd --keys-file /config/keys.json \
+  --json
 ```
 
 Docker を使っても、対応するメディアプロファイルは増えません。URL 取得には別途ダウンロード先の書き込み可能マウントと、その接続ポリシーも必要です。OS の CPU・メモリ制限を読める場合は、ワーカーの見積もりに反映します。
@@ -1126,10 +1144,12 @@ function Set-OwnerOnlyAcl($path, $security) {
 続けてディレクトリとファイルへ ACL を適用し、鍵設定を入力します。
 
 ```powershell
-Set-OwnerOnlyAcl $private ([Security.AccessControl.DirectorySecurity]::new())
+Set-OwnerOnlyAcl $private `
+  ([Security.AccessControl.DirectorySecurity]::new())
 $keyFile = Join-Path $private 'keys.json'
 New-Item -ItemType File -Path $keyFile | Out-Null
-Set-OwnerOnlyAcl $keyFile ([Security.AccessControl.FileSecurity]::new())
+Set-OwnerOnlyAcl $keyFile `
+  ([Security.AccessControl.FileSecurity]::new())
 notepad $keyFile
 ```
 
@@ -1139,11 +1159,13 @@ notepad $keyFile
 
 ```powershell
 .\drmr.exe analyze --metadata-only 'C:\media\source.mp4' --json
-.\drmr.exe plan 'C:\media\source.mp4' --encryption cbcs --output-format mp4
+.\drmr.exe plan 'C:\media\source.mp4' --encryption cbcs `
+  --output-format mp4
 $outDir = Join-Path $env:LOCALAPPDATA 'drmr-output'
 New-Item -ItemType Directory -Path $outDir -Force | Out-Null
 $result = Join-Path $outDir 'protected.mp4'
-.\drmr.exe convert 'C:\media\source.mp4' --encryption cbcs --output-format mp4 `
+.\drmr.exe convert 'C:\media\source.mp4' --encryption cbcs `
+  --output-format mp4 `
   --output-dir $result --keys-file $keyFile
 .\drmr.exe verify $result --source 'C:\media\source.mp4' `
   --keys-file $keyFile --json
@@ -1355,7 +1377,8 @@ auto は `--json >result.json` でも標準エラーが端末なら表示し、`
 
 ```sh
 drmr analyze original.mp4 --metadata-only --json --progress text
-drmr analyze original.mp4 --metadata-only --json --progress json \
+drmr analyze original.mp4 --metadata-only --json --progress \
+  json \
   >metadata.json 2>progress.jsonl
 drmr analyze original.mp4 --metadata-only --progress off
 ```
@@ -1499,16 +1522,21 @@ Desktop のビルド成功は GUI や再生の動作確認にはなりません�
 
 ```sh
 cargo test --locked -p drmr --test bbb_media -- --nocapture
-cargo test --locked -p drmr-core --test conversion_ts_output -- --nocapture
+cargo test --locked -p drmr-core --test conversion_ts_output \
+  -- --nocapture
 cargo test --locked -p drmr-core --test conversion_ts_output \
   audio_hls -- --nocapture
-cargo test --locked -p drmr --test conversion_ts_dash -- --nocapture
-cargo test --locked -p drmr-core --test conversion_finite_outputs \
+cargo test --locked -p drmr --test conversion_ts_dash -- \
+  --nocapture
+cargo test --locked -p drmr-core --test \
+  conversion_finite_outputs \
   -- --nocapture
-cargo test --locked -p drmr --test conversion_finite_outputs -- --nocapture
+cargo test --locked -p drmr --test conversion_finite_outputs \
+  -- --nocapture
 cargo test --locked -p drmr-core --test conversion_multi_drm \
   --test conversion_large_signaling -- --nocapture
-cargo test --locked -p drmr-core --test conversion_bundle_encryption \
+cargo test --locked -p drmr-core --test \
+  conversion_bundle_encryption \
   --test conversion_bundle_publication -- --nocapture
 ```
 

@@ -446,8 +446,7 @@ fn verification(v: &Value) -> Result<Value> {
         && v.get("native_manifest").is_none_or(|n| {
             n["errors"] == 0 && n["truncated"] == false && n["incomplete"] == false
         })
-        && v.get("external_manifest")
-            .is_none_or(|report| report["passed"] == true);
+        && v.get("external_manifest").is_none_or(conformance_passed);
     if boolean(&v["passed"])? != expected {
         return Err(bad());
     }
@@ -589,6 +588,13 @@ fn conformance(v: &Value) -> Result<Value> {
     })?;
     Ok(select(v, F))
 }
+fn conformance_passed(v: &Value) -> bool {
+    v["passed"] == true
+        && v["checks"].as_array().is_some_and(|checks| {
+            !checks.is_empty() && checks.iter().all(|check| check["passed"] == true)
+        })
+}
+
 fn failure(v: &Value, operation: OperationName) -> Result<Value> {
     if v["command"] != operation.as_str() {
         return Err(bad());
@@ -783,7 +789,7 @@ fn bundle(operation: OperationName, v: &Value) -> Result<(Value, &'static str, b
                 .as_array()
                 .is_some_and(Vec::is_empty)
                 || o["signaling"]["verified"] == true)
-                && (o["conformance"].is_null() || o["conformance"]["passed"] == true)
+                && (o["conformance"].is_null() || conformance_passed(&o["conformance"]))
         }) && if verify {
             boolean(&v["source_unchanged"])?
                 && boolean(&v["passed"])?
@@ -936,6 +942,55 @@ mod coverage_tests {
                 assert!(project(operation, Some(unknown), Some(&id), &payload).is_err());
             }
         }
+    }
+
+    #[test]
+    fn external_manifest_success_requires_every_actual_tool_check_to_pass() {
+        use drmr_core::conversion::conformance::{ManifestToolCheck, ManifestValidationReport};
+        let external = ManifestValidationReport {
+            schema_version: 1,
+            scope: "manifest-only",
+            passed: true,
+            manifest_count: 1,
+            checks: vec![ManifestToolCheck {
+                tool: "dash-if-manifest",
+                passed: true,
+                checked_manifest_count: 1,
+                warning_count: 0,
+                observed_version: None,
+            }],
+            hls_versions: Vec::new(),
+        };
+        let mut checked = native_report();
+        checked["external_manifest"] = serde_json::to_value(external).unwrap();
+        assert!(verified(&verification(&checked).unwrap()));
+        let mut contradictory = checked.clone();
+        contradictory["external_manifest"]["checks"][0]["passed"] = json!(false);
+        assert!(verification(&contradictory).is_err());
+        contradictory["passed"] = json!(false);
+        assert!(!verified(&verification(&contradictory).unwrap()));
+        // An omitted optional check retains the existing native report shape.
+        assert!(verified(&verification(&native_report()).unwrap()));
+
+        let fixtures =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../drmr/tests/fixtures/bbb");
+        let inspection = drmr_core::inspection::inspect(&fixtures.join("clip.mp4")).unwrap();
+        let mut bundle = json!({"kind":"bundle-conversion","schema_version":2,"plan_id":"a".repeat(64),
+            "outputs":[{"id":"result","conversion":{"schema_version":2,"input":inspection,"output":inspection,
+                "verification":native_report()},"signaling":{"systems":[],"verified":false},
+                "conformance":checked["external_manifest"]}]});
+        assert!(
+            project(OperationName::Convert, Some(12), None, &bundle)
+                .unwrap()
+                .success
+        );
+        bundle["outputs"][0]["conformance"]["checks"][0]["passed"] = json!(false);
+        // A failed tool remains visible as negative evidence, never success.
+        assert!(
+            !project(OperationName::Convert, Some(12), None, &bundle)
+                .unwrap()
+                .success
+        );
     }
 
     #[test]
