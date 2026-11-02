@@ -1,10 +1,11 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
+  "output_dir": "result",
   "outputs": [
     {
       "id": "hls",
-      "format": "hls",
-      "target": "cenc",
+      "output_format": "hls-fmp4",
+      "encryption": "cenc",
       "drms": []
     }
   ]

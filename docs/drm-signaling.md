@@ -60,13 +60,13 @@ packaged; physical sharing of their fragmented-MP4 files is not guaranteed.
 
 ## Supply private output settings
 
-Use an owner-protected schema-version-1 key file, as described in
-[security](security.md). The examples below show the `output` object inside:
+Use an owner-protected schema-version-2 key file, as described in
+[security](security.md). The examples below show the `outputs.default` entry inside:
 
 ```json
 {
-  "schema_version": 1,
-  "output": {}
+  "schema_version": 2,
+  "outputs": {"default": {}}
 }
 ```
 
@@ -121,16 +121,16 @@ Omit `widevine_pssh` or `playready_license_url` to select only one system. At le
 one must remain. Do not select FairPlay for the DASH output.
 
 ```sh
-drmr convert ./source/media.m3u8 --to cbcs --format dash \
-  --output ./dash --keys-file ./dash.keys.json
+drmr convert ./source/media.m3u8 --encryption cbcs --output-format dash \
+  --output-dir ./dash --keys-file ./dash.keys.json
 ```
 
-Select `--to cenc` for counter-mode DASH with the same DRM selection. Use a
+Select `--encryption cenc` for counter-mode DASH with the same DRM selection. Use a
 matching Widevine box if its payload specifies the encryption scheme:
 
 ```sh
-drmr convert ./source/media.m3u8 --to cenc --format dash \
-  --output ./dash-ctr --keys-file ./dash-ctr.keys.json
+drmr convert ./source/media.m3u8 --encryption cenc --output-format dash \
+  --output-dir ./dash-ctr --keys-file ./dash-ctr.keys.json
 ```
 
 For a qualified encrypted MP4, fMP4 DASH or HLS source, supply the input keys
@@ -139,7 +139,7 @@ membership; `stitch` also accepts qualified encrypted sources. Both replace the 
 records with the selected output records while independently comparing input samples
 and presentation clocks. `segments` also preserves segment membership. For example, CENC DASH can be converted to
 CBCS DASH with new Widevine and PlayReady records using
-`--to cbcs --format dash --processing segments`. Output verification checks the selected scheme and key
+`--encryption cbcs --output-format dash --processing segments`. Output verification checks the selected scheme and key
 identifier in the MPD and every referenced initialization file, as well as the
 exact provider records. A valid PSSH alone does not prove a working DRM license.
 
@@ -162,11 +162,11 @@ CBCS HLS can declare FairPlay, Widevine and PlayReady together for the same key:
 ```
 
 ```sh
-drmr convert ./source/media.m3u8 --to cbcs --format hls \
-  --output ./hls-cbcs --keys-file ./hls-cbcs.keys.json
+drmr convert ./source/media.m3u8 --encryption cbcs --output-format hls-fmp4 \
+  --output-dir ./hls-cbcs --keys-file ./hls-cbcs.keys.json
 ```
 
-For CENC HLS, select `--to cenc`, omit `hls_key_uri`, and set `fairplay` to `false`
+For CENC HLS, select `--encryption cenc`, omit `hls_key_uri`, and set `fairplay` to `false`
 or omit it. Keep Widevine, PlayReady, or both. FairPlay requires CBCS. CBCS can
 also select any nonempty subset of the three systems: omit unwanted provider
 fields and disable `fairplay` when it is not selected. A FairPlay selection needs
@@ -201,7 +201,7 @@ URI forms follow the official
 [Shaka Player HLS DRM parsers](https://shaka-project.github.io/shaka-player/docs/api/lib_hls_hls_parser.js.html).
 
 Without explicit provider signaling, generic CENC/CBCS HLS uses
-`KEYFORMAT="identity"` and still requires `output.hls_key_uri` alongside `kid` and
+`KEYFORMAT="identity"` and still requires `outputs.default.hls_key_uri` alongside `kid` and
 `key`. drmr uses supplied keys for verification and never retrieves that URI.
 This generic encryption configuration does not claim provider-specific DRM
 signaling or license playback.
@@ -227,8 +227,8 @@ It must agree with the value supplied by the FairPlay license service. MPEG-TS
 does not use an MP4 key identifier, so omit `kid`.
 
 ```sh
-drmr convert ./source/media.m3u8 --to hls-sample-aes --format hls-ts \
-  --output ./fairplay-ts --keys-file ./fairplay-ts.keys.json
+drmr convert ./source/media.m3u8 --encryption hls-sample-aes --output-format hls-ts \
+  --output-dir ./fairplay-ts --keys-file ./fairplay-ts.keys.json
 ```
 
 FairPlay playlists may omit the `IV` attribute. drmr retains the operator's

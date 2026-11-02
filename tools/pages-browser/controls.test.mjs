@@ -607,7 +607,7 @@ test('guide code inventory counts literal Markdown examples and every independen
   assert.equal(matrixRecipes.filter(recipe => recipe.target === 'clear').length, 20);
   assert.equal(matrixRecipes.filter(recipe => recipe.target !== 'clear').length, 45);
   assert.equal(matrixRecipeExampleCount, 65);
-  for (const [language, literalCount] of [['en', 45], ['ja', 45]]) {
+  for (const [language, literalCount] of [['en', 47], ['ja', 47]]) {
     const source = readFileSync(new URL(`../../site-content/guide/${language}.md`, import.meta.url), 'utf8');
     assert.equal(guideSourceExampleCount(source, matrixRecipeExampleCount), literalCount + 65);
   }
@@ -632,7 +632,7 @@ function recipeSample(recipe = matrixRecipes.find(value => value.id === 'recipe-
   const keyLink = mode => ({ text: mode === 'clear' ? 'keys.json'
     : { 'cenc-cbcs': 'cenc / cbcs', 'hls-aes128': 'AES-128', 'hls-sample-aes': 'SAMPLE-AES' }[mode],
     href: root + `keys/${recipe.format}-${recipe.target}-from-${mode}.json` });
-  const command = keys => `drmr convert "https://example.com/input.${extension}" \\\n  --download-dir src --outputs outputs.json \\\n  --output result${keys ? ' --keys-file keys.json' : ''}\n`;
+  const command = keys => `drmr convert "https://example.com/input.${extension}" \\\n  --download-dir src --output-config outputs.json${keys ? ' \\\n  --keys-file keys.json' : ''}\n`;
   const code = encrypted ? command(true)
     : '# Clear input\n' + command(false) + '\n# Encrypted input\n' + command(true);
   const entrypoint = `result/${recipe.format}/` + (recipe.format === 'mp4' ? 'media.mp4'
@@ -717,15 +717,16 @@ test('each recipe links complete key files for every admitted encrypted input pr
   }
 });
 
-test('all linked output and key examples are complete matching schema-3 and schema-2 files', () => {
+test('all linked output and key examples are complete matching schema-4 and schema-2 files', () => {
   const directory = new URL('../../docs/examples/', import.meta.url);
   const inspected = { outputs: new Set(), keys: new Set() };
   for (const recipe of matrixRecipes) {
     const sample = recipeSample(recipe);
     const outputName = `${recipe.format}-${recipe.target}.json`;
     const outputSpec = JSON.parse(readFileSync(new URL('outputs/' + outputName, directory), 'utf8'));
-    assert.deepEqual(outputSpec, { schema_version: 3, outputs: [
-      { id: recipe.format, format: recipe.format, target: recipe.target, drms: [] }] }, outputName);
+    assert.deepEqual(outputSpec, { schema_version: 4, output_dir: 'result', outputs: [
+      { id: recipe.format, output_format: recipe.format === 'hls' ? 'hls-fmp4' : recipe.format,
+        encryption: recipe.target, drms: [] }] }, outputName);
     inspected.outputs.add(outputName);
     for (const link of [...sample.blocks[1].links, ...sample.blocks[2].links]) {
       const name = link.href.split('/').at(-1);
@@ -753,20 +754,21 @@ test('all linked output and key examples are complete matching schema-3 and sche
     readdirSync(new URL(role + '/', directory)).filter(name => name.endsWith('.json')).sort(), [...inspected[role]].sort());
 });
 
-test('every recipe command fits 64 columns and keeps both literal continuations adjacent', () => {
+test('every recipe command fits 64 columns and keeps required literal continuations adjacent', () => {
   for (const expected of matrixRecipes) {
     const good = recipeSample(expected);
     requireRecipe(good, expected);
     const code = good.blocks[3].code;
     assert.ok(code.split('\n').every(line => line.length <= 64));
     assert.throws(() => requireRecipe(mutateRecipeCode(good, value => value.replaceAll(
-      ' outputs.json \\\n  --output', ' outputs.json --output')), expected), /64 columns/);
+      'outputs.json', 'x'.repeat(65))), expected), /64 columns/);
     const groups = code.trimEnd().split('\n\n');
     for (let groupIndex = 0; groupIndex < groups.length; groupIndex++) {
       const lines = groups[groupIndex].split('\n');
       const first = expected.target === 'clear' ? 1 : 0;
-      assert.equal(lines.length, first + 3);
-      for (const continuation of [first, first + 1]) {
+      const keyed = expected.target !== 'clear' || groupIndex === 1;
+      assert.equal(lines.length, first + (keyed ? 3 : 2));
+      for (const continuation of keyed ? [first, first + 1] : [first]) {
         assert.ok(lines[continuation].endsWith(' \\'));
         for (const change of [value => value.slice(0, -1), value => value + ' ',
           value => value + '\n', value => value + '\n \t ']) {
@@ -788,7 +790,7 @@ test('identical keyed conversions share one exact command while clear output ret
     assert.equal([...code.matchAll(/^drmr convert /gm)].length, expected.target === 'clear' ? 2 : 1);
     const changes = [
       ['drmr convert', 'drmr analyze'], ['--download-dir src', '--download-dir other'],
-      ['--outputs outputs.json', '--outputs stale.json'], ['--output result', '--output result.mp4'],
+      ['--output-config outputs.json', '--output-config stale.json'], ['--output-config outputs.json', '--output-config outputs.json --output-dir result.mp4'],
       ['https://example.com/', 'src/'], ['input.', 'encrypted.'],
       [' \\\n', '\n'], [' \\\n', ' \\ \n'], [' \\\n', ' \\\n\n'], [' \\\n', ' \\\n \t \n'],
       ...(expected.target === 'clear' ? [['# Clear input', '# cbc1 input'], ['# Encrypted input', '# Clear input']] : []),
@@ -796,7 +798,7 @@ test('identical keyed conversions share one exact command while clear output ret
     for (const [before, after] of changes) assert.throws(() => requireRecipe(mutateRecipeCode(good,
       value => value.replace(before, after)), expected), `${expected.id}: ${before}`);
     for (const change of [value => value.replace(/"https:\/\/[^"\n]+"/, url => url.slice(1, -1)),
-      value => value + 'drmr verify --plan plan.json\n', value => value + ' &&\n',
+      value => value + 'drmr verify --plan-file plan.json\n', value => value + ' &&\n',
       value => '# Clear input\n' + value]) {
       assert.throws(() => requireRecipe(mutateRecipeCode(good, change), expected));
     }

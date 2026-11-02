@@ -83,7 +83,8 @@ Local resource references remain confined to the
 selected source or output root; a layout requiring an upward `..` reference is
 refused.
 
-New single-output plans use schema 9 and named-output plans use schema 10. They
+New single-output plans use schema 9 and named-output plans use schema 10;
+an explicit manifest profile selects schema 11 or 12 respectively. These plans
 bind source selectors, directories, playlist paths and segment naming rules.
 Execution revalidates the source graph and saved placement. Schemas 1–8 retain
 their saved choices; schemas 7/8 keep their recorded `track-0000-` prefixes.

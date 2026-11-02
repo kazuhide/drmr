@@ -73,9 +73,17 @@ For example, this `outputs.json` requests CBCS fMP4 HLS for FairPlay:
 
 ```json
 {
-  "schema_version": 3,
+  "schema_version": 4,
+  "output_dir": "result",
   "outputs": [
-    {"id": "hls", "format": "hls", "target": "cbcs", "drms": ["fairplay"]}
+    {
+      "id": "hls",
+      "drms": [
+        "fairplay"
+      ],
+      "output_format": "hls-fmp4",
+      "encryption": "cbcs"
+    }
   ]
 }
 ```
@@ -105,8 +113,7 @@ Select new source and result paths under existing parent directories. Then run:
 ```sh
 drmr convert "https://example.com/vod/master.m3u8" \
   --download-dir source \
-  --outputs outputs.json --keys-file keys.json \
-  --output result
+  --output-config outputs.json --keys-file keys.json
 ```
 
 The entrypoint is `result/hls/master.m3u8`; the retained source is
@@ -128,7 +135,7 @@ Use `analyze --metadata-only INPUT` for a quick key-free read of local or HTTP(S
 MP4, DASH or HLS declarations. It does not retain a URL source or verify complete
 media. Use the [saved-plan workflow](docs/executable-plans.md) when you want to
 inspect the source first, fix its fingerprints and destination, then run
-`convert --plan` and a fresh independent `verify --plan`. `plan` reads your
+`convert --plan-file` and a fresh independent `verify --plan-file`. `plan` reads your
 output list; `plan --save` produces a different generated execution-plan file.
 
 Use global `--progress text` for a live terminal status and a history of finished
@@ -140,7 +147,7 @@ Explicit `text`, `json` or `off` overrides that choice. See
 
 The built-in Rust linter checks final HLS/DASH manifests during conversion and
 full verification. Use `verify OUTPUT --manifest-only` for a separate manifest
-check, and add `--external-validator` for optional Apple or DASH-IF checks.
+check, and add `--external-manifest-check` for optional Apple or DASH-IF checks.
 See [manifest validation](docs/manifest-validation.md) for coverage and setup.
 Matching encryption and DRM declarations does not prove license acquisition or
 playback on a particular device.
@@ -178,9 +185,9 @@ drmr packages supplied media and signaling. It does not provide a DRM license se
 | --- | --- |
 | `doctor` | Discover native conversion tools; add `--decode` for decoder requirements, `--probe` for version/option checks, or `--json` for scripts |
 | `analyze` | Read local or URL metadata with `--metadata-only`; otherwise check complete local media or retain and check a supported URL with `--download-dir`; encrypted full checks use `--keys-file` |
-| `plan` | Describe conditional intent; add `--save` and `--output` for an executable plan; `--outputs` selects named outputs |
-| `convert` | Convert media directly or execute a saved plan with `--plan`; `--outputs` selects several outputs without saving a plan |
-| `verify` | Compare result media with its original source; `--plan` also checks source identity and output intent; `--manifest-only` runs the native HLS/DASH linter; `--external-validator` adds external checks |
+| `plan` | Describe conditional intent; add `--save` and a destination for an executable plan; `--output-config` selects named outputs |
+| `convert` | Convert media directly or execute a saved plan with `--plan-file`; `--output-config` selects several outputs without saving a plan |
+| `verify` | Compare result media with its original source; `--plan-file` also checks source identity and output intent; `--manifest-only` runs the native HLS/DASH linter; `--external-manifest-check` adds external checks |
 | `serve` | Start the experimental local web console |
 | `version` | Print the version |
 

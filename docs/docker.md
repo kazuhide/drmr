@@ -37,7 +37,7 @@ docker run --rm --init --user "$(id -u):$(id -g)" \
   --mount "type=bind,src=$PWD/config,dst=/config,readonly" \
   --mount "type=bind,src=$PWD/output,dst=/output" \
   drmr:local convert /input/manifest.mpd \
-  --to cbcs --format dash --output /output/protected-dash \
+  --encryption cbcs --output-format dash --output-dir /output/protected-dash \
   --keys-file /config/keys.json
 ```
 
@@ -48,10 +48,10 @@ Mount its output list and protected key file read-only; saved plan paths must
 refer to the same container paths when executed or verified later. Native Rust
 manifest linting is included. The image
 does not bundle the optional [external manifest validators](manifest-validation.md).
-Apple's HLS validator runs on a macOS host. A `conformance: "required"` output
+Apple's HLS validator runs on a macOS host. A `external_manifest_check: true` output
 fails in a container without its configured validator; it is never reported as
 checked. To package in this image and validate on macOS afterward, choose
-`conformance: "none"` and explicitly run host `verify OUTPUT --manifest-only --external-validator` on
+`external_manifest_check: false` and explicitly run host `verify OUTPUT --manifest-only --external-manifest-check` on
 the final manifests. That separate check does not retroactively change the
 saved plan or its conversion report.
 

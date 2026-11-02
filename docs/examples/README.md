@@ -5,7 +5,8 @@ Replace the source KIDs, keys, key URIs and associated IVs with the values for
 your input. Choose new output values for your own content. Never use these
 published keys to protect private media.
 
-The `outputs/` directory contains thirteen complete schema-3 output lists.
+The `outputs/` directory contains thirteen complete schema-4 output configurations.
+Their `output_dir: "result"` is relative to the configuration file's directory.
 Each file in `keys/` is a complete schema-2 `keys.json` for one named output,
 including its source-key mapping when encrypted. The nine `from-clear` files
 contain only output keys; the other thirty-nine include source keys.

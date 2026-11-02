@@ -67,14 +67,15 @@ class ConversionExampleTests(unittest.TestCase):
                 with self.subTest(source=source, format=format, target=target, protection=protection):
                     command = examples.commands(source, format, target, protection)
                     expected = ["drmr", "convert", f"https://example.com/input.{extension}",
-                                "--download-dir", "src", "--outputs", "outputs.json", "--output", "result"]
+                                "--download-dir", "src", "--output-config", "outputs.json"]
                     if protection != "clear" or target != "clear":
                         expected += ["--keys-file", "keys.json"]
                     self.assertEqual(shlex.split(command.replace("\\\n", "")), expected)
 
     def test_complete_output_files_define_all_thirteen_choices(self):
-        expected = {f"{format}-{target}.json": {"schema_version": 3, "outputs": [
-            {"id": format, "format": format, "target": target, "drms": []}]}
+        expected = {f"{format}-{target}.json": {"schema_version": 4, "output_dir": "result", "outputs": [
+            {"id": format, "output_format": "hls-fmp4" if format == "hls" else format,
+             "encryption": target, "drms": []}]}
             for format, targets in OUTPUTS.items() for target in targets}
         directory = TOOLS.parent / "docs/examples/outputs"
         actual = {path.name: json.loads(path.read_text(encoding="utf-8")) for path in directory.iterdir()}
@@ -89,9 +90,9 @@ class ConversionExampleTests(unittest.TestCase):
         self.assertLessEqual(max(len(line) for command in commands for line in command.splitlines()), 64)
         for command in commands:
             lines = command.splitlines()
-            self.assertEqual(len(lines), 3)
-            self.assertTrue(all(line.endswith(" \\") for line in lines[:2]))
-            self.assertFalse(lines[2].endswith("\\"))
+            self.assertIn(len(lines), (2, 3))
+            self.assertTrue(all(line.endswith(" \\") for line in lines[:-1]))
+            self.assertFalse(lines[-1].endswith("\\"))
 
     def test_both_languages_link_complete_files_with_matching_commands(self):
         values = []
@@ -101,15 +102,16 @@ class ConversionExampleTests(unittest.TestCase):
             self.assertNotIn(fence + "json", markdown)
             blocks = re.findall("^" + fence + r"sh\n(.*?)^" + fence + "$", markdown, re.M | re.S)
             self.assertEqual(len(blocks), 65)
-            self.assertEqual(markdown.count(" --outputs outputs.json "), 85)
+            self.assertEqual(markdown.count(" --output-config outputs.json"), 85)
             for operation in ("plan", "analyze", "verify"):
                 self.assertNotIn("drmr " + operation, markdown)
             for (source, format, target), code in zip(examples.routes(), blocks):
                 extension = "mp4" if source == "mp4" else "mpd" if source == "dash" else "m3u8"
                 direct = (f'drmr convert "https://example.com/input.{extension}" \\\n'
-                          '  --download-dir src --outputs outputs.json \\\n  --output result')
-                expected = (direct + " --keys-file keys.json\n" if target != "clear" else
-                            "# Clear input\n" + direct + "\n\n# Encrypted input\n" + direct + " --keys-file keys.json\n")
+                          '  --download-dir src --output-config outputs.json')
+                encrypted = direct + " \\\n  --keys-file keys.json\n"
+                expected = (encrypted if target != "clear" else
+                            "# Clear input\n" + direct + "\n\n# Encrypted input\n" + encrypted)
                 self.assertEqual(code, expected)
             values.append(blocks)
         self.assertEqual(values[0], values[1])

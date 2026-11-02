@@ -67,7 +67,7 @@ origins, authentication, and transfer limits; the same options apply to `analyze
 ## 2. Save one fixed conversion
 
 ```sh
-drmr plan ./source/input.m3u8 --to cbcs --format dash --output ./result --save ./conversion.plan.json --json
+drmr plan ./source/input.m3u8 --encryption cbcs --output-format dash --output-dir ./result --save ./conversion.plan.json --json
 ```
 
 The saved plan has `kind: "execution-plan"` and `schema_version: 9`. It records
@@ -97,15 +97,28 @@ On Unix, use a trusted output and plan parent owned by your user with no group
 or other-user write permission. Protected shared temporary directories have a
 separate supported rule. See [workspace permissions](security.md#temporary-files-and-cleanup).
 
-Use `--to clear` for unencrypted output. Other supported combinations include
+Use `--encryption clear` for unencrypted output. Other supported combinations include
 `cenc` DASH, `cbcs` fragmented MP4 HLS, and `hls-aes128` or `hls-sample-aes` with
-`--format hls-ts` for qualified TS sources. `--format hls` always means fragmented
+`--output-format hls-ts` for qualified TS sources. `--output-format hls-fmp4` always means fragmented
 MP4 HLS, including when the input uses TS. A saved plan accepts one output format;
 create a separate plan and destination for another output.
 
-Without `--save`, `plan INPUT --to ... --json` still describes conditional intent
+Without `--save`, `plan INPUT --encryption ... --json` still describes conditional intent
 from metadata and can describe multiple formats. That older JSON is not an
 execution plan.
+
+A supported URL can also be acquired while saving, without a separate analyze
+command:
+
+```sh
+drmr plan "https://example.com/vod/master.m3u8" \
+  --download-dir source --encryption cbcs --output-format dash \
+  --output-dir result --save conversion.plan.json
+```
+
+The same fetch settings and retained-source conditions apply as in `analyze`.
+Planning without `--save` can read bounded URL metadata without retaining the
+original; that conditional description is not an executable saved plan.
 
 ## 3. Execute the saved plan
 
@@ -113,7 +126,7 @@ Prepare a private [operator key file](usage.md#separate-input-and-output-keys)
 with the appropriate input and output key roles, then run:
 
 ```sh
-drmr convert --plan ./conversion.plan.json --keys-file ./keys.json --json
+drmr convert --plan-file ./conversion.plan.json --keys-file ./keys.json --json
 ```
 
 For clear input and output, omit `--keys-file`. The command reads the retained
@@ -131,11 +144,11 @@ URLs, and external-tool commands are not serialized. Keys and optional signaling
 are supplied at execution time. A plan therefore does not pin a particular key
 identifier, key address, or license endpoint. Optional signaling must still meet
 its separately documented input and output profile. `--packager-bin`,
-`--max-workers`, `--json`, and `--measure` remain runtime options. `--decode`
+`--max-workers`, `--json`, and `--stats` remain runtime options. `--decode`
 can strengthen a saved minimum. Legacy single version-one and named-output
 version-two plans keep a decoded minimum. Version-three and version-four plans
 retain their saved depth and original complete-track packaging behavior. Input,
-target, format, processing, DASH addressing, output, and download overrides are refused with `--plan`.
+target, format, processing, DASH addressing, output, and download overrides are refused with `--plan-file`.
 Versions 5/6 retain their saved processing choices and previous output placement.
 Versions 7/8 additionally bind output placement and DASH addressing. Create a new
 plan to use the current defaults; loading a plan never replaces its saved choices.
@@ -143,7 +156,7 @@ plan to use the current defaults; loading a plan never replaces its saved choice
 ## 4. Verify independently
 
 ```sh
-drmr verify --plan ./conversion.plan.json --keys-file ./keys.json --json
+drmr verify --plan-file ./conversion.plan.json --keys-file ./keys.json --json
 ```
 
 Verification opens the current source and result bytes independently. It checks

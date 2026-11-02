@@ -411,7 +411,7 @@ equality claim. License-server and device playback were not qualified.
 
 ## Shared source preparation in direct conversion
 
-A later comparison uses one `convert --outputs` command to analyze, plan,
+A later comparison uses one `convert --output-config` command to analyze, plan,
 convert and check two outputs. The retained clear HLS TS input has six video
 renditions, one audio rendition and 708 referenced files totaling 857,447,176
 bytes. It is a separate retained copy from the earlier experiments above.
@@ -721,14 +721,14 @@ DRM device and license-server playback were not exercised.
 Use the same local original to separate processing from network transfer:
 
 ```sh
-drmr analyze input.m3u8 --json --measure --progress off
-drmr analyze input.m3u8 --max-workers 1 --json --measure --progress off
+drmr analyze input.m3u8 --json --stats --progress off
+drmr analyze input.m3u8 --max-workers 1 --json --stats --progress off
 ```
 
 Add `--decode` to both commands when comparing complete-decoding workloads.
 Keep the source, compiler, tools and requested verification depth fixed.
 Record whole-command time separately from the overlapping phase sums emitted
-by `--measure`. See [resource limits and measurements](resources.md) for budgets,
+by `--stats`. See [resource limits and measurements](resources.md) for budgets,
 cancellation and measurement coverage.
 
 These observations describe the selected inputs and recorded host conditions.

@@ -1,10 +1,11 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
+  "output_dir": "result",
   "outputs": [
     {
       "id": "hls-ts",
-      "format": "hls-ts",
-      "target": "hls-aes128",
+      "output_format": "hls-ts",
+      "encryption": "hls-aes128",
       "drms": []
     }
   ]

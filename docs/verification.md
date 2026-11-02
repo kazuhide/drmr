@@ -9,16 +9,16 @@ an additional check.
 and DRM declaration checks before publishing the result. This also applies to
 direct URL conversion and multiple outputs; there is no separate verification
 flag to enable. Use standalone `verify` when the saved files should be read and
-checked again after conversion. `verify --plan` additionally checks the saved
+checked again after conversion. `verify --plan-file` additionally checks the saved
 source fingerprints and output selections. A direct conversion does not save a
 plan automatically.
 
 ```sh
 drmr analyze source/input.m3u8 --json
 drmr analyze source/input.m3u8 --decode --json
-drmr plan source/input.m3u8 --to cbcs --format dash --output result --save conversion.plan.json --decode --json
-drmr convert --plan conversion.plan.json --keys-file keys.json --json
-drmr verify --plan conversion.plan.json --keys-file keys.json --json
+drmr plan source/input.m3u8 --encryption cbcs --output-format dash --output-dir result --save conversion.plan.json --decode --json
+drmr convert --plan-file conversion.plan.json --keys-file keys.json --json
+drmr verify --plan-file conversion.plan.json --keys-file keys.json --json
 ```
 
 The last two commands retain the saved plan's decode requirement even without

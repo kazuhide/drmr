@@ -33,7 +33,7 @@ no cryptographic authentication, license acquisition or device qualification.
 | Key identifier (KID) | Identifies which key applies to a track. It is public media metadata, rather than the content key itself. |
 | Initialization vector (IV) | Supplies the starting value for an encryption operation. It can be present in the media or playlist; drmr also masks configured IV values in tool diagnostics. |
 | License URLs and HLS key URIs | Describe where a player should obtain a license or key. Configured output addresses are deliberately included in the resulting media metadata or playlists. |
-| HTTP request headers | Used for the configured download origin. They are excluded from download reports; keep the fetch-policy file private. |
+| HTTP request headers | Used for the configured download origin. They are excluded from download reports; keep the fetch-configuration file private. |
 | Paths and labels | Identify local input, output, tools, and assets. Some successful results and diagnostics display them; they are not all treated as secrets. |
 
 A license URL can also be encoded inside a Protection System Specific Header (PSSH), which is DRM initialization metadata stored in a media file or manifest. Hexadecimal and Base64 are reversible encodings, not encryption. Masking a URL only in its readable form is insufficient. Known signaling values are removed from diagnostic records, while the intended signaling remains in the media output.
@@ -104,6 +104,12 @@ terminal controls escaped. It omits source URLs, keys, IVs, authentication value
 DRM addresses, KIDs and raw media metadata. Review filenames before sharing saved
 text. These progress protections do not remove explicit retained-source paths
 from successful JSON reports or sanitize the original downloaded manifests.
+
+`--report-file` saves the same result JSON and can therefore retain local paths
+and file fingerprints. It creates a new file outside the input and output trees
+and refuses to replace another file, including a plan or configuration file.
+Protect this report before sharing it. `--stats` adds numeric measurements;
+it does not permit keys, request headers or source URLs in the report.
 
 These controls cover recognized secret material. They do not classify every filename, label, media tag, or arbitrary value as confidential. Public Rust APIs that return captured raw tool output return data for processing; their raw buffers are not a safe log format. Review exported reports and third-party diagnostics before sharing them.
 

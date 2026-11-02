@@ -63,9 +63,9 @@ def recipe_fixture(language="en", first_example=1):
                                    + '.json">' + mode_labels[mode] + "</a>" for mode in key_modes[index])
                 content.append("<p>Encrypted input: " + links + " → keys.json.</p>")
                 direct = ('drmr convert "https://example.com/input.' + suffix + '" \\\n'
-                          '  --download-dir src --outputs outputs.json \\\n  --output result')
-                command = (direct + " --keys-file keys.json\n" if target != "clear" else
-                           "# Clear input\n" + direct + "\n\n# Encrypted input\n" + direct + " --keys-file keys.json\n")
+                          '  --download-dir src --output-config outputs.json')
+                command = (direct + " \\\n  --keys-file keys.json\n" if target != "clear" else
+                           "# Clear input\n" + direct + "\n\n# Encrypted input\n" + direct + " \\\n  --keys-file keys.json\n")
                 content.append(figure(command))
                 entrypoint = "result/" + output_format + "/" + {"mp4": "media.mp4", "dash": "manifest.mpd"}.get(output_format, "master.m3u8")
                 content.append("<p>Output: <code>" + entrypoint + "</code>.</p>")
@@ -461,8 +461,10 @@ class Site(unittest.TestCase):
             source = self.repo / ("site-content/guide/" + language + ".md")
             paragraphs = source.read_text(encoding="utf-8").split("\n\n")
             self.assertTrue(paragraphs[1].startswith("# 1."))
-            self.assertNotIn("[", paragraphs[2])
-            paragraphs[2] = "Guide fixture introduction."
+            introduction = next(index for index, paragraph in enumerate(paragraphs)
+                                if paragraph.startswith("drmr ") or paragraph == "Guide fixture introduction.")
+            self.assertNotIn("[", paragraphs[introduction])
+            paragraphs[introduction] = "Guide fixture introduction."
             source.write_bytes("\n\n".join(paragraphs).encode("utf-8"))
         spec = importlib.util.spec_from_file_location("chapter_link_builder_fixture", self.repo / "tools/build_guide_site.py")
         builder = importlib.util.module_from_spec(spec)
@@ -866,8 +868,8 @@ class ConversionExamples(unittest.TestCase):
                 ('&quot;https://example.com/input.mp4&quot;', 'https://example.com/input.mp4'),
                 ('--download-dir src', '--download-dir different-source'),
                 ('--download-dir src', ''),
-                ('--outputs outputs.json', '--outputs conversion.plan.json'),
-                ('--output result', '--output result.mp4'),
+                ('--output-config outputs.json', '--output-config conversion.plan.json'),
+                ('--output-config outputs.json', '--output-config outputs.json --output-dir result.mp4'),
                 ('drmr convert', 'drmr analyze'),
                 ('https://example.com/input.m3u8', './remote.m3u8')):
             self.assertIn(old, original)
@@ -875,8 +877,8 @@ class ConversionExamples(unittest.TestCase):
                 self.check(original.replace(old, new, 1))
 
     def test_keys_follow_input_and_output_roles(self):
-        clear = 'drmr convert "https://example.com/input.mp4" \\\n  --download-dir src --outputs outputs.json \\\n  --output result\n'
-        encrypted = clear.rstrip() + " --keys-file keys.json\n"
+        clear = 'drmr convert "https://example.com/input.mp4" \\\n  --download-dir src --output-config outputs.json\n'
+        encrypted = clear.rstrip() + " \\\n  --keys-file keys.json\n"
         CHECK.validate_recipe_commands(clear, "mp4", "mp4", "clear")
         CHECK.validate_recipe_commands(encrypted, "mp4", "mp4", "clear", True)
         CHECK.validate_recipe_commands(encrypted, "mp4", "mp4", "cbcs")
@@ -894,7 +896,7 @@ class ConversionExamples(unittest.TestCase):
                 self.check(original.replace(old, new, 1))
 
     def test_each_input_has_one_exact_command_without_shell_boilerplate(self):
-        code = 'drmr convert "https://example.com/input.mp4" \\\n  --download-dir src --outputs outputs.json \\\n  --output result\n'
+        code = 'drmr convert "https://example.com/input.mp4" \\\n  --download-dir src --output-config outputs.json\n'
         for changed in (code.replace(" \\\n", "\n", 1), code.replace(" \\\n", " \\ \n", 1),
                         code.replace(" \\\n", " \\\u2028", 1), code.replace(" \\\n", " \\\n\n", 1),
                         code.replace(" \\\n", " \\\n \n", 1), code + " &&", code + "exit 0\n", code + code,
@@ -902,10 +904,11 @@ class ConversionExamples(unittest.TestCase):
             with self.subTest(changed=changed[:90]), self.assertRaisesRegex(CHECK.Failure, "site-guide-recipe-command"):
                 CHECK.validate_recipe_commands(changed, "mp4", "mp4", "clear")
 
-    def test_second_continuation_remains_adjacent_to_the_output_line(self):
+    def test_second_continuation_remains_adjacent_to_the_key_line(self):
         code = ('drmr convert "https://example.com/input.mp4" \\\n'
-                '  --download-dir src --outputs outputs.json \\\n'
-                '  --output result\n')
+                '  --download-dir src --output-config outputs.json \\\n'
+                '  --keys-file keys.json\n')
+        CHECK.validate_recipe_commands(code, "mp4", "mp4", "cbcs")
         lines = code.splitlines(keepends=True)
         for changed in (
                 lines[0] + lines[1].replace("\\\n", "\n") + lines[2],
@@ -915,7 +918,7 @@ class ConversionExamples(unittest.TestCase):
                 lines[0] + lines[2] + lines[1],
                 lines[0] + lines[1].replace("\\\n", "") + lines[2]):
             with self.subTest(changed=changed), self.assertRaisesRegex(CHECK.Failure, "site-guide-recipe-command"):
-                CHECK.validate_recipe_commands(changed, "mp4", "mp4", "clear")
+                CHECK.validate_recipe_commands(changed, "mp4", "mp4", "cbcs")
 
 
 class CompleteKeyExamples(unittest.TestCase):
@@ -979,17 +982,20 @@ class CompleteKeyExamples(unittest.TestCase):
         path = self.output_directory / "hls-cbcs.json"
         original = path.read_text(encoding="utf-8")
         changes = [
-            original.replace('"schema_version": 3', '"schema_version": 2'),
-            original.replace('"schema_version": 3', '"schema_version": 3.0'),
-            original.replace('"schema_version": 3', '"schema_version": 3, "schema_version": 3'),
+            original.replace('"schema_version": 4', '"schema_version": 3'),
+            original.replace('"schema_version": 4', '"schema_version": 4.0'),
+            original.replace('"schema_version": 4', '"schema_version": 4, "schema_version": 4'),
             original.replace('"id": "hls"', '"id": "other"'),
-            original.replace('"format": "hls"', '"format": "dash"'),
-            original.replace('"target": "cbcs"', '"target": "cenc"'),
+            original.replace('"output_dir": "result"', '"output_dir": false'),
+            original.replace('"output_dir": "result"', '"output_dir": "other"'),
+            original.replace('"output_format": "hls-fmp4"', '"output_format": "dash"'),
+            original.replace('"encryption": "cbcs"', '"encryption": "cenc"'),
             original.replace('"drms": []', '"drms": ["fairplay"]'),
             original.replace('"drms": []', '"drms": [], "unknown": true'),
             original.replace('"drms": []', '"missing_drms": []'),
         ]
         for changed in changes:
+            self.assertNotEqual(changed, original)
             path.write_text(changed, encoding="utf-8")
             with self.subTest(changed=changed[:120]), self.assertRaisesRegex(CHECK.Failure, "site-guide-output-examples"):
                 CHECK.validate_output_examples(self.repository)

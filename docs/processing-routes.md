@@ -1,6 +1,6 @@
 # Understand a processing route
 
-`analyze --metadata-only` reports what local or URL metadata declares. Without `--save`, `plan` lists conditional ways to satisfy the requested output. Normal `analyze` checks complete source media; `plan --save` additionally fixes its file fingerprints and output intent for later execution. Use `--outputs` for [several named outputs](multiple-outputs.md). A successful single conversion reports the handler it actually used in `processing.route`, with a fixed reason and its input preparation; a multiple-output report includes this information for each child conversion. The identifiers below connect those reports to this guide. See [saved execution plans](executable-plans.md) for the four-stage workflow and fresh revalidation boundaries.
+`analyze --metadata-only` reports what local or URL metadata declares. Without `--save`, `plan` lists conditional ways to satisfy the requested output. Normal `analyze` checks complete source media; `plan --save` additionally fixes its file fingerprints and output intent for later execution. Use `--output-config` for [several named outputs](multiple-outputs.md). A successful single conversion reports the handler it actually used in `processing.route`, with a fixed reason and its input preparation; a multiple-output report includes this information for each child conversion. The identifiers below connect those reports to this guide. See [saved execution plans](executable-plans.md) for the four-stage workflow and fresh revalidation boundaries.
 
 ```text
 Original local file or manifest resources
@@ -21,10 +21,11 @@ timestamps and boundaries. `stitch` prepares complete tracks and packages the
 requested output; HLS/DASH output is segmented again, while MP4 output is a file.
 `auto` resolves a qualified route for the input and requested output. An explicitly requested mode never silently changes to another mode.
 
-New single-output plans use schema 9 and named-output plans use schema 10. Both
+New single-output plans use schema 9 and named-output plans use schema 10;
+an explicit manifest profile selects schema 11 or 12 respectively. These plans
 fix the requested and resolved modes, boundary guarantee, source-relative
 placement and DASH reference form. Earlier schemas 1–6 keep their exact saved
-packaging requests and previous placement. `convert --plan`
+packaging requests and previous placement. `convert --plan-file`
 refuses `--processing`; create a new plan to change it. Native segment processing
 needs no per-segment media subprocess. Additional `--decode` can still prepare
 complete tracks for decoding; the existing TS decoding preparation also needs
@@ -125,10 +126,10 @@ TS segmentation and requested protection → independent final-playlist checks
 against the original media. Joint audio/video produces separate playlists and
 an HLS master; audio-only uses native AAC frame boundaries and original clocks.
 The packaging step disables an initial clear interval and timestamp shifting.
-This route is selected explicitly by `--format hls-ts`; the existing `hls`
+This route is selected explicitly by `--output-format hls-ts`; the existing `hls`
 format continues to produce fragmented MP4.
 
-Metadata alone may not qualify a finite MP4 profile or distinguish supported fragmented MP4 HLS from transport-stream HLS. A metadata-only plan can therefore contain several conditional candidates. Each has `revalidation_required: true` and fixed condition codes. Actual source validation selects a handler or refuses the input; a rejected progressive profile does not imply permission to fall back to another route. A saved plan with `--outputs` executes its named outputs together, using the appropriate route for each one.
+Metadata alone may not qualify a finite MP4 profile or distinguish supported fragmented MP4 HLS from transport-stream HLS. A metadata-only plan can therefore contain several conditional candidates. Each has `revalidation_required: true` and fixed condition codes. Actual source validation selects a handler or refuses the input; a rejected progressive profile does not imply permission to fall back to another route. A saved plan with `--output-config` executes its named outputs together, using the appropriate route for each one.
 
 For metadata-only plans, `compatible` requires a valid target intent and a candidate for every requested output format. A known text track has no conversion candidate and makes the plan unsupported: the media handlers support audio and video. A plan with a supported DASH candidate but no candidate for its requested MP4 output is also unsupported. Its `execution_available` field additionally requires one output format; neither field establishes that the source, keys, or tools have passed execution checks. Unknown HLS roles retain conditional candidates until actual resource inspection establishes their roles.
 
@@ -155,7 +156,7 @@ DASH-IF schema and rule checks inspect the final MPD. These checks operate on
 byte-identical copies of the encrypted output manifests. They do not substitute
 decrypted media, request keys, or prove license acquisition or device playback.
 The new result directory appears only after every output has passed all its
-required checks. A fresh `verify --plan` repeats those checks against the
+required checks. A fresh `verify --plan-file` repeats those checks against the
 current original and final output files.
 
 ## Encryption facts and their limits
@@ -180,8 +181,8 @@ Metadata report version-one additions remain optional: `Inspection.details`, `Co
 
 ### fmp4-hls-ts
 
-Use `--format hls-ts` with `--to clear`, `--to hls-aes128`, or
-`--to hls-sample-aes`. Supplied input keys decrypt CENC/CBCS samples or outer
+Use `--output-format hls-ts` with `--encryption clear`, `--encryption hls-aes128`, or
+`--encryption hls-sample-aes`. Supplied input keys decrypt CENC/CBCS samples or outer
 HLS AES-128 protection; the source is retained unchanged. Normalization is
 checked in Rust before TS packaging, and the final HLS presentation is reopened
 for native media and manifest checks. Additional `--decode` checks complete

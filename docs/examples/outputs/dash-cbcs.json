@@ -1,10 +1,11 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
+  "output_dir": "result",
   "outputs": [
     {
       "id": "dash",
-      "format": "dash",
-      "target": "cbcs",
+      "output_format": "dash",
+      "encryption": "cbcs",
       "drms": []
     }
   ]

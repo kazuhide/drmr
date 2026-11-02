@@ -74,8 +74,8 @@ unencrypted media. The two containers have different conversion limits:
 | fMP4 | Clear, `cenc`, `cbcs`, AES-128 | cenc/cbcs by KID; AES-128 by exact resolved key URI |
 | MPEG-TS | Clear, AES-128, SAMPLE-AES | Encrypted input by exact resolved key URI; SAMPLE-AES needs its associated IV |
 
-Choose `--format hls` for fMP4 HLS or `--format hls-ts` for MPEG-TS HLS.
-For FairPlay transport-stream encryption, use `--to hls-sample-aes`.
+Choose `--output-format hls-fmp4` for fMP4 HLS or `--output-format hls-ts` for MPEG-TS HLS.
+For FairPlay transport-stream encryption, use `--encryption hls-sample-aes`.
 CENC fMP4 HLS uses `SAMPLE-AES-CTR`; it is a base-HLS profile and is not compatible
 with Apple's authoring requirements or FairPlay. CBCS fMP4 HLS uses `SAMPLE-AES`
 and can carry all three DRM declarations. These declarations do not establish
@@ -158,8 +158,8 @@ publishing output. These results do not establish DRM license or device playback
 
 The six MP4/DASH cases require authentication and a query string for their local
 HTTP source. Each case runs `analyze URL --download-dir`, stops the server, saves
-a plan from `input.mp4` or `input.mpd`, executes `convert --plan`, and runs
-`verify --plan`. Encoded packets, timing and complete decoded content match the
+a plan from `input.mp4` or `input.mpd`, executes `convert --plan-file`, and runs
+`verify --plan-file`. Encoded packets, timing and complete decoded content match the
 source. Saved-source fingerprints and output intent also match; original media
 and raw manifests remain unchanged. The cases check that credentials and keys
 are absent from stdout, stderr and the saved plan. `license_playback_verified`
@@ -254,21 +254,21 @@ The VP9/AAC profile supports clear or CENC sample protection. The CBCS entries a
 For clear input and output, no key configuration is needed:
 
 ```sh
-drmr convert original.mp4 --to clear --format mp4 --output clear.mp4
+drmr convert original.mp4 --encryption clear --output-format mp4 --output-file clear.mp4
 drmr verify clear.mp4 --source original.mp4 --json
 ```
 
 For encrypted input, supply every track's identifier and key in the protected configuration's `input.keys` array. Clear output needs no output key:
 
 ```sh
-drmr convert encrypted.mp4 --to clear --format mp4 --output clear.mp4 --keys-file source-keys.json
+drmr convert encrypted.mp4 --encryption clear --output-format mp4 --output-file clear.mp4 --keys-file source-keys.json
 drmr verify clear.mp4 --source encrypted.mp4 --keys-file source-keys.json --json
 ```
 
 For CBCS DASH, provide a separate output key as well:
 
 ```sh
-drmr convert original.mp4 --to cbcs --format dash --output result-dash --keys-file keys.json
+drmr convert original.mp4 --encryption cbcs --output-format dash --output-dir result-dash --keys-file keys.json
 drmr verify result-dash/manifest.mpd --source original.mp4 --keys-file keys.json --json
 ```
 
@@ -288,7 +288,7 @@ Local manifests must stay inside the source directory tree. Key URI mappings com
 For example, to remove CBCS protection from a qualified local DASH source using keys in the input section of `source-keys.json`:
 
 ```sh
-drmr convert protected/manifest.mpd --to clear --format dash --output clear-dash --keys-file source-keys.json
+drmr convert protected/manifest.mpd --encryption clear --output-format dash --output-dir clear-dash --keys-file source-keys.json
 drmr verify clear-dash/manifest.mpd --source protected/manifest.mpd --keys-file source-keys.json --json
 ```
 
@@ -305,7 +305,7 @@ A supported AAC-only rendition may declare a playback end inside its final frame
 For example, create CBCS DASH from a supported local TS playlist:
 
 ```sh
-drmr convert source/media.m3u8 --to cbcs --format dash --output result-dash --keys-file keys.json
+drmr convert source/media.m3u8 --encryption cbcs --output-format dash --output-dir result-dash --keys-file keys.json
 drmr verify result-dash/manifest.mpd --source source/media.m3u8 --keys-file keys.json --json
 ```
 
@@ -366,7 +366,7 @@ cargo test -p drmr-core --test conversion_sample_aes --locked
 
 ## MPEG transport streams to one MP4
 
-Use `--format mp4` with `--to clear`, `--to cenc` or `--to cbcs` to produce one
+Use `--output-format mp4` with `--encryption clear`, `--encryption cenc` or `--encryption cbcs` to produce one
 fragmented MP4 file from qualified TS HLS. Clear, AES-128 and SAMPLE-AES inputs
 use the same known-key input checks as other TS routes. Audio only, video only,
 or one video and one audio track are supported. A single multiplexed TS
@@ -406,8 +406,8 @@ cargo test --locked -p drmr --test conversion_ts_mp4 -- --nocapture
 ## MPEG transport stream output
 
 Clear, AES-128, and SAMPLE-AES TS inputs can produce all three TS output
-protections. Use `--format hls-ts`, with `--to clear`, `--to hls-aes128`, or
-`--to hls-sample-aes`. `cenc` and `cbcs` apply to MP4 samples and are refused
+protections. Use `--output-format hls-ts`, with `--encryption clear`, `--encryption hls-aes128`, or
+`--encryption hls-sample-aes`. `cenc` and `cbcs` apply to MP4 samples and are refused
 with this output container. Qualified fragmented MP4 files, fragmented MP4 HLS,
 and static DASH can also produce these TS outputs, with supplied keys for
 encrypted input. Progressive MP4 remains outside the TS output profile.
@@ -470,7 +470,7 @@ runtime settings, native output checks, and license/playback boundaries.
 
 With `auto` or `stitch`, generic `convert` supports an opt-in PlayReady profile: qualified clear MP4 with
 H.264 video and optional AAC audio, from one complete source file, to CBCS DASH
-with one output KID. Set `output.signaling` in the protected operator JSON as
+with one output KID. Set `outputs.default.signaling` in the protected operator JSON as
 shown in [usage](usage.md#separate-input-and-output-keys). Other layouts and
 protection combinations refuse this setting. These are qualification boundaries
 of this implementation, not limitations of the formats or DRM systems.

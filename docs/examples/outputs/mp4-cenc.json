@@ -1,10 +1,11 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
+  "output_dir": "result",
   "outputs": [
     {
       "id": "mp4",
-      "format": "mp4",
-      "target": "cenc",
+      "output_format": "mp4",
+      "encryption": "cenc",
       "drms": []
     }
   ]

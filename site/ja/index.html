@@ -131,28 +131,28 @@
           <div class="step-title"><span aria-hidden="true">2</span><h3>変換条件の保存</h3></div>
           <p>原本のハッシュ値と変換条件を計画ファイル（plan）に保存します。変換条件には出力形式・暗号化方式・新しい出力先を含みます。</p>
           <pre role="group" tabindex="0" aria-label="変換を計画するコマンド"><code>drmr plan source/input.m3u8 \
-  --to cbcs --format dash \
-  --output converted \
+  --encryption cbcs --output-format dash \
+  --output-dir converted \
   --save conversion.plan.json</code></pre>
         </li>
         <li>
           <div class="step-title"><span aria-hidden="true">3</span><h3>変換の実行</h3></div>
           <p>計画ファイルに従って変換を実行します。鍵はこの段階で別途指定します。計画の保存後に原本のデータが変わっている場合は処理を停止します。</p>
           <pre role="group" tabindex="0" aria-label="変換するコマンド"><code>drmr convert \
-  --plan conversion.plan.json \
+  --plan-file conversion.plan.json \
   --keys-file keys.json</code></pre>
         </li>
         <li>
           <div class="step-title"><span aria-hidden="true">4</span><h3>変換結果の検証</h3></div>
           <p>出力の形式・暗号化方式を確認し、映像・音声の全データと時刻を原本と照合します。</p>
           <pre role="group" tabindex="0" aria-label="原本と比較するコマンド"><code>drmr verify \
-  --plan conversion.plan.json \
+  --plan-file conversion.plan.json \
   --keys-file keys.json --json</code></pre>
         </li>
       </ol>
-      <p class="section-note">この例では、対応範囲内の Clear HLS を CBCS DASH に変換します。<a href="guide/">日本語ガイド</a>で手順を確認し、<a href="https://github.com/kazuhide/drmr/blob/main/docs/usage.md#separate-input-and-output-keys">所有者だけが読める鍵の設定ファイルを用意してください（英語）</a>。Clear から Clear への変換では <code>--to clear</code> を指定し、鍵ファイルを省略できます。ローカルや URL のメタデータだけを調べる場合は <code>analyze --metadata-only</code> を使います。鍵や取得先の指定は不要で、コンテンツ全体の検証は行いません。</p>
-      <p class="section-note">対応範囲内の非暗号化 HLS（TS）から最大三つの DRM を指定する HLS と Widevine／PlayReady 向け DASH をまとめて作るには、<code>plan --outputs outputs.json</code> を使います。<a href="guide/#inspect-plan">日本語ガイド</a>では出力ごとの形式・鍵・検査条件の指定方法を説明しています。結果はすべての検査に通った後で確定します。</p>
-      <p class="section-note">最終マニフェストは内蔵の検査機能（Linter）で確認します。保存済みの出力も <code>verify OUTPUT --manifest-only</code> で検査できます。<code>--external-validator</code> を追加すると、形式に応じて Apple または DASH-IF のツールでも検査します。マニフェストの検査結果と原本全体とのメディア比較結果は分けて表示します。</p>
+      <p class="section-note">この例では、対応範囲内の Clear HLS を CBCS DASH に変換します。<a href="guide/">日本語ガイド</a>で手順を確認し、<a href="https://github.com/kazuhide/drmr/blob/main/docs/usage.md#separate-input-and-output-keys">所有者だけが読める鍵の設定ファイルを用意してください（英語）</a>。Clear から Clear への変換では <code>--encryption clear</code> を指定し、鍵ファイルを省略できます。ローカルや URL のメタデータだけを調べる場合は <code>analyze --metadata-only</code> を使います。鍵や取得先の指定は不要で、コンテンツ全体の検証は行いません。</p>
+      <p class="section-note">対応範囲内の非暗号化 HLS（TS）から最大三つの DRM を指定する HLS と Widevine／PlayReady 向け DASH をまとめて作るには、<code>convert --output-config outputs.json</code> を使います。<a href="guide/#inspect-plan">日本語ガイド</a>では出力ごとの形式・鍵・検査条件の指定方法を説明しています。結果はすべての検査に通った後で確定します。</p>
+      <p class="section-note">最終マニフェストは内蔵の検査機能（Linter）で確認します。保存済みの出力も <code>verify OUTPUT --manifest-only</code> で検査できます。<code>--external-manifest-check</code> を追加すると、形式に応じて Apple または DASH-IF のツールでも検査します。マニフェストの検査結果と原本全体とのメディア比較結果は分けて表示します。</p>
     </section>
 
     <section id="verification" class="section" aria-labelledby="verification-title">

@@ -14,9 +14,10 @@ fingerprints or a fresh comparison later.
 | `conversion.plan.json` | `plan --save` | Fixed source fingerprints, destination and conversion conditions | No keys; source paths can still be private |
 
 `plan` reads `outputs.json`; it does not generate it. File names are examples.
-The three file types have independent schema versions. The examples here use
-output-list version 3 and named-key-file version 2. The single-output
-`--to`/`--format` interface uses [key-file version 1](usage.md#separate-input-and-output-keys).
+The three file types have independent schema versions. Use output-configuration
+schema 4 and key-file schema 2. Quick single-output commands use the same key
+format and select `outputs.default`; configured outputs select their explicit IDs.
+See the [1.2 migration](releases.md#version-12-migration) for replaced names.
 
 ## Correcting a configuration error
 
@@ -78,7 +79,7 @@ Windows. drmr also checks the file type, ownership and links. Read
 [keys and local security](security.md) for process arguments, memory, temporary
 files and published DRM metadata.
 
-URL conversion needs a new `--download-dir` and a separate new `--output` under
+URL conversion needs a new `--download-dir` and a separate new result directory under
 existing parent directories. Neither destination is overwritten or silently
 reused. A completed download remains available if conversion fails. For a local
 source, replace the URL with its entrypoint and omit `--download-dir`. Additional
@@ -91,13 +92,16 @@ This complete example requests one CBCS fMP4 HLS output for FairPlay:
 
 ```json
 {
-  "schema_version": 3,
+  "schema_version": 4,
+  "output_dir": "result",
   "outputs": [
     {
       "id": "hls",
-      "format": "hls",
-      "target": "cbcs",
-      "drms": ["fairplay"]
+      "drms": [
+        "fairplay"
+      ],
+      "output_format": "hls-fmp4",
+      "encryption": "cbcs"
     }
   ]
 }
@@ -108,21 +112,34 @@ Each ID becomes a result subdirectory. Required fields have no implicit default.
 
 | Field | Required | Values and behavior |
 | --- | --- | --- |
-| `schema_version` | Yes | Use `3` for all fields below |
+| `schema_version` | Yes | Use `4` for all fields below |
+| `output_dir` | No | Result root, relative to this JSON file; otherwise supply `--output-dir` |
 | `outputs` | Yes | Array of one to eight output objects |
 | `outputs[].id` | Yes | Unique, 1–32 ASCII characters: lowercase letter first, then lowercase letters, digits or hyphens; reserved device names are refused |
-| `outputs[].format` | Yes | `mp4`, `dash`, `hls` (fMP4 HLS), or `hls-ts` (MPEG-TS HLS) |
-| `outputs[].target` | Yes | `clear`, `cenc`, `cbcs`, `hls-aes128` or `hls-sample-aes`, subject to the table below |
+| `outputs[].output_format` | Yes | `mp4`, `dash`, `hls-fmp4`, or `hls-ts` |
+| `outputs[].encryption` | Yes | `clear`, `cenc`, `cbcs`, `hls-aes128` or `hls-sample-aes`, subject to the table below |
 | `outputs[].drms` | Yes | Explicit DRM names: `widevine`, `playready`, `fairplay`; use `[]` for no service-specific declarations |
 | `outputs[].processing` | No | `auto`, `segments` or `stitch`; otherwise uses the command's `--processing`, whose default is `auto` |
 | `outputs[].dash_addressing` | No | DASH only: `template`, `template-timeline`, `list` or `base`; otherwise uses `--dash-addressing`, whose default is `template` |
-| `outputs[].conformance` | No | `none` (default) or `required`; `required` adds external final-manifest checks and is refused for MP4 |
+| `outputs[].external_manifest_check` | No | `false` by default; `true` requires external final-manifest checks and is refused for MP4 |
+| `outputs[].manifest_profile` | No | Native manifest rules: `base` by default, or HLS-only `apple-vod`; HLS/DASH outputs only |
+
+Explicit CLI `--external-manifest-check` and `--manifest-profile` settings
+override every configured output and refuse incompatible formats. Otherwise each
+output uses its own settings. Per-output `processing` continues to override the
+CLI's processing default.
+
+An explicit CLI `--output-dir` overrides this file's `output_dir`. CLI relative
+paths use the current working directory; JSON relative paths use the directory
+containing `outputs.json`. A saved plan records the resolved destination and
+refuses an execution-time override. `--output-file` instead names the MP4 file
+for a quick single-output command and cannot be combined with `--output-config`.
 
 | Output format | Encryption targets | Nonempty `drms` selection |
 | --- | --- | --- |
 | `mp4` | `clear`, `cenc`, `cbcs` | Not available through this output-list profile; use `[]` |
 | `dash` | `clear`, `cenc`, `cbcs` | With `cenc`/`cbcs`: Widevine, PlayReady, or both |
-| `hls` | `clear`, `cenc`, `cbcs`, `hls-aes128` | With `cenc`: Widevine/PlayReady; with `cbcs`: any nonempty selection of Widevine/PlayReady/FairPlay |
+| `hls-fmp4` | `clear`, `cenc`, `cbcs`, `hls-aes128` | With `cenc`: Widevine/PlayReady; with `cbcs`: any nonempty selection of Widevine/PlayReady/FairPlay |
 | `hls-ts` | `clear`, `hls-aes128`, `hls-sample-aes` | With `hls-sample-aes`: FairPlay |
 
 `drms: []` does not disable encryption or native checks. It requests encryption
@@ -130,8 +147,8 @@ without service-specific DRM information. In that case, encrypted HLS still
 needs the key URI described below. FairPlay uses CBCS fMP4 HLS or SAMPLE-AES TS;
 it cannot be added to CENC HLS or DASH. See [DRM signaling](drm-signaling.md).
 
-Native media comparison and HLS/DASH linting run with either conformance value.
-Use `required` only when you have installed the optional
+Native media comparison and HLS/DASH linting run with either external-check
+setting. Use `true` only when you have installed the optional
 [external manifest validators](manifest-validation.md). Missing or incomplete
 required external checks fail the operation rather than silently being skipped.
 
@@ -169,7 +186,7 @@ omit the entire key file and `--keys-file` option.
 
 | Field | Required | Meaning |
 | --- | --- | --- |
-| `schema_version` | Yes | `2` for named-output conversion |
+| `schema_version` | Yes | `2` for every CLI key file |
 | `input` | For encrypted input | Shared source-key mappings; omit for clear input |
 | `input.keys` | For CENC/CBCS input | Array of `{ "kid": "…", "key": "…" }` for every required source KID |
 | `input.hls_keys` | For AES-128 or SAMPLE-AES TS input | Array of `{ "uri": "…", "key": "…" }`, with associated `iv` for SAMPLE-AES when needed |
@@ -207,8 +224,7 @@ Use the two complete files above and run:
 ```sh
 drmr convert "https://example.com/vod/master.m3u8" \
   --download-dir source \
-  --outputs outputs.json --keys-file keys.json \
-  --output result
+  --output-config outputs.json --keys-file keys.json
 ```
 
 The generated entrypoint is `result/hls/master.m3u8`. URL acquisition, source
@@ -221,9 +237,14 @@ For CENC/CBCS input with one KID, `outputs.json` is:
 
 ```json
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "outputs": [
-    {"id": "dash", "format": "dash", "target": "clear", "drms": []}
+    {
+      "id": "dash",
+      "drms": [],
+      "output_format": "dash",
+      "encryption": "clear"
+    }
   ]
 }
 ```
@@ -245,8 +266,8 @@ For CENC/CBCS input with one KID, `outputs.json` is:
 ```sh
 drmr convert "https://example.com/vod/manifest.mpd" \
   --download-dir source \
-  --outputs outputs.json --keys-file keys.json \
-  --output result
+  --output-config outputs.json --keys-file keys.json \
+  --output-dir result
 ```
 
 The entrypoint is `result/dash/manifest.mpd`. Supply every source KID if audio
@@ -292,16 +313,21 @@ No `keys.json` is needed. Save this `outputs.json`:
 
 ```json
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "outputs": [
-    {"id": "mp4", "format": "mp4", "target": "clear", "drms": []}
+    {
+      "id": "mp4",
+      "drms": [],
+      "output_format": "mp4",
+      "encryption": "clear"
+    }
   ]
 }
 ```
 
 ```sh
 drmr convert "https://example.com/vod/media.mp4" \
-  --download-dir source --outputs outputs.json --output result
+  --download-dir source --output-config outputs.json --output-dir result
 ```
 
 The entrypoint is `result/mp4/media.mp4`. The output-list interface always creates
@@ -318,22 +344,30 @@ including a matching dummy Widevine PSSH.
 If you need to review conditions before execution or repeat a fresh independent
 check later, use the [saved-plan workflow](executable-plans.md). `plan --save`
 reads the output list and binds the source fingerprints and destination.
-`convert --plan` and `verify --plan` read that generated plan and take keys
+`convert --plan-file` and `verify --plan-file` read that generated plan and take keys
 separately. Do not hand-edit it as an alternative to `outputs.json`.
 
-`verify` has no `--outputs` option. For complete named-output re-verification,
-use `verify --plan` with the matching version-2 key file. The direct
-`verify OUTPUT --source INPUT` interface uses its separate version-1 key file;
-do not pass a named-output key file to it. `verify OUTPUT --manifest-only` needs
-no key file and checks only manifests, not media correspondence.
+For a fresh comparison without a saved plan, run:
+
+```sh
+drmr verify result --source source/input.m3u8 \
+  --output-config outputs.json --keys-file keys.json
+```
+
+The positional `result` selects the existing result root; the JSON describes its
+expected outputs. Quick single-result verification uses
+`verify OUTPUT --source INPUT` and the `default` key domain. All modes use
+schema-2 keys. `verify OUTPUT --manifest-only` needs no key file and checks
+manifests without media correspondence.
 
 ## Compatibility and rejected settings
 
-Output-list schema 1 remains accepted without per-output `processing` or
-`dash_addressing`; schema 2 adds `processing`; schema 3 adds `dash_addressing`.
-Named key files use schema 2, independently of those versions. Existing saved
-plans retain their recorded processing, addressing and minimum verification
-depth. See [saved plans](executable-plans.md) and [verification depth](verification.md).
+New output configurations require schema 4; replace the former `format`,
+`target` and `conformance` fields as described in the
+[migration guide](releases.md#version-12-migration). Key files use schema 2,
+including quick single-output commands. Existing saved plans remain readable
+and retain their recorded processing, addressing and minimum verification depth.
+See [saved plans](executable-plans.md) and [verification depth](verification.md).
 
 Unknown fields, duplicate fields, incompatible formats/DRM selections, repeated
 IDs and extra or missing encrypted-output keys are refused. Each configuration
