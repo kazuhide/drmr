@@ -481,6 +481,42 @@ pub(crate) fn configured_download(
     }
 }
 
+struct CompletedConversion {
+    report: ConversionReport,
+    download: Option<serde_json::Value>,
+    format: OutputFormat,
+}
+
+impl CompletedConversion {
+    fn write(
+        self,
+        args: &ConvertArgs,
+        input: &crate::download_cli::Input,
+        measurement: Option<MeasurementReport>,
+        progress: &Progress,
+    ) -> std::io::Result<()> {
+        let summary = (!args.json).then(|| {
+            crate::conversion_summary::Summary::single(
+                &self.report,
+                crate::conversion_summary::Source::direct(input, args.download_dir.as_deref()),
+                args.output
+                    .as_deref()
+                    .expect("clap requires the direct output"),
+                self.format,
+                args.to.expect("clap requires the direct target"),
+            )
+        });
+        let elapsed = progress.elapsed();
+        progress.write_result(|| {
+            write_conversion_result(&self.report, self.download, measurement, args.json)?;
+            if let Some(summary) = summary {
+                summary.write(&mut std::io::stdout().lock(), elapsed)?;
+            }
+            Ok(())
+        })
+    }
+}
+
 fn execute_conversion(
     command: &Converter,
     args: &ConvertArgs,
@@ -489,7 +525,7 @@ fn execute_conversion(
     local_format: Option<OutputFormat>,
     keys: &OperatorKeys,
     progress: &Progress,
-) -> Result<(ConversionReport, Option<serde_json::Value>), ConversionError> {
+) -> Result<CompletedConversion, ConversionError> {
     let downloaded = match input {
         crate::download_cli::Input::Url(url) => {
             progress.mark("acquisition");
@@ -549,7 +585,11 @@ fn execute_conversion(
             "retained": true
         })
     });
-    Ok((report, download))
+    Ok(CompletedConversion {
+        report,
+        download,
+        format,
+    })
 }
 
 fn configured_format(
@@ -709,7 +749,7 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
     } else {
         (execute(&converter), None)
     };
-    let (report, download) = match result {
+    let completed = match result {
         Ok(report) => report,
         Err(cause) => return error("convert", cause, args.json, &progress, None),
     };
@@ -722,8 +762,7 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
             None,
         );
     }
-    let result = progress
-        .write_result(|| write_conversion_result(&report, download, measurement, args.json));
+    let result = completed.write(args, &input, measurement, &progress);
     if result.is_err() {
         progress.diagnostic("convert", "result-output-unavailable");
     } else {

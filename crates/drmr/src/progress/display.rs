@@ -105,7 +105,7 @@ fn remaining(units: Units, now: Duration) -> Option<Duration> {
     (seconds <= 7 * 86400).then(|| Duration::from_secs(seconds))
 }
 
-fn duration(value: Duration) -> String {
+pub(crate) fn duration(value: Duration) -> String {
     let seconds = value.as_secs();
     if seconds >= 3600 {
         format!("{}h {:02}m", seconds / 3600, seconds / 60 % 60)

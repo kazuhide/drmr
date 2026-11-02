@@ -3,6 +3,9 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+#[path = "support/download_http.rs"]
+mod download_http;
+
 fn clip() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bbb/clip.mp4")
 }
@@ -195,7 +198,180 @@ fn redirected_text_reports_steps_and_elapsed_without_internal_counters_or_fake_p
         last["scopes_started"], last["scopes_closed"],
         "all observed scopes are closed before the result"
     );
-    assert!(String::from_utf8_lossy(&result.stdout).contains("Verified stream metadata"));
+    let text = String::from_utf8_lossy(&result.stdout);
+    assert!(text.contains("Verified stream metadata"));
+    assert_eq!(text.matches("\nSummary\n").count(), 1, "{text}");
+    assert!(text.contains("Input: MP4 / clear"), "{text}");
+    assert!(text.contains("Output: MP4 / clear"), "{text}");
+    assert!(
+        text.contains(&format!("Source: {}", clip().display())),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("Destination: {}", output.display())),
+        "{text}"
+    );
+    assert!(text.contains("Elapsed:"), "{text}");
+}
+
+fn successful(command: &mut Command) -> Output {
+    let result = command.output().unwrap();
+    assert!(
+        result.status.success(),
+        "{} {}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    result
+}
+
+#[test]
+fn completion_summaries_cover_direct_and_saved_single_and_named_outputs() {
+    use std::io::Write as _;
+    let root = drmr_core::native::private_tempdir().unwrap();
+    let input = clip();
+    let before = std::fs::read(&input).unwrap();
+    let recipe = root.path().join("outputs.json");
+    drmr_core::native::create_private_new(&recipe)
+        .unwrap()
+        .write_all(br#"{"schema_version":1,"outputs":[{"id":"first","format":"mp4","target":"clear","drms":[]},{"id":"second","format":"mp4","target":"clear","drms":[]}]}"#)
+        .unwrap();
+    for saved in [false, true] {
+        for bundle in [false, true] {
+            let destination = root.path().join(format!("result-{saved}-{bundle}"));
+            let plan = root.path().join(format!("plan-{saved}-{bundle}.json"));
+            let mut command = Command::new(env!("CARGO_BIN_EXE_drmr"));
+            if saved {
+                command.arg("plan");
+            } else {
+                command.arg("convert");
+            }
+            command.arg(&input).arg("--output").arg(&destination);
+            if bundle {
+                command.arg("--outputs").arg(&recipe);
+            } else {
+                command.args(["--format", "mp4", "--to", "clear"]);
+            }
+            let actual_destination = if saved {
+                command.arg("--save").arg(&plan).arg("--json");
+                let planned = successful(&mut command);
+                let value: Value = serde_json::from_slice(&planned.stdout).unwrap();
+                let path = if bundle {
+                    &value["output_root"]
+                } else {
+                    &value["intent"]["output"]
+                };
+                command = Command::new(env!("CARGO_BIN_EXE_drmr"));
+                command.args(["convert", "--plan"]).arg(&plan);
+                PathBuf::from(path.as_str().unwrap())
+            } else {
+                destination.clone()
+            };
+            command.args(["--progress", "off"]);
+            let converted = successful(&mut command);
+            let text = String::from_utf8(converted.stdout).unwrap();
+            assert_eq!(text.matches("\nSummary\n").count(), 1, "{text}");
+            assert!(
+                text.contains("Source:") && text.contains("clip.mp4"),
+                "{text}"
+            );
+            assert!(!text.contains("Retained originals:"), "{text}");
+            assert!(!text.contains("snapshot"), "{text}");
+            if bundle {
+                for id in ["first", "second"] {
+                    assert!(
+                        text.contains(&format!("Output {id}: MP4 / clear")),
+                        "{text}"
+                    );
+                    assert!(
+                        text.contains(&actual_destination.join(id).display().to_string()),
+                        "{text}"
+                    );
+                    assert!(destination.join(id).join("media.mp4").is_file());
+                }
+                assert!(text.contains("2 outputs"), "{text}");
+            } else {
+                assert!(text.contains("Output: MP4 / clear"), "{text}");
+                assert!(
+                    text.contains(&actual_destination.display().to_string()),
+                    "{text}"
+                );
+                assert!(destination.is_file());
+            }
+            assert!(
+                converted.stderr.is_empty(),
+                "--progress off keeps only the result"
+            );
+        }
+    }
+    let output = root.path().join("measured.mp4");
+    let json = invoke("convert", &input, &output, &["--json", "--measure"]);
+    assert!(json.status.success());
+    let value: Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(value["schema_version"], 2);
+    assert_eq!(value["measurements"]["schema_version"], 1);
+    assert!(value.get("summary").is_none());
+    assert_eq!(json.stderr, [] as [u8; 0]);
+    assert_eq!(std::fs::read(&input).unwrap(), before);
+}
+
+#[test]
+fn remote_completion_names_retained_originals_without_url_or_credentials() {
+    use std::io::Write as _;
+    let root = drmr_core::native::private_tempdir().unwrap();
+    let server = download_http::Server::start(
+        [("/source.mp4".into(), std::fs::read(clip()).unwrap())].into(),
+    );
+    let policy = root.path().join("fetch.json");
+    let settings = serde_json::json!({
+        "allowed_origins": [server.origin], "allow_http": true, "allow_private_network": true,
+        "headers_by_origin": { &server.origin: { "Authorization": download_http::AUTH } }
+    });
+    drmr_core::native::create_private_new(&policy)
+        .unwrap()
+        .write_all(settings.to_string().as_bytes())
+        .unwrap();
+    let download = root.path().join("originals");
+    let output = root.path().join("result.mp4");
+    let url = format!(
+        "{}/source.mp4?token={}",
+        server.origin,
+        download_http::QUERY
+    );
+    let result = successful(
+        Command::new(env!("CARGO_BIN_EXE_drmr"))
+            .arg("convert")
+            .arg(&url)
+            .args(["--to", "clear", "--download-dir"])
+            .arg(&download)
+            .arg("--fetch-policy")
+            .arg(&policy)
+            .arg("--output")
+            .arg(&output),
+    );
+    let text = String::from_utf8_lossy(&result.stdout);
+    assert!(
+        text.contains(&format!("Retained originals: {}", download.display())),
+        "{text}"
+    );
+    assert!(download.join("input.mp4").is_file() && output.is_file());
+    for bytes in [&result.stdout, &result.stderr] {
+        let text = String::from_utf8_lossy(bytes);
+        for forbidden in [
+            &url,
+            &server.origin,
+            download_http::QUERY,
+            download_http::AUTH,
+        ] {
+            assert!(
+                !text.contains(forbidden),
+                "a confidential request value was printed"
+            );
+        }
+    }
+    let counts = server.stop();
+    assert!(counts.served > 0);
+    assert_eq!(counts.refused, 0);
 }
 
 #[test]

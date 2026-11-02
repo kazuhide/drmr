@@ -1,4 +1,5 @@
 //! One retained source and one atomic result directory for explicitly named outputs.
+use crate::conversion_summary::{Source, Summary};
 use crate::convert_cli::{self, ConvertArgs, Progress, VerifyArgs};
 use crate::download_cli::Input;
 use crate::inspect_cli::PlanArgs;
@@ -128,7 +129,7 @@ impl Session {
         command: &str,
         json: bool,
         measure: bool,
-        execute: impl FnOnce(&Converter) -> Result<Value, ConversionError>,
+        execute: impl FnOnce(&Converter) -> Result<(Value, Option<Summary>), ConversionError>,
     ) -> ExitCode {
         let (result, measurement) = if measure {
             let (result, measurement) = self.converter.measure(execute);
@@ -136,7 +137,7 @@ impl Session {
         } else {
             (execute(&self.converter), None)
         };
-        let mut report = match result {
+        let (mut report, summary) = match result {
             Ok(report) => report,
             Err(error) => return self.failed(command, error, json),
         };
@@ -161,11 +162,16 @@ impl Session {
             report["measurements"] =
                 serde_json::to_value(measurement).expect("measurements serialize");
         }
+        let elapsed = self.progress.elapsed();
         let result = self.progress.write_result(|| {
             if json {
                 convert_cli::json(&report)
             } else {
-                text(command, &report, passed)
+                text(command, &report, passed)?;
+                if let Some(summary) = summary {
+                    summary.write(&mut std::io::stdout().lock(), elapsed)?;
+                }
+                Ok(())
             }
         });
         if result.is_err() {
@@ -344,7 +350,7 @@ pub fn verify_manifest(args: &VerifyArgs) -> ExitCode {
                 value[field] = error[field].clone();
             }
         }
-        Ok(value)
+        Ok((value, None))
     })
 }
 
@@ -423,7 +429,10 @@ pub fn save(args: &PlanArgs) -> ExitCode {
             args.save.as_deref().expect("clap requires the plan path"),
             &plan,
         )?;
-        Ok(serde_json::to_value(plan).expect("bundle plan serializes"))
+        Ok((
+            serde_json::to_value(plan).expect("bundle plan serializes"),
+            None,
+        ))
     })
 }
 
@@ -442,7 +451,20 @@ pub fn convert(args: &ConvertArgs, plan: &BundlePlan) -> ExitCode {
     let validators = tools(&args.hls_validator_bin, &args.dash_validator_bin);
     session.run("convert", args.json, args.measure, |converter| {
         let report = converter.execute_bundle_plan(plan, &session.keys, &validators)?;
-        Ok(serde_json::to_value(report).expect("bundle conversion serializes"))
+        let summary = if args.json {
+            None
+        } else {
+            Some(Summary::bundle(
+                &report,
+                Source::Local(plan.source.root.join(&plan.source.entrypoint)),
+                &plan.output_root,
+                &plan.outputs,
+            )?)
+        };
+        Ok((
+            serde_json::to_value(report).expect("bundle conversion serializes"),
+            summary,
+        ))
     })
 }
 
@@ -461,7 +483,10 @@ pub fn verify(args: &VerifyArgs, plan: &BundlePlan) -> ExitCode {
     let validators = verify_tools(args);
     session.run("verify", args.json, args.measure, |converter| {
         let report = converter.verify_bundle_plan(plan, &session.keys, &validators)?;
-        Ok(serde_json::to_value(report).expect("bundle verification serializes"))
+        Ok((
+            serde_json::to_value(report).expect("bundle verification serializes"),
+            None,
+        ))
     })
 }
 
@@ -542,6 +567,19 @@ pub fn convert_direct(args: &ConvertArgs) -> ExitCode {
                 )?
             }
         };
-        Ok(serde_json::to_value(report).expect("bundle conversion serializes"))
+        let summary = if args.json {
+            None
+        } else {
+            Some(Summary::bundle(
+                &report,
+                Source::direct(&input, args.download_dir.as_deref()),
+                output,
+                &outputs,
+            )?)
+        };
+        Ok((
+            serde_json::to_value(report).expect("bundle conversion serializes"),
+            summary,
+        ))
     })
 }
