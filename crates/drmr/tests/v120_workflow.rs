@@ -790,3 +790,96 @@ fn direct_manifest_result_reports_stay_outside_the_result_tree_before_key_loadin
     assert_eq!(recorded, result(&failed));
     assert_eq!(std::fs::read(&input).unwrap(), original);
 }
+
+#[test]
+fn bare_relative_manifest_paths_allow_reports_outside_their_media_directory() {
+    let owner = drmr_core::native::private_tempdir().unwrap();
+    let root = owner.path();
+    let (input, original) = source(root);
+    let media = root.join("media");
+    std::fs::create_dir(&media).unwrap();
+    let text = "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\nmissing.ts\n#EXT-X-ENDLIST\n";
+    std::fs::write(media.join("master.m3u8"), text).unwrap();
+    for (index, manifest) in ["master.m3u8", "./master.m3u8"].iter().enumerate() {
+        for command in ["analyze", "verify"] {
+            let name = root.join(format!("{command}-{index}.json"));
+            let mode = if command == "analyze" {
+                "--metadata-only"
+            } else {
+                "--manifest-only"
+            };
+            let output = cli(
+                &media,
+                &[
+                    command,
+                    manifest,
+                    mode,
+                    "--report-file",
+                    path(&name),
+                    "--json",
+                ],
+            );
+            passed(&output);
+            let recorded: Value = serde_json::from_slice(&std::fs::read(&name).unwrap()).unwrap();
+            assert_eq!(recorded, result(&output));
+        }
+        let error_report = root.join(format!("key-error-{index}.json"));
+        let missing_keys = root.join("missing-keys.json");
+        let output = cli(
+            &media,
+            &[
+                "verify",
+                manifest,
+                "--source",
+                path(&input),
+                "--keys-file",
+                path(&missing_keys),
+                "--report-file",
+                path(&error_report),
+                "--json",
+            ],
+        );
+        assert_eq!(result(&output)["error"]["code"], "key-file-invalid");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&std::fs::read(error_report).unwrap()).unwrap(),
+            result(&output)
+        );
+        let refused = cli(
+            &media,
+            &[
+                "verify",
+                manifest,
+                "--manifest-only",
+                "--report-file",
+                "missing.ts",
+                "--json",
+            ],
+        );
+        assert_eq!(
+            result(&refused)["error"]["code"],
+            "report-destination-overlap"
+        );
+        assert!(!media.join("missing.ts").exists());
+    }
+    let traversal = cli(
+        &media,
+        &[
+            "verify",
+            "master.m3u8",
+            "--manifest-only",
+            "--report-file",
+            "../refused.json",
+            "--json",
+        ],
+    );
+    assert_eq!(
+        result(&traversal)["error"]["code"],
+        "report-destination-unsafe"
+    );
+    assert!(!root.join("refused.json").exists());
+    assert_eq!(
+        std::fs::read_to_string(media.join("master.m3u8")).unwrap(),
+        text
+    );
+    assert_eq!(std::fs::read(&input).unwrap(), original);
+}

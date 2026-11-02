@@ -83,7 +83,11 @@ pub(crate) fn protect_source(path: &Path) -> Result<(), ConversionError> {
     }
     protect(path, true)?;
     if !path.is_dir() && plan::report_source_requires_parent_guard(path) {
-        protect(path.parent().unwrap_or_else(|| Path::new(".")), true)?;
+        let parent = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        protect(parent, true)?;
     }
     Ok(())
 }
