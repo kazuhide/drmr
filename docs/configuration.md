@@ -333,7 +333,11 @@ drmr convert "https://example.com/vod/media.mp4" \
 The entrypoint is `result/mp4/media.mp4`. The output-list interface always creates
 a result root with named subdirectories, even for one MP4 output. Supported TS
 HLS can also produce one MP4 after selecting at most one video and one associated
-audio rendition. See [MP4 track conditions](conversion-support.md#mpeg-transport-streams-to-one-mp4).
+audio rendition. See [TS track conditions](conversion-support.md#mpeg-transport-streams-to-one-mp4).
+Development for 1.3 adds a qualified video/AAC pair from the same DASH/fMP4 HLS
+presentation to this MP4 output configuration. Its
+[metadata and track conditions](conversion-support.md#fragmented-presentations-to-one-mp4)
+are required; the extension is not in the 1.2.0 archives.
 
 ## Several outputs and saved plans
 

@@ -114,6 +114,8 @@ Widevine、PlayReady、FairPlay は、鍵の取得や利用条件、プレーヤ
 
 # 3. 入力と出力の対応表
 
+DASH/fMP4 HLS の映像と音声を一つの MP4 にまとめる対応は、1.3 向けの開発中ソースに含まれます。公開済み 1.2.0 の配布物には含まれません。[未リリースの変更履歴（英語）](https://github.com/kazuhide/drmr/blob/main/CHANGELOG.md#unreleased)に記載しています。
+
 MP4 と fMP4 を使う HLS/DASH では、対応条件を満たす AVC（H.264）・HEVC（H.265）・VP9・AAC の入力を解析・変換・検証できます。MPEG-TS の映像は H.264 が対象です。HEVC は Main/Main10 のプログレッシブ映像に対応します。色差形式は 4:2:0、輝度と色差のビット深度は Main がともに 8 bit、Main10 がともに 10 bit です。復号に必要な設定情報（VPS・SPS・PPS）が各1組あり、途中で設定が変わらない入力を扱います。受け入れる構文と拒否する条件は [HEVC の検証と制限（英語）](https://github.com/kazuhide/drmr/blob/main/docs/verification.md#hevc-in-mp4-and-fmp4)に記載しています。
 
 v1.1.0 以降では、MP4・fMP4 の HEVC と VP9 を変換・検証できます。v1.0.3 の配布アーカイブには含まれません。AV1・AC-3・E-AC-3・Opus・FLAC の設定をメタデータとして識別できても、全体の検証に対応したことにはなりません。未実装のコーデック条件は `native-codec-profile-not-supported` で拒否し、`--decode` を指定しても迂回できません。コンテナ・暗号方式の対応表はその形式に格納できる全コーデックの動作確認を意味しません。
@@ -129,8 +131,8 @@ VP9（`vp09`）は MP4・fMP4 HLS/DASH の clear・cenc に対応します。HLS
 | 入力 | 入力の暗号方式 | トラック構成と出力の条件 |
 | --- | --- | --- |
 | MP4 | clear、cenc、cbcs | 複数トラックを一つの MP4 に出す場合は条件あり。TS 出力にはフラグメント化された入力が必要 |
-| DASH / fMP4 | clear、cenc、cbcs | 各 Representation は一つのトラック。一つの MP4 への出力は入力が1トラックの場合 |
-| HLS / fMP4 | clear、cenc、cbcs、AES-128 | 各メディアプレイリストは一つのトラック。一つの MP4 への出力は入力が1トラックの場合 |
+| DASH / fMP4 | clear、cenc、cbcs | 各 Representation は一つのトラック。1.3 向け開発では、条件を満たす映像一つと AAC 音声一つを MP4 に出力可能 |
+| HLS / fMP4 | clear、cenc、cbcs、AES-128 | 各メディアプレイリストは一つのトラック。1.3 向け開発では、条件を満たす映像一つと AAC 音声一つを MP4 に出力可能 |
 | HLS / TS（映像） | clear、AES-128、SAMPLE-AES | 対応する一つの番組に映像一つと任意の音声。MP4 出力には映像一つと関連する音声を選択 |
 | HLS / TS（音声のみ） | clear、AES-128、SAMPLE-AES | 対応する AAC-LC 音声一つ |
 
@@ -143,7 +145,7 @@ VP9（`vp09`）は MP4・fMP4 HLS/DASH の clear・cenc に対応します。HLS
 | `hls-fmp4`（fMP4） | `clear`、`cenc`、`cbcs`、`hls-aes128` | `master.m3u8` |
 | `hls-ts`（MPEG-TS） | `clear`、`hls-aes128`、`hls-sample-aes` | `master.m3u8` |
 
-ホームの対応表では入力と希望する出力方式を選んで具体的な設定例とコマンドへ進めます。一つの MP4 への出力では、対応条件を満たす MP4 内のトラック、または HLS TS の映像一つと音声一つまでを扱います。DASH/fMP4 HLS の別々のトラックや無関係なファイルを、一つの MP4 にまとめる機能ではありません。
+ホームの対応表から、入力と出力に合う設定例とコマンドへ進めます。一つの MP4 への出力では、対応する MP4 内のトラック、または HLS TS の映像一つと音声一つまでを扱います。1.3 向け開発では、同じ DASH/fMP4 HLS 内の映像一つと AAC 音声一つもまとめられます。入力の名前や選択指定を、drmr が MP4 から生成する宣言と照合し、この経路で保持できない独自の指定は拒否します。`auto` または `stitch` を使い、fMP4 を出力します。[詳しい条件（英語）](https://github.com/kazuhide/drmr/blob/main/docs/conversion-support.md#fragmented-presentations-to-one-mp4)を参照してください。無関係なファイルの結合や、複数の候補からの曖昧な選択は扱いません。
 
 ## HLS の入力暗号方式
 
@@ -770,7 +772,7 @@ drmr convert "https://example.com/vod/master.m3u8" \
 
 所有者だけがアクセスできる作業場所で、[第5章の権限設定](#key-configuration)に従って鍵ファイルを保護します。取得先 `src` と結果の `result` は、同名のものがない新しいパスにしてください。`mkdir`・`cd`・計画ファイルは不要です。再実行には別の保存先を選ぶか、取得済みのローカル入力を使います。追加の認証や origin 許可が必要な場合は、`convert` に `--fetch-config config/fetch.json` を追加します。設定例はこの章にあります。
 
-入力は[第3章の対応条件](#supported-profiles)を満たすものとします。MP4・DASH・fMP4 HLS の例は映像1トラックを想定しています。MP4 から TS へは対応するフラグメント化 MP4 を使います。TS から MP4 へは映像一つと音声一つまでで、複数画質のマスターは使う映像と関連する音声に絞ります。音声のみの TS は 44.1 kHz または 48 kHz の AAC-LC が対象です。映像・音声を含む TS 出力は別プレイリストになります。
+入力は[第3章の対応条件](#supported-profiles)を満たすものとします。MP4・DASH・fMP4 HLS の例は映像1トラックを想定しています。1.3 向け開発では、DASH/fMP4 HLS から MP4 への変換で、条件を満たす映像と AAC 音声の組み合わせも使えます。MP4 から TS へは対応するフラグメント化 MP4 を使います。TS から MP4 へは映像一つと音声一つまでで、複数画質のマスターは使う映像と関連する音声に絞ります。音声のみの TS は 44.1 kHz または 48 kHz の AAC-LC が対象です。映像・音声を含む TS 出力は別プレイリストになります。
 
 以下は DRM を明示しない暗号変換の例です。明示的な Widevine・PlayReady・FairPlay は[第7章の設定例](#local-conversion)を使います。鍵・ライセンス URI に接続する機能ではありません。macOS/Linux などの POSIX シェル用で、行末の `\` は同じコマンドの続きです。
 

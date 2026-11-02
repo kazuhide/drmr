@@ -200,6 +200,16 @@ A complete joint fragmented MP4 can be reimported when it has exactly one suppor
 
 This separation avoids an observed selected-track decryption problem in the tested Shaka Packager 3.8.0: reading the combined CBCS fixture changed all 470 AAC packet payloads while its 240 video packets matched. Reading the validated single-track views preserved both video and AAC. A successful tool exit never replaces the per-view or final media comparison.
 
+For development toward 1.3, the same native MP4 assembly and independent media
+comparison also accept one qualified video and one AAC track from a DASH or
+fMP4 HLS presentation. Admission validates the inverse of drmr's MP4-to-manifest
+rendition mapping before packaging; the presence of a single audio choice alone
+does not permit dropping its name, group or selection controls. The resulting
+MP4 retains the checked language, codec, clocks and playback windows. See the
+[exact presentation and metadata conditions](conversion-support.md#fragmented-presentations-to-one-mp4).
+This source addition is not present in the 1.2.0 archives. Arbitrary rendition
+selection and unrelated-file combination remain outside this profile.
+
 ## Generic resource limits
 
 Generic conversion is deliberately bounded: at most 16 GiB per staged track, 64 tracks, and 100,000 referenced DASH segments. Exceeding a limit fails rather than reporting partial verification. Local DASH accepts one static Period with finite nominal-duration templates, explicit timelines, lists, or supported flat single-file indexes. Resources must remain confined to the manifest directory; declared timing and the shared presentation origin must agree with actual media. Lists can use separate objects or disjoint byte ranges in one object. Live/dynamic input, multiple periods, hierarchical or external indexes, event declarations and presentation metadata that cannot be preserved are refused. The fragmented MP4 HLS profile uses completed, local playlists; byte ranges, unsupported rendition metadata and discontinuities are refused. An external audio group must apply consistently to every video variant; mixed associations are refused. Percent-encoded local resource paths are decoded once before confinement checks, so they select the URI target rather than a similarly named literal file. In-band MP4 event messages are also refused until their preservation is supported. See [DASH references](dash-addressing.md) for the addressing and range conditions. These limits describe drmr's implementation, not limits of the formats.

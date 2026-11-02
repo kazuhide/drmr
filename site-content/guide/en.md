@@ -106,6 +106,8 @@ Common `plan`, `convert` and `verify` commands accept an output list for DASH wi
 
 # 3. Supported input and output profiles
 
+The qualified DASH/fMP4 HLS video-and-audio-to-MP4 extension below is development for 1.3. It is not in the 1.2.0 archives; see [Unreleased changes](https://github.com/kazuhide/drmr/blob/main/CHANGELOG.md#unreleased).
+
 MP4 and fMP4 HLS/DASH accept the implemented AVC (H.264), HEVC (H.265), VP9 and AAC profiles. Transport stream video still requires H.264. HEVC supports single-layer, progressive Main/Main10 with 4:2:0 chroma and matching 8-bit or 10-bit luma/chroma depths. It requires one stable set of video, sequence and picture decoding parameters (VPS/SPS/PPS). See [HEVC validation and limits](https://github.com/kazuhide/drmr/blob/main/docs/verification.md#hevc-in-mp4-and-fmp4) for the exact accepted syntax and refusal conditions.
 
 HEVC and VP9 conversion and verification for the qualified MP4/fMP4 profiles are available from v1.1.0. The v1.0.3 release archives do not include these codecs. Metadata-only identification of AV1, AC-3, E-AC-3, Opus or FLAC does not establish complete validation. Full operations refuse unimplemented codec profiles, even with `--decode`. Container and encryption tables do not qualify every codec those formats can carry.
@@ -121,8 +123,8 @@ Choose an input and an output independently within these profiles. Codec, track,
 | Input | Accepted protection | Track and output conditions |
 | --- | --- | --- |
 | MP4 | clear, cenc, cbcs | Joint MP4 output is conditional; TS output requires fragmented input |
-| DASH / fMP4 | clear, cenc, cbcs | Each representation has one track; single MP4 output requires one source track |
-| HLS / fMP4 | clear, cenc, cbcs, AES-128 | Each media playlist has one track; single MP4 output requires one source track |
+| DASH / fMP4 | clear, cenc, cbcs | Each representation has one track; development for 1.3 also admits one qualified video/AAC pair for MP4 |
+| HLS / fMP4 | clear, cenc, cbcs, AES-128 | Each media playlist has one track; development for 1.3 also admits one qualified video/AAC pair for MP4 |
 | HLS / TS with video | clear, AES-128, SAMPLE-AES | One video with optional audio per admitted program; MP4 output selects one video and associated audio |
 | HLS / TS, audio only | clear, AES-128, SAMPLE-AES | One supported AAC-LC audio stream |
 
@@ -135,7 +137,7 @@ Choose an input and an output independently within these profiles. Codec, track,
 | `hls-fmp4` (fMP4) | `clear`, `cenc`, `cbcs`, `hls-aes128` | `master.m3u8` |
 | `hls-ts` (MPEG-TS) | `clear`, `hls-aes128`, `hls-sample-aes` | `master.m3u8` |
 
-The support matrix on the home page links each input/output choice to its concrete configuration and command. Joint MP4 output accepts qualified tracks from one complete MP4 or up to one video and one audio track from HLS TS. Separate DASH/fMP4 HLS tracks and unrelated files are not combined into one MP4.
+The home-page matrix links each input/output choice to its settings and command. Joint MP4 output accepts qualified tracks from one MP4 or one video and one audio from HLS TS. Development for 1.3 also accepts one video and one AAC track from the same DASH/fMP4 HLS presentation. Its rendition metadata must match drmr's MP4-to-manifest mapping; custom labels or selection controls that this route cannot retain are refused. Use `auto` or `stitch`; the result is fragmented MP4. See the [exact conditions](https://github.com/kazuhide/drmr/blob/main/docs/conversion-support.md#fragmented-presentations-to-one-mp4). Unrelated inputs and ambiguous choices remain refused.
 
 ## HLS input protection
 
@@ -720,7 +722,7 @@ All values are public test data. Replace URLs, source KIDs, keys, key URIs, asso
 
 Use an owner-only work directory and protect key files as described in [chapter 5](#key-configuration). `src` and `result` must be new paths. No `mkdir`, `cd` or plan file is required. Retry with new destinations or the retained local input. For extra origins or authentication, add `--fetch-config config/fetch.json` to `convert`; this chapter has the policy example.
 
-Input must satisfy [chapter 3](#supported-profiles). MP4, DASH and fMP4 HLS examples assume one video track. MP4-to-TS needs qualified fragmented input. TS-to-MP4 admits one video and one audio at most: narrow a multi-quality master to the chosen video and associated audio. Audio-only TS uses 44.1 or 48 kHz AAC-LC. TS output containing video and audio uses separate playlists.
+Input must satisfy [chapter 3](#supported-profiles). MP4, DASH and fMP4 HLS examples use one video track; development for 1.3 also accepts the qualified video/AAC pair for DASH/fMP4 HLS-to-MP4 output. MP4-to-TS needs qualified fragmented input. TS-to-MP4 admits one video and one audio at most: narrow a multi-quality master to the chosen video and associated audio. Audio-only TS uses 44.1 or 48 kHz AAC-LC. TS output containing video and audio uses separate playlists.
 
 These recipes request encryption without explicit DRM signaling. For Widevine, PlayReady or FairPlay declarations, use [chapter 7's complete example](#local-conversion). Key/license URIs are not fetched. Commands use POSIX shell syntax; a trailing `\` continues the same command.
 
