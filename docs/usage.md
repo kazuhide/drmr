@@ -166,6 +166,45 @@ A qualified local HLS transport-stream source can produce clear, `cenc`, or `cbc
 
 For an operational failure after a valid `convert` or `verify` command with `--json`, stdout contains one object with `schema_version: 1`, `command`, `status` (`failed` or `cancelled`), and `error` containing a fixed `code`, safe `hint`, and `last_activity` (a fixed label or `null`). A completed verification that finds a mismatch retains its existing `checks` and comparison fields and adds that failure description. With default `auto` progress and `--json`, stderr carries a fixed failure token and shows text progress only when it is a terminal. Exit codes remain `1` for processing or comparison failure, `2` for the existing configuration errors, and `130` for confirmed cancellation. Cleanup-unconfirmed failures remain failures, even if cancellation was requested. Clap argument parsing errors still use stderr and exit `2`, before this JSON command contract applies. If stdout itself cannot be written, a complete JSON object cannot be guaranteed: the command reports `result-output-unavailable` on stderr and exits `1`. No raw tool output, source URL, key, or operator path is added to progress or failure JSON. Successful URL conversion retains its explicit saved-source locations in the existing result.
 
+## Completion summary
+
+A successful human-readable `convert` prints one `Summary` after its checks.
+This covers direct conversion and saved plans, with one or multiple outputs:
+
+- `Input` shows the input format and protection. `Source` shows the unchanged
+  local input, or `Retained originals` shows the URL download directory without
+  the source URL.
+- Each `Output` shows its resolved format and protection profile. `Destination`
+  shows the output file or directory; named outputs use their published child
+  directories. `hls` means fMP4 HLS; `hls-ts` means MPEG-TS HLS.
+- `Processing` shows the recorded processing mode. `Stats` shows input-track and
+  output counts, and `Elapsed` shows total command time, including acquisition
+  and verification.
+
+The summary uses existing results without additional media checks. Local paths
+are intentionally shown with terminal controls escaped. Source URLs, keys, IVs,
+authentication values, DRM addresses, KIDs and raw media metadata are omitted.
+Review filenames before sharing the text. `--progress off` suppresses progress
+on stderr, not this final stdout result.
+
+Save the readable result, including the summary, with `tee`:
+
+```sh
+drmr convert original.mp4 --to clear --output converted.mp4 \
+  | tee conversion-summary.txt
+```
+
+For the existing detailed numeric report, use JSON measurements instead:
+
+```sh
+drmr convert original.mp4 --to clear --output converted-json.mp4 \
+  --json --measure >result.json
+```
+
+`--json` keeps its existing result schema; `--measure` adds its existing numeric
+observations. Neither gains the human summary. Both examples leave progress on
+stderr, separate from the saved result.
+
 ## Progress output
 
 Global `--progress` controls observations on standard error. It never adds progress to standard output or changes the final result format, so existing pipes keep working.

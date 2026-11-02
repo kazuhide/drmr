@@ -1,7 +1,7 @@
 ---
 title: User guide
 updated: 2026-11-02
-version: 1.1.0
+version: 1.1.1
 ---
 
 # 1. Introduction
@@ -1252,7 +1252,7 @@ Unknown totals show task/time. MP4 URL transfers show bytes, then `1/1`, without
 
 Progress JSON keeps all task states and activity/resource/scope fields; `pipeline` adds phases, outputs, counts and estimates. Overlapping or failed scopes do not imply success. Help/version have no progress; `--measure` timings may overlap.
 
-`convert` compares media and runs applicable native manifest/requested DRM checks; named-output results list them. External checks appear only if requested. `verify` independently rereads/checks saved files.
+`convert` compares media and checks applicable native manifests and requested DRM declarations; external checks run only when requested. Successful human output adds one `Summary` of profiles, preserved source, output locations, processing, counts and elapsed time, including saved plans and `--progress off`. [Save the summary or JSON measurements](https://github.com/kazuhide/drmr/blob/main/docs/usage.md#completion-summary). `verify` independently rereads saved files.
 
 Progress excludes URLs, keys, headers, paths and raw metadata/tool output. `--progress json` writes stderr JSON Lines with fixed failure/cancellation codes. Parsing errors and `serve` startup/address notices may be text. Final results/exit values determine success.
 
