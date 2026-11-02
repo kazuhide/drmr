@@ -308,7 +308,7 @@ dependencies = [
 
 [[package]]
 name = "drmr-core"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "aes",
  "base64 0.22.1",
@@ -352,7 +352,7 @@ dependencies = [
 
 [[package]]
 name = "drmr-manifest"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "base64 0.22.1",
  "roxmltree",

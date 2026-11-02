@@ -5,6 +5,14 @@ for installation, stable interfaces and versioning.
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-11-02
+
+### Changed
+
+- Show a completion summary after successful CLI conversions, including input
+  and output profiles, local source and output locations, and elapsed time.
+  Omit source URLs, credentials and key values; keep JSON report schemas unchanged.
+
 ## [1.1.0] - 2026-11-02
 
 ### Added

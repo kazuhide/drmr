@@ -6,6 +6,7 @@ mod analyze_cli;
 mod bundle_cli;
 mod cancellation;
 mod common_job;
+mod conversion_summary;
 mod convert_cli;
 mod doctor;
 mod download_cli;

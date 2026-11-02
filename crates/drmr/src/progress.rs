@@ -94,6 +94,8 @@ pub(crate) struct Progress {
     heartbeat: Mutex<Option<JoinHandle<()>>>,
 }
 
+pub(crate) use display::duration;
+
 fn activity(value: &str) -> Option<&'static str> {
     match value {
         "configuration" => Some("configuration"),
@@ -349,6 +351,21 @@ impl Progress {
         self.begin_result()?;
         // Result writers can read progress after its state/output locks drop.
         write()
+    }
+
+    pub(crate) fn elapsed(&self) -> Duration {
+        self.inner.began.elapsed()
+    }
+
+    pub(crate) fn downloaded_resources(&self) -> Option<[u64; 2]> {
+        let state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let [started, completed, bytes] = state.downloads?;
+        (completed > 0 && completed == started && state.resources_total == Some(completed))
+            .then_some([completed, bytes])
     }
 
     pub(crate) fn finish(&self) {

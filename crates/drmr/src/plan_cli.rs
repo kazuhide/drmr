@@ -239,6 +239,7 @@ pub fn convert(args: &ConvertArgs, path: &Path) -> ExitCode {
     if let Err(code) = session.check_cancelled("convert", args.json) {
         return code;
     }
+    let elapsed = session.progress.elapsed();
     let result = session.progress.write_result(|| {
         if args.json {
             let mut value = serde_json::to_value(&report).expect("conversion report serializes");
@@ -249,7 +250,17 @@ pub fn convert(args: &ConvertArgs, path: &Path) -> ExitCode {
             }
             convert_cli::json(&value)
         } else {
-            convert_cli::conversion_text(&report)
+            convert_cli::conversion_text(&report)?;
+            crate::conversion_summary::Summary::single(
+                &report,
+                crate::conversion_summary::Source::Local(
+                    plan.source.root.join(&plan.source.entrypoint),
+                ),
+                &plan.intent.output,
+                plan.intent.format,
+                plan.intent.target,
+            )
+            .write(&mut std::io::stdout().lock(), elapsed, None)
         }
     });
     if result.is_err() {

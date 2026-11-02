@@ -98,8 +98,12 @@ unbounded diagnostic processing.
 Global [progress output](usage.md#progress-output) uses fixed stage/task labels,
 elapsed time and numeric observations. It excludes URLs, keys, authentication
 headers, operator paths, raw metadata and raw tool output. This applies to both
-text and JSON Lines progress; it does not remove explicit retained-source paths
-from successful result reports or sanitize the original downloaded manifests.
+text and JSON Lines progress. The human `convert` completion summary intentionally
+shows local source or retained-download paths and output destinations, with
+terminal controls escaped. It omits source URLs, keys, IVs, authentication values,
+DRM addresses, KIDs and raw media metadata. Review filenames before sharing saved
+text. These progress protections do not remove explicit retained-source paths
+from successful JSON reports or sanitize the original downloaded manifests.
 
 These controls cover recognized secret material. They do not classify every filename, label, media tag, or arbitrary value as confidential. Public Rust APIs that return captured raw tool output return data for processing; their raw buffers are not a safe log format. Review exported reports and third-party diagnostics before sharing them.
 
