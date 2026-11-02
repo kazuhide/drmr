@@ -143,6 +143,7 @@ fn outputs() -> Vec<BundleOutputIntent> {
         target,
         drms,
         conformance: ManifestValidation::None,
+        manifest_profile: None,
     })
     .collect()
 }

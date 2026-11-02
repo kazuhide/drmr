@@ -90,6 +90,7 @@ fn outputs() -> Vec<BundleOutputIntent> {
             conformance: ManifestValidation::None,
             processing: Some(ProcessingMode::Stitch),
             dash_addressing: None,
+            manifest_profile: None,
         })
         .collect()
 }

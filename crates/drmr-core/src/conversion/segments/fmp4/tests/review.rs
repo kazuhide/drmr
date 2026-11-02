@@ -28,6 +28,7 @@ fn intent(
         drms: Vec::new(),
         conformance: ManifestValidation::None,
         processing: Some(processing),
+        manifest_profile: None,
     }
 }
 

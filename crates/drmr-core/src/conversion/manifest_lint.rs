@@ -10,7 +10,7 @@ pub use drmr_manifest::Report as NativeManifestReport;
 use drmr_manifest::{
     Document, DocumentId, DocumentSize, Format, ManifestLink, Options, Presentation, Profile,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::num::NonZeroUsize;
 use std::path::Path;
 
@@ -34,7 +34,8 @@ fn manifest_format(path: &Path) -> Result<Option<Format>, ConversionError> {
 
 /// The baseline protocol rules or the additional manifest-level Apple VOD authoring rules.
 /// Choosing an authoring profile does not establish media or device conformance.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum ManifestProfile {
     #[default]
     Base,

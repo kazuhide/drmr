@@ -167,6 +167,7 @@ fn intent(id: &str, addressing: DashAddressing) -> BundleOutputIntent {
         conformance: ManifestValidation::None,
         processing: Some(ProcessingMode::Stitch),
         dash_addressing: Some(addressing),
+        manifest_profile: None,
     }
 }
 

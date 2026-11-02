@@ -69,6 +69,7 @@ fn outputs() -> Vec<BundleOutputIntent> {
             target: TargetProtection::Clear,
             drms: Vec::new(),
             conformance: ManifestValidation::None,
+            manifest_profile: None,
         })
         .collect()
 }

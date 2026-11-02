@@ -158,6 +158,7 @@ fn run(mode: Mutation) {
             conformance: ManifestValidation::None,
             processing: None,
             dash_addressing: None,
+            manifest_profile: None,
         })
         .collect::<Vec<_>>();
     let result = command.convert_bundle(

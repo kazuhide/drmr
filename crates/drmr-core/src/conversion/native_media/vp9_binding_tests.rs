@@ -1448,6 +1448,7 @@ fn vp9_review_saved_bundle_verifies_tail_source_but_refuses_tail_output() {
         conformance: ManifestValidation::None,
         processing: None,
         dash_addressing: None,
+        manifest_profile: None,
     }];
     let (converter, events) = command(ProcessingMode::Auto, true);
     let plan = converter

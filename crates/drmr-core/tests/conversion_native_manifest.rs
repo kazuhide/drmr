@@ -471,6 +471,7 @@ fn named_dash_common_system_records_match_operator_and_actual_initialization_key
                     target,
                     drms: Vec::new(),
                     conformance: ManifestValidation::None,
+                    manifest_profile: None,
                 }],
             })
             .unwrap();

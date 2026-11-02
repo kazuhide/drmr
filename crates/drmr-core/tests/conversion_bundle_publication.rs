@@ -332,6 +332,7 @@ fn refuse_changed_output(point: MutationPoint) {
             target: TargetProtection::Clear,
             drms: Vec::new(),
             conformance: ManifestValidation::None,
+            manifest_profile: None,
         })
         .collect();
     let plan = converter()
@@ -462,6 +463,7 @@ fn dash_plan(input: &Path, output: &Path) -> drmr_core::conversion::plan::bundle
                 target: TargetProtection::Clear,
                 drms: Vec::new(),
                 conformance: ManifestValidation::None,
+                manifest_profile: None,
             }],
         })
         .unwrap()

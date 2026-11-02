@@ -79,6 +79,7 @@ fn plan(outputs: usize) -> BundlePlan {
                 drms: Vec::new(),
                 conformance: ManifestValidation::None,
                 processing: None,
+                manifest_profile: None,
             })
             .collect(),
     }

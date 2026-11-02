@@ -1,5 +1,7 @@
 //! Executable local intent, with byte identities and independently supplied runtime secrets.
 pub mod bundle;
+mod report;
+pub use report::{report_destination, write_report_new};
 pub(super) mod destination;
 #[cfg(test)]
 mod options_tests;

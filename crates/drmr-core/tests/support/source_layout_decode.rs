@@ -226,6 +226,7 @@ fn saved_bundle_muxed_segments_keep_source_selection_and_the_decode_floor() {
         conformance: ManifestValidation::None,
         processing: None,
         dash_addressing: None,
+        manifest_profile: None,
     }];
     let saved = planner
         .create_bundle_plan(BundlePlanRequest {

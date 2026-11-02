@@ -203,6 +203,7 @@ fn six_second_hls_target_reaches_every_saved_bundle_output() {
             drms: Vec::new(),
             conformance: ManifestValidation::None,
             processing: None,
+            manifest_profile: None,
         })
         .collect();
         let converter = converter();

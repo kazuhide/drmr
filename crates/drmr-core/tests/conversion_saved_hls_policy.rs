@@ -323,6 +323,7 @@ fn legacy_bundle_keeps_two_seconds(schema: u32) {
         conformance: ManifestValidation::None,
         processing: None,
         dash_addressing: None,
+        manifest_profile: None,
     }];
     let input_keys = InputKeys::default();
     let hls_keys = HlsInputKeys::default();
@@ -526,6 +527,7 @@ fn a_mixed_new_bundle_uses_segment_admission_facts_for_its_stitch_request() {
             conformance: ManifestValidation::None,
             processing: Some(mode),
             dash_addressing: None,
+            manifest_profile: None,
         });
     let keys = BundleOperatorKeys::default();
     let saved = converter()

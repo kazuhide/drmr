@@ -222,6 +222,7 @@ fn native_plan(command: &Converter, input: &Path, output_root: &Path) -> BundleP
             conformance: ManifestValidation::None,
             processing: None,
             dash_addressing: Some(DashAddressing::List),
+            manifest_profile: None,
         },
         BundleOutputIntent {
             id: "default-template".into(),
@@ -231,6 +232,7 @@ fn native_plan(command: &Converter, input: &Path, output_root: &Path) -> BundleP
             conformance: ManifestValidation::None,
             processing: None,
             dash_addressing: None,
+            manifest_profile: None,
         },
     ];
     command

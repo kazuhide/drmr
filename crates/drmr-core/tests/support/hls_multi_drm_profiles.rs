@@ -327,6 +327,7 @@ fn refuse_opaque_before_tools(
         conformance: drmr_core::conversion::plan::bundle::ManifestValidation::None,
         processing: Some(mode),
         dash_addressing: None,
+        manifest_profile: None,
     }];
     let bundle_output = root.join(format!("refused-bundle-{label}"));
     assert_eq!(

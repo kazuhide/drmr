@@ -10,6 +10,7 @@ fn intent(id: &str) -> BundleOutputIntent {
         target: TargetProtection::Clear,
         drms: Vec::new(),
         conformance: ManifestValidation::None,
+        manifest_profile: None,
     }
 }
 
@@ -38,6 +39,26 @@ fn private_write(path: &Path, bytes: &[u8]) {
         .unwrap()
         .write_all(bytes)
         .unwrap();
+}
+
+#[test]
+fn legacy_plans_never_silently_accept_an_unbound_manifest_profile() {
+    let root = crate::native::private_tempdir().unwrap();
+    let mut plan = sample(root.path());
+    let original = serde_json::to_vec(&plan).unwrap();
+    assert!(
+        serde_json::to_value(&plan).unwrap()["outputs"][0]
+            .get("manifest_profile")
+            .is_none()
+    );
+    plan.outputs[0].manifest_profile =
+        Some(crate::conversion::manifest_lint::ManifestProfile::Base);
+    plan.plan_id = identity(&plan).unwrap();
+    assert_eq!(validate(&plan), Err(INVALID));
+    plan.outputs[0].manifest_profile = None;
+    plan.plan_id = identity(&plan).unwrap();
+    assert_eq!(serde_json::to_vec(&plan).unwrap(), original);
+    validate(&plan).unwrap();
 }
 
 #[test]

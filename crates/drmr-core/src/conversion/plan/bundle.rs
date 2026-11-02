@@ -1,5 +1,6 @@
 //! One byte-bound source and one atomic destination for several independently checked outputs.
 mod execution;
+mod output_config;
 mod outputs;
 use super::{EXISTS, INVALID, KIND, LIMIT, UNSAFE, UNSUPPORTED, absolute, destination};
 use crate::conversion::FrozenSource;
@@ -16,6 +17,9 @@ use crate::{
         processing::{ProcessingMode, ProcessingSelection, segment_target::HlsTargetPolicy},
     },
     inspection::{OutputFormat, TargetProtection},
+};
+pub use output_config::{
+    OutputConfig, parse_output_config_diagnostic, read_output_config_diagnostic,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -66,6 +70,18 @@ pub struct BundleOutputIntent {
         skip_serializing_if = "Option::is_none"
     )]
     pub dash_addressing: Option<DashAddressing>,
+    #[serde(
+        default,
+        deserialize_with = "present_profile",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub manifest_profile: Option<crate::conversion::manifest_lint::ManifestProfile>,
+}
+
+fn present_profile<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<crate::conversion::manifest_lint::ManifestProfile>, D::Error> {
+    crate::conversion::manifest_lint::ManifestProfile::deserialize(deserializer).map(Some)
 }
 
 fn present_addressing<'de, D: serde::Deserializer<'de>>(
@@ -768,7 +784,9 @@ pub fn read_output_spec_diagnostic(
         return Err(at(vec![F::SchemaVersion.into()]));
     }
     for (index, output) in spec.outputs.iter().enumerate() {
-        let field = if spec.schema_version == 1 && output.processing.is_some() {
+        let field = if output.manifest_profile.is_some() {
+            Some(F::ManifestProfile)
+        } else if spec.schema_version == 1 && output.processing.is_some() {
             Some(F::Processing)
         } else if spec.schema_version < 3 && output.dash_addressing.is_some() {
             Some(F::DashAddressing)
@@ -949,6 +967,11 @@ fn validate_outputs(outputs: &[BundleOutputIntent]) -> Result<(), ConversionErro
                 && output.format == OutputFormat::Mp4)
             || !drm_profile(output)
             || output.format != OutputFormat::Dash && output.dash_addressing.is_some()
+            || output.manifest_profile.is_some_and(|profile| {
+                output.format == OutputFormat::Mp4
+                    || profile == crate::conversion::manifest_lint::ManifestProfile::AppleVod
+                        && !matches!(output.format, OutputFormat::Hls | OutputFormat::HlsTs)
+            })
         {
             return Err(INVALID);
         }
@@ -1071,6 +1094,14 @@ pub(super) fn validate(plan: &BundlePlan) -> Result<(), ConversionError> {
             .outputs
             .iter()
             .any(|output| output.dash_addressing.is_some())
+    {
+        return Err(INVALID);
+    }
+    if plan.schema_version < 12
+        && plan
+            .outputs
+            .iter()
+            .any(|output| output.manifest_profile.is_some())
     {
         return Err(INVALID);
     }

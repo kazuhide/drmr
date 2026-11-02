@@ -180,6 +180,7 @@ fn fairplay_widevine_and_playready_keep_the_target_with_an_additional_decode_ora
             drms: vec![DrmSystem::FairPlay],
             conformance: ManifestValidation::None,
             processing: None,
+            manifest_profile: None,
         },
         BundleOutputIntent {
             dash_addressing: None,
@@ -189,6 +190,7 @@ fn fairplay_widevine_and_playready_keep_the_target_with_an_additional_decode_ora
             drms: vec![DrmSystem::Widevine, DrmSystem::PlayReady],
             conformance: ManifestValidation::None,
             processing: None,
+            manifest_profile: None,
         },
     ];
     let command = converter();

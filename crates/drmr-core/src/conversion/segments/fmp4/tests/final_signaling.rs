@@ -142,6 +142,7 @@ fn final_widevine_bundle_checks_selected_and_foreign_records_in_every_media_reso
         drms: vec![DrmSystem::Widevine],
         conformance: ManifestValidation::None,
         processing: Some(ProcessingMode::Segments),
+        manifest_profile: None,
     }];
     let plan = command
         .create_bundle_plan(BundlePlanRequest {
@@ -218,6 +219,7 @@ fn final_fairplay_bundle_rejects_provider_records_in_middle_and_final_media() {
         drms: vec![DrmSystem::FairPlay],
         conformance: ManifestValidation::None,
         processing: Some(ProcessingMode::Segments),
+        manifest_profile: None,
     }];
     let plan = command
         .create_bundle_plan(BundlePlanRequest {

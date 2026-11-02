@@ -24,6 +24,7 @@ fn vp9_cbcs_bundle_plans_and_valid_saved_replay_refuse_before_publication() {
         conformance: ManifestValidation::None,
         processing: None,
         dash_addressing: None,
+        manifest_profile: None,
     }];
     assert_eq!(
         command

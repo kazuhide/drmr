@@ -267,6 +267,34 @@ pub fn read_bundle_diagnostic(path: &Path) -> Result<BundleOperatorKeys, Failure
     parse_bundle(&bytes)
 }
 
+/// Use the same named-key schema for a quick single result, without guessing an output domain.
+pub fn read_single_named_diagnostic(path: &Path, id: &str) -> Result<OperatorKeys, Failure> {
+    let bytes = read_bytes(path).map_err(|_| Failure::root(ConfigurationFile::Keys))?;
+    single_named(&bytes, id)
+}
+
+fn single_named(bytes: &[u8], id: &str) -> Result<OperatorKeys, Failure> {
+    let mut keys = parse_bundle(bytes)?;
+    if keys.outputs.keys().any(|name| name != id) {
+        return Err(keys_failure([F::Outputs.into()]));
+    }
+    let mut output = keys.outputs.remove(id).unwrap_or_default();
+    output.input = keys.input;
+    output.hls_input = keys.hls_input;
+    Ok(output)
+}
+
+/// Read only the current named-key schema, validating unused output domains before dropping them.
+pub fn read_canonical_source_diagnostic(path: &Path) -> Result<OperatorKeys, Failure> {
+    let bytes = read_bytes(path).map_err(|_| Failure::root(ConfigurationFile::Keys))?;
+    let keys = parse_bundle(&bytes)?;
+    Ok(OperatorKeys {
+        input: keys.input,
+        hls_input: keys.hls_input,
+        ..OperatorKeys::default()
+    })
+}
+
 fn parse_bundle(bytes: &[u8]) -> Result<BundleOperatorKeys, Failure> {
     let raw: RawBundle = configuration::parse(bytes, ConfigurationFile::Keys)?;
     if raw.schema_version != 2 {
@@ -581,6 +609,63 @@ fn private_file(path: &Path) -> Result<std::fs::File, ConversionError> {
         return Err(INVALID);
     }
     Ok(file)
+}
+
+#[cfg(test)]
+mod canonical_tests {
+    use super::*;
+    use serde_json::json;
+    use std::io::Write as _;
+
+    const HEX: &str = "000102030405060708090a0b0c0d0e0f";
+
+    #[test]
+    fn quick_output_uses_only_the_explicit_named_domain() {
+        let document = json!({"schema_version":2,"input":{"keys":[{"kid":HEX,"key":HEX}]},"outputs":{"default":{"kid":HEX,"key":HEX}}});
+        let keys = single_named(&serde_json::to_vec(&document).unwrap(), "default").unwrap();
+        assert!(keys.output.is_some());
+        assert!(keys.input.contains(HEX));
+        let other = json!({"schema_version":2,"outputs":{"another":{"kid":HEX,"key":HEX}}});
+        assert!(single_named(&serde_json::to_vec(&other).unwrap(), "default").is_err());
+        let both = json!({"schema_version":2,"outputs":{"default":{"kid":HEX,"key":HEX},"another":{"kid":HEX,"key":HEX}}});
+        assert!(single_named(&serde_json::to_vec(&both).unwrap(), "default").is_err());
+    }
+
+    #[test]
+    fn source_only_and_clear_output_use_the_same_schema() {
+        let document =
+            json!({"schema_version":2,"input":{"keys":[{"kid":HEX,"key":HEX}]},"outputs":{}});
+        let root = crate::native::private_tempdir().unwrap();
+        let path = root.path().join("keys.json");
+        crate::native::create_private_new(&path)
+            .unwrap()
+            .write_all(&serde_json::to_vec(&document).unwrap())
+            .unwrap();
+        let quick = read_single_named_diagnostic(&path, "default").unwrap();
+        assert!(quick.input.contains(HEX));
+        assert!(quick.output.is_none());
+        let source = read_canonical_source_diagnostic(&path).unwrap();
+        assert!(source.input.contains(HEX));
+        assert!(source.output.is_none());
+        assert!(single_named(br#"{"schema_version":1}"#, "default").is_err());
+    }
+
+    #[test]
+    fn canonical_source_reader_checks_unused_outputs_and_masks_their_values() {
+        let root = crate::native::private_tempdir().unwrap();
+        let path = root.path().join("keys.json");
+        let bytes=br#"{"schema_version":2,"outputs":{"PRIVATE_DOMAIN_CANARY":{"key":"PRIVATE_KEY_CANARY"}}}"#;
+        crate::native::create_private_new(&path)
+            .unwrap()
+            .write_all(bytes)
+            .unwrap();
+        let error = read_canonical_source_diagnostic(&path).unwrap_err();
+        for text in [format!("{error:?}"), error.diagnostic.message()] {
+            assert!(!text.contains("PRIVATE_DOMAIN_CANARY"));
+            assert!(!text.contains("PRIVATE_KEY_CANARY"));
+        }
+        assert!(error.diagnostic.valid_for_code("key-file-invalid"));
+    }
 }
 
 #[cfg(test)]
