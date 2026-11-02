@@ -507,10 +507,11 @@ impl CompletedConversion {
             )
         });
         let elapsed = progress.elapsed();
+        let downloaded = progress.downloaded_resources();
         progress.write_result(|| {
             write_conversion_result(&self.report, self.download, measurement, args.json)?;
             if let Some(summary) = summary {
-                summary.write(&mut std::io::stdout().lock(), elapsed)?;
+                summary.write(&mut std::io::stdout().lock(), elapsed, downloaded)?;
             }
             Ok(())
         })

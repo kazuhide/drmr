@@ -260,7 +260,7 @@ pub fn convert(args: &ConvertArgs, path: &Path) -> ExitCode {
                 plan.intent.format,
                 plan.intent.target,
             )
-            .write(&mut std::io::stdout().lock(), elapsed)
+            .write(&mut std::io::stdout().lock(), elapsed, None)
         }
     });
     if result.is_err() {

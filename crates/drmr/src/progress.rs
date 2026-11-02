@@ -357,6 +357,17 @@ impl Progress {
         self.inner.began.elapsed()
     }
 
+    pub(crate) fn downloaded_resources(&self) -> Option<[u64; 2]> {
+        let state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let [started, completed, bytes] = state.downloads?;
+        (completed > 0 && completed == started && state.resources_total == Some(completed))
+            .then_some([completed, bytes])
+    }
+
     pub(crate) fn finish(&self) {
         self.stop("finished", None);
     }

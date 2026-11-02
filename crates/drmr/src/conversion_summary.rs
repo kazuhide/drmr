@@ -7,6 +7,7 @@ use drmr_core::conversion::{
 use drmr_core::inspection::{
     HlsKeyMethod, InputFormat, InputPreparation, OutputFormat, ProcessingRouteId, TargetProtection,
 };
+use indicatif::HumanBytes;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -41,7 +42,6 @@ pub(crate) struct Summary {
     source: Source,
     input_format: &'static str,
     input_protection: &'static str,
-    input_tracks: usize,
     outputs: Vec<Output>,
 }
 
@@ -118,12 +118,16 @@ impl Summary {
             source,
             input_format: format,
             input_protection: protection,
-            input_tracks: report.input.tracks.len(),
             outputs,
         }
     }
 
-    pub(crate) fn write(&self, out: &mut impl Write, elapsed: Duration) -> io::Result<()> {
+    pub(crate) fn write(
+        &self,
+        out: &mut impl Write,
+        elapsed: Duration,
+        downloaded: Option<[u64; 2]>,
+    ) -> io::Result<()> {
         writeln!(out, "\nSummary")?;
         writeln!(
             out,
@@ -152,15 +156,9 @@ impl Summary {
                 writeln!(out, "    Processing: {}", processing.as_str())?;
             }
         }
-        writeln!(
+        write!(
             out,
-            "  Stats: {} input {}; {} {}",
-            self.input_tracks,
-            if self.input_tracks == 1 {
-                "track"
-            } else {
-                "tracks"
-            },
+            "  Stats: {} {}",
             self.outputs.len(),
             if self.outputs.len() == 1 {
                 "output"
@@ -168,6 +166,15 @@ impl Summary {
                 "outputs"
             },
         )?;
+        if let Some([files, bytes]) = downloaded {
+            write!(
+                out,
+                "; {files} {} downloaded; {} received",
+                if files == 1 { "file" } else { "files" },
+                HumanBytes(bytes)
+            )?;
+        }
+        writeln!(out)?;
         writeln!(out, "  Elapsed: {}", crate::progress::duration(elapsed))
     }
 }
@@ -284,7 +291,9 @@ mod tests {
             TargetProtection::HlsSampleAes,
         );
         let mut bytes = Vec::new();
-        summary.write(&mut bytes, Duration::from_secs(75)).unwrap();
+        summary
+            .write(&mut bytes, Duration::from_secs(75), Some([7, 1024]))
+            .unwrap();
         let text = String::from_utf8(bytes).unwrap();
         assert!(text.contains("Input: HLS MPEG-TS / clear"), "{text}");
         assert!(
@@ -293,6 +302,10 @@ mod tests {
         );
         assert!(text.contains("Retained originals: retained"), "{text}");
         assert!(text.contains("Elapsed: 1m 15s"), "{text}");
+        assert!(
+            text.contains("7 files downloaded; 1.00 KiB received"),
+            "{text}"
+        );
         for forbidden in ["secret", "password", "origin.invalid", "https://", "KID"] {
             assert!(!text.contains(forbidden), "{text}");
         }
@@ -331,7 +344,9 @@ mod tests {
         let source = || Source::Local(PathBuf::from("source/master.m3u8"));
         let summary = Summary::bundle(&report, source(), Path::new("result"), &intents).unwrap();
         let mut bytes = Vec::new();
-        summary.write(&mut bytes, Duration::from_secs(2)).unwrap();
+        summary
+            .write(&mut bytes, Duration::from_secs(2), None)
+            .unwrap();
         let text = String::from_utf8(bytes).unwrap();
         for (id, format) in [("hls", "HLS fMP4"), ("dash", "DASH fMP4")] {
             assert!(
@@ -343,7 +358,11 @@ mod tests {
                 "{text}"
             );
         }
-        assert!(text.contains("Stats: 1 input track; 2 outputs"), "{text}");
+        assert!(text.contains("Stats: 2 outputs"), "{text}");
+        assert!(
+            !text.contains("downloaded") && !text.contains("received"),
+            "{text}"
+        );
         assert!(!text.contains("secret"), "{text}");
         assert_eq!(
             Summary::bundle(&report, source(), Path::new("result"), &intents[..1]).err(),

@@ -355,6 +355,10 @@ fn remote_completion_names_retained_originals_without_url_or_credentials() {
         "{text}"
     );
     assert!(download.join("input.mp4").is_file() && output.is_file());
+    assert!(
+        text.contains("file downloaded") && text.contains("received"),
+        "{text}"
+    );
     for bytes in [&result.stdout, &result.stderr] {
         let text = String::from_utf8_lossy(bytes);
         for forbidden in [

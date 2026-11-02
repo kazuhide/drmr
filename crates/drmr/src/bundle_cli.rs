@@ -163,13 +163,14 @@ impl Session {
                 serde_json::to_value(measurement).expect("measurements serialize");
         }
         let elapsed = self.progress.elapsed();
+        let downloaded = self.progress.downloaded_resources();
         let result = self.progress.write_result(|| {
             if json {
                 convert_cli::json(&report)
             } else {
                 text(command, &report, passed)?;
                 if let Some(summary) = summary {
-                    summary.write(&mut std::io::stdout().lock(), elapsed)?;
+                    summary.write(&mut std::io::stdout().lock(), elapsed, downloaded)?;
                 }
                 Ok(())
             }
