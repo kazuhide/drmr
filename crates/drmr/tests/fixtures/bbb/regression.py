@@ -212,13 +212,13 @@ def regression(binary, destination):
     assert analysis["schema_version"] == 2
     require_media_verification(analysis["verification"], scope="source-admission", manifest=False)
 
-    outputs = private_json(destination / "outputs.json", {"schema_version": 1, "outputs": [
-        {"id": "dash", "format": "dash", "target": "cbcs", "drms": ["widevine", "playready"]},
-        {"id": "hls", "format": "hls", "target": "cbcs", "drms": ["fairplay"]},
+    outputs = private_json(destination / "outputs.json", {"schema_version": 4, "outputs": [
+        {"id": "dash", "output_format": "dash", "encryption": "cbcs", "drms": ["widevine", "playready"]},
+        {"id": "hls", "output_format": "hls-fmp4", "encryption": "cbcs", "drms": ["fairplay"]},
     ]})
     plan_path = destination / "conversion.plan.json"
     output = destination / "result"
-    planned = execute("planning", ["plan", "--decode", source, "--outputs", outputs, "--output", output,
+    planned = execute("planning", ["plan", "--decode", source, "--output-config", outputs, "--output-dir", output,
                                     "--save", plan_path, "--max-workers", "2", "--json"])
     plan_bytes = plan_path.read_bytes()
     assert planned == json.loads(plan_bytes) and planned["schema_version"] == 10
@@ -235,7 +235,7 @@ def regression(binary, destination):
         "hls": {"kid": HLS_KID, "key": HLS_KEY, "hls_key_uri": "skd://bbb-regression",
                 "signaling": {"system": "multi-drm", "fairplay": True}},
     }})
-    converted = execute("packaging", ["convert", "--decode", "--plan", plan_path, "--keys-file", keys,
+    converted = execute("packaging", ["convert", "--decode", "--plan-file", plan_path, "--keys-file", keys,
                                        "--max-workers", "2", "--json"])
     assert converted["kind"] == "bundle-conversion" and converted["plan_id"] == planned["plan_id"]
     assert {row["id"] for row in converted["outputs"]} == {"dash", "hls"}
@@ -243,7 +243,7 @@ def regression(binary, destination):
         require_media_verification(row["conversion"]["verification"])
         assert row["signaling"]["verified"] is True
         assert row["signaling"]["systems"] == (["widevine", "playready"] if row["id"] == "dash" else ["fairplay"])
-    verified = execute("verification", ["verify", "--decode", "--plan", plan_path, "--keys-file", keys,
+    verified = execute("verification", ["verify", "--decode", "--plan-file", plan_path, "--keys-file", keys,
                                          "--max-workers", "2", "--json"])
     assert verified["kind"] == "bundle-verification" and verified["plan_id"] == planned["plan_id"]
     assert verified["passed"] is True and verified["source_unchanged"] is True

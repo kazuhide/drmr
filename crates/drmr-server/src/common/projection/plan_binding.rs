@@ -198,4 +198,53 @@ mod tests {
             assert!(bind_actual(Some(&mp4), None, format).is_err());
         }
     }
+
+    #[test]
+    fn an_explicit_native_profile_cannot_be_replaced_by_the_base_manifest_check() {
+        let output = serde_json::json!({"format":"hls","manifest_profile":"apple-vod"});
+        let proof = serde_json::json!({"native_manifest":{"profile":"apple-vod-manifest"}});
+        assert!(bind_manifest_policy(&output, &Value::Null, &proof, false).is_ok());
+        for changed in [
+            serde_json::json!({}),
+            serde_json::json!({"native_manifest":{"profile":"hls-base-manifest"}}),
+        ] {
+            assert!(bind_manifest_policy(&output, &Value::Null, &changed, false).is_err());
+        }
+    }
+
+    #[test]
+    fn required_external_evidence_stays_in_its_single_or_bundle_report_scope() {
+        let external = serde_json::json!({"passed":true,"checks":[{"passed":true}]});
+        let single = serde_json::json!({"format":"dash","external_manifest_check":true});
+        let bundle = serde_json::json!({"format":"dash","conformance":"required"});
+        let proof = serde_json::json!({"external_manifest":external});
+        let row = serde_json::json!({"conformance":external});
+        assert!(bind_manifest_policy(&single, &Value::Null, &proof, false).is_ok());
+        assert!(bind_manifest_policy(&single, &row, &Value::Null, false).is_err());
+        assert!(bind_manifest_policy(&bundle, &row, &Value::Null, true).is_ok());
+        assert!(bind_manifest_policy(&bundle, &Value::Null, &proof, true).is_err());
+        for changed in [
+            serde_json::json!({"passed":false,"checks":[{}]}),
+            serde_json::json!({"passed":true,"checks":[]}),
+        ] {
+            assert!(
+                bind_manifest_policy(
+                    &single,
+                    &Value::Null,
+                    &serde_json::json!({"external_manifest":changed}),
+                    false
+                )
+                .is_err()
+            );
+            assert!(
+                bind_manifest_policy(
+                    &bundle,
+                    &serde_json::json!({"conformance":changed}),
+                    &Value::Null,
+                    true
+                )
+                .is_err()
+            );
+        }
+    }
 }

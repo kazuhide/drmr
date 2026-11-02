@@ -97,6 +97,15 @@ pub struct DiagnosticReport {
     pub tools: Vec<ToolDiagnostic>,
 }
 
+/// Requested external manifest dependencies, separate from media compatibility.
+#[derive(Clone, Debug, Serialize)]
+pub struct ManifestDependencyReport {
+    pub ready: bool,
+    pub cancelled: bool,
+    pub dash_assets_available: Option<bool>,
+    pub tools: Vec<ToolDiagnostic>,
+}
+
 impl DiagnosticReport {
     /// A native-dialog summary. Paths are quoted to escape control characters.
     pub fn summary(&self) -> String {
@@ -199,6 +208,150 @@ impl DiagnosticSession {
         self
     }
 
+    /// Discover only the requested manifest engines; probes share this session's owner and bounds.
+    pub fn manifest_dependencies(&self, hls: bool, dash: bool) -> ManifestDependencyReport {
+        {
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            if state.running {
+                return ManifestDependencyReport {
+                    ready: false,
+                    cancelled: self.stop.is_set(),
+                    dash_assets_available: None,
+                    tools: Vec::new(),
+                };
+            }
+            state.running = true;
+        }
+        let directories: Vec<_> = std::env::var_os("PATH")
+            .as_deref()
+            .map(std::env::split_paths)
+            .into_iter()
+            .flatten()
+            .collect();
+        let selected = [
+            (
+                hls,
+                "mediastreamvalidator",
+                "external HLS manifest checks",
+                "not-declared",
+            ),
+            (dash, "php", "external DASH adapter and XML checks", "8.4.0"),
+            (dash, "java", "external DASH Schematron checks", "21.0.0"),
+        ];
+        let mut tools: Vec<_> = selected
+            .into_iter()
+            .filter(|row| row.0)
+            .map(|(_, name, purpose, minimum_version)| {
+                self.manifest_tool((name, purpose, minimum_version), &directories)
+            })
+            .collect();
+        let dash_assets_available = dash.then(dash_manifest_assets_available);
+        if self.probe
+            && dash_assets_available == Some(true)
+            && let Some(tool) = tools.iter_mut().find(|tool| tool.name == "java")
+            && tool.failure_code.is_none()
+            && tool.version_status == "supported"
+        {
+            self.probe_dash_startup(tool);
+        }
+        let ready = !self.stop.is_set()
+            && !self.cleanup.has_pending()
+            && dash_assets_available != Some(false)
+            && tools.iter().all(|tool| {
+                tool.available
+                    && (!self.probe
+                        || tool.failure_code.is_none()
+                            && matches!(tool.version_status, "supported" | "not-required")
+                            && tool.feature_status == "available")
+            });
+        let report = ManifestDependencyReport {
+            ready,
+            cancelled: self.stop.is_set(),
+            dash_assets_available,
+            tools,
+        };
+        self.state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .running = false;
+        report
+    }
+
+    fn manifest_tool(
+        &self,
+        (name, purpose, minimum_version): (&'static str, &'static str, &'static str),
+        directories: &[PathBuf],
+    ) -> ToolDiagnostic {
+        let executable = if cfg!(windows) {
+            format!("{name}.exe")
+        } else {
+            name.into()
+        };
+        let resolved = directories
+            .iter()
+            .map(|directory| directory.join(&executable))
+            .find(|path| is_executable(path))
+            .and_then(|path| path.canonicalize().ok());
+        let available = resolved.is_some();
+        let representable = resolved.as_ref().is_none_or(|path| path.to_str().is_some());
+        let mut tool = ToolDiagnostic {
+            name,
+            purpose,
+            available,
+            required: true,
+            path: resolved.filter(|_| representable),
+            path_status: if !representable {
+                "not-utf8"
+            } else if available {
+                "resolved"
+            } else {
+                "missing"
+            },
+            minimum_version,
+            version: None,
+            version_status: "not-checked",
+            feature_status: "not-checked",
+            features: Vec::new(),
+            failure_code: None,
+        };
+        if self.probe && available {
+            tool.failure_code = if !representable {
+                Some("probe-path-not-utf8")
+            } else if self.stop.is_set() {
+                Some("probe-cancelled")
+            } else if self.cleanup.has_pending() {
+                Some("probe-cleanup-unconfirmed")
+            } else {
+                probe_manifest_tool(&self.runner, &mut tool, &self.stop).err()
+            };
+        }
+        tool
+    }
+
+    fn probe_dash_startup(&self, tool: &mut ToolDiagnostic) {
+        let startup = (|| {
+            let root = std::env::var_os("DRMR_DASH_IF_ROOT").ok_or("probe-assets-unavailable")?;
+            let jar = PathBuf::from(root).join("schematron/saxon12he.jar");
+            let path = jar.to_str().ok_or("probe-path-not-utf8")?;
+            let help = output(&self.runner, tool, &["-jar", path, "-?"], true, &self.stop)?;
+            Ok::<_, &'static str>(
+                help.contains("Saxon") && (help.contains("Usage") || help.contains("Options")),
+            )
+        })();
+        match startup {
+            Ok(available) => tool.features.push(FeatureCheck {
+                name: "dash-if-schematron-startup",
+                available,
+            }),
+            Err(code) => tool.failure_code = Some(code),
+        }
+        tool.feature_status = if tool.features.iter().all(|feature| feature.available) {
+            "available"
+        } else {
+            "missing"
+        };
+    }
+
     /// Run once, or return the same completed report. Concurrent runs are refused.
     pub fn run(&self) -> std::io::Result<Arc<DiagnosticReport>> {
         let path = std::env::var_os("PATH");
@@ -297,6 +450,122 @@ impl DiagnosticSession {
         }
         self.cleanup.retry_finish()
     }
+}
+
+fn dash_manifest_assets_available() -> bool {
+    let Some(root) = std::env::var_os("DRMR_DASH_IF_ROOT").map(PathBuf::from) else {
+        return false;
+    };
+    dash_assets_available_at(&root)
+}
+
+fn dash_assets_available_at(root: &Path) -> bool {
+    [
+        "resources/xsd/DASH5th.xsd",
+        "resources/xsd/xlink.xsd",
+        "schematron/output/val_schema.xsl",
+        "schematron/saxon12he.jar",
+    ]
+    .iter()
+    .all(|relative| root.join(relative).is_file())
+        && root.join("schematron/lib").read_dir().is_ok_and(|entries| {
+            entries.take(128).flatten().any(|entry| {
+                entry
+                    .path()
+                    .extension()
+                    .is_some_and(|extension| extension == "jar")
+                    && entry.path().is_file()
+            })
+        })
+}
+
+fn probe_manifest_tool(
+    runner: &ToolRunner,
+    tool: &mut ToolDiagnostic,
+    stop: &crate::concurrency::Stop,
+) -> Result<(), &'static str> {
+    let arguments: &[&str] = match tool.name {
+        "mediastreamvalidator" => &["-h"],
+        "php" => &[
+            "-r",
+            "echo PHP_VERSION_ID, \"\\n\", extension_loaded('dom') && extension_loaded('libxml') && function_exists('proc_open') ? 'features-ok' : 'features-missing';",
+        ],
+        "java" => &["-version"],
+        _ => return Err("probe-tool-unsupported"),
+    };
+    let banner = output(
+        runner,
+        tool,
+        arguments,
+        tool.name == "mediastreamvalidator",
+        stop,
+    )?;
+    manifest_capabilities(tool, &banner)
+}
+
+fn manifest_capabilities(tool: &mut ToolDiagnostic, banner: &str) -> Result<(), &'static str> {
+    match tool.name {
+        "php" => {
+            let number = banner
+                .lines()
+                .next()
+                .and_then(|line| line.parse::<u64>().ok())
+                .filter(|number| *number <= 999_999)
+                .ok_or("probe-version-unrecognized")?;
+            tool.version = Some(format!(
+                "{}.{}.{}",
+                number / 10_000,
+                number / 100 % 100,
+                number % 100
+            ));
+            tool.version_status = if number >= 80_400 {
+                "supported"
+            } else {
+                "below-minimum"
+            };
+            tool.features.push(FeatureCheck {
+                name: "dom-libxml-process-launch",
+                available: banner.lines().nth(1) == Some("features-ok"),
+            });
+        }
+        "java" => {
+            let pattern = Regex::new(r#"(?m)^(?:openjdk|java) version "([0-9]+)(?:\.[0-9]+)*"#)
+                .expect("fixed Java version pattern");
+            let major = pattern
+                .captures(banner)
+                .and_then(|captures| captures[1].parse::<u64>().ok())
+                .ok_or("probe-version-unrecognized")?;
+            tool.version = Some(format!("{major}.0.0"));
+            tool.version_status = if major >= 21 {
+                "supported"
+            } else {
+                "below-minimum"
+            };
+            tool.features.push(FeatureCheck {
+                name: "schematron-runtime",
+                available: major >= 21,
+            });
+        }
+        "mediastreamvalidator" => {
+            tool.version_status = "not-required";
+            tool.features = ["-p", "-t", "-O"]
+                .into_iter()
+                .map(|name| FeatureCheck {
+                    name,
+                    available: banner.split_ascii_whitespace().any(|token| {
+                        token.trim_matches(|c: char| c == ',' || c == '[' || c == ']') == name
+                    }),
+                })
+                .collect();
+        }
+        _ => return Err("probe-tool-unsupported"),
+    }
+    tool.feature_status = if tool.features.iter().all(|feature| feature.available) {
+        "available"
+    } else {
+        "missing"
+    };
+    Ok(())
 }
 
 // Discovery uses exactly the launcher's PATH and never runs a shell or guesses folders.
@@ -602,6 +871,96 @@ fn is_executable(path: &Path) -> bool {
 mod tests {
     use super::*;
     use std::time::Instant;
+
+    fn manifest_tool(name: &'static str) -> ToolDiagnostic {
+        ToolDiagnostic {
+            name,
+            purpose: "test",
+            available: true,
+            required: true,
+            path: None,
+            path_status: "resolved",
+            minimum_version: "test",
+            version: None,
+            version_status: "not-checked",
+            feature_status: "not-checked",
+            features: Vec::new(),
+            failure_code: None,
+        }
+    }
+
+    #[test]
+    fn manifest_dependency_capabilities_require_actual_versions_and_features() {
+        for (banner, version, features) in [
+            ("80400\nfeatures-ok", "supported", "available"),
+            ("80399\nfeatures-ok", "below-minimum", "available"),
+            ("80507\nfeatures-missing", "supported", "missing"),
+        ] {
+            let mut tool = manifest_tool("php");
+            manifest_capabilities(&mut tool, banner).unwrap();
+            assert_eq!(tool.version_status, version);
+            assert_eq!(tool.feature_status, features);
+        }
+        for (banner, status) in [
+            ("openjdk version \"21.0.1\"", "supported"),
+            ("java version \"17.0.9\"", "below-minimum"),
+        ] {
+            let mut tool = manifest_tool("java");
+            manifest_capabilities(&mut tool, banner).unwrap();
+            assert_eq!(tool.version_status, status);
+        }
+        let mut apple = manifest_tool("mediastreamvalidator");
+        manifest_capabilities(
+            &mut apple,
+            "Usage: mediastreamvalidator [-p] [-t seconds] [-O output]",
+        )
+        .unwrap();
+        assert_eq!(apple.feature_status, "available");
+        let mut apple = manifest_tool("mediastreamvalidator");
+        manifest_capabilities(&mut apple, "-p -t").unwrap();
+        assert_eq!(apple.feature_status, "missing");
+        for name in ["php", "java"] {
+            assert!(
+                manifest_capabilities(&mut manifest_tool(name), "PRIVATE_UNRECOGNIZED").is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn manifest_asset_discovery_requires_schema_stylesheet_engine_and_bundled_library() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        for file in [
+            "resources/xsd/DASH5th.xsd",
+            "resources/xsd/xlink.xsd",
+            "schematron/output/val_schema.xsl",
+            "schematron/saxon12he.jar",
+        ] {
+            let path = root.join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "fixture").unwrap();
+        }
+        assert!(!dash_assets_available_at(root));
+        std::fs::create_dir(root.join("schematron/lib")).unwrap();
+        assert!(!dash_assets_available_at(root));
+        std::fs::write(root.join("schematron/lib/dependency.jar"), "fixture").unwrap();
+        assert!(dash_assets_available_at(root));
+        std::fs::remove_file(root.join("resources/xsd/DASH5th.xsd")).unwrap();
+        assert!(!dash_assets_available_at(root));
+    }
+
+    #[test]
+    fn manifest_discovery_does_not_borrow_an_active_session_or_start_optional_tools() {
+        let session = DiagnosticSession::new(Profile::ALL, true);
+        let empty = session.manifest_dependencies(false, false);
+        assert!(empty.ready);
+        assert!(empty.tools.is_empty());
+        session.state.lock().unwrap().running = true;
+        let busy = session.manifest_dependencies(true, true);
+        assert!(!busy.ready);
+        assert!(busy.tools.is_empty());
+        assert!(session.state.lock().unwrap().running);
+    }
 
     #[test]
     fn route_requirements_add_decoder_tools_only_at_explicit_decoded_depth() {

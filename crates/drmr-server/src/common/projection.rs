@@ -435,7 +435,7 @@ fn verification(v: &Value) -> Result<Value> {
         out["native_manifest"] = native(manifest)?;
     }
     if let Some(manifest) = v.get("external_manifest") {
-        if manifest.is_null() {
+        if manifest.is_null() || manifest["checks"].as_array().is_none_or(Vec::is_empty) {
             return Err(bad());
         }
         out["external_manifest"] = conformance(manifest)?;

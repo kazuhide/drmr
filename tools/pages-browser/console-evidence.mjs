@@ -19,6 +19,12 @@ export function assertVerification(report, { scope = 'comparison', depth = 'deco
     assert.deepEqual(report.decode_evidence, scope === 'source-admission'
       ? { status: 'source-decoded' } : { status: 'content-compared', equal: true });
   }
+  if (Object.hasOwn(report, 'external_manifest')) {
+    const external = report.external_manifest;
+    assert.equal(external?.passed, true);
+    assert.ok(Array.isArray(external.checks) && external.checks.length > 0);
+    assert.ok(external.checks.every(check => check.passed === true));
+  }
   if (report.native_manifest) {
     assert.equal(report.native_manifest.errors, 0);
     assert.ok(Number.isSafeInteger(report.native_manifest.warnings) && report.native_manifest.warnings >= 0);
@@ -37,7 +43,7 @@ export function decodeBadgeState(report) {
 
 export function planMinimumDepth(plan) {
   assert.equal(plan.kind, 'execution-plan');
-  assert.ok([1, 2, 3, 4, 5, 6, 7, 8, 9, 10].includes(plan.schema_version));
+  assert.ok([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].includes(plan.schema_version));
   if (plan.schema_version < 3) {
     assert.equal(Object.hasOwn(plan, 'required_depth'), false);
     return 'decoded';
@@ -63,6 +69,21 @@ export function planMinimumDepth(plan) {
       if (format === 'dash') assert.ok(['template', 'template-timeline', 'list', 'base'].includes(option.dash_addressing));
       else assert.equal(Object.hasOwn(option, 'dash_addressing'), false);
     }
+  }
+  if (plan.schema_version === 11) {
+    assert.ok(['base', 'apple-vod'].includes(plan.manifest_profile));
+    assert.equal(typeof plan.external_manifest_check, 'boolean');
+  } else {
+    assert.equal(Object.hasOwn(plan, 'manifest_profile'), false);
+    assert.equal(Object.hasOwn(plan, 'external_manifest_check'), false);
+  }
+  if (plan.schema_version === 12) {
+    assert.ok(plan.outputs.some(output => Object.hasOwn(output, 'manifest_profile')));
+    for (const output of plan.outputs) {
+      if (Object.hasOwn(output, 'manifest_profile')) assert.ok(['base', 'apple-vod'].includes(output.manifest_profile));
+    }
+  } else if (plan.outputs) {
+    assert.ok(plan.outputs.every(output => !Object.hasOwn(output, 'manifest_profile')));
   }
   return plan.required_depth;
 }
