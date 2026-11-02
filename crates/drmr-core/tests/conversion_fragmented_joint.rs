@@ -4,7 +4,7 @@ mod common;
 use drmr_core::{
     conversion::{
         ContentKey, ConversionRequest, Converter, HlsInputKeys, InputKeys, OutputKey,
-        SourceValidationPurpose, VerificationSource,
+        SourceValidationPurpose, VerificationRequest, VerificationSource,
     },
     events::Collector,
     inspection::{OutputFormat, TargetProtection},
@@ -255,4 +255,137 @@ fn fragmented_joint_reimport_requires_each_role_key_finite_windows_and_exact_tra
     );
     assert_eq!(fs::read(source).unwrap(), bytes);
     assert_eq!(fs::read(altered).unwrap(), changed);
+}
+
+#[test]
+fn fragmented_audio_video_presentations_return_to_one_mp4_without_decoders() {
+    let owner = common::private_tempdir().unwrap();
+    let progressive = owner.path().join("progressive.mp4");
+    joint(&progressive, false);
+    let source = owner.path().join("source.mp4");
+    let (command, events) = command();
+    convert(
+        &command,
+        &progressive,
+        &source,
+        &InputKeys::default(),
+        TargetProtection::Clear,
+    )
+    .unwrap();
+    let empty = InputKeys::default();
+    let hls = HlsInputKeys::default();
+    let output_key = OutputKey::from_hex(VIDEO_KID, KEY).unwrap();
+    let input_keys = role_keys();
+    for (ordinal, (format, protection)) in [
+        (OutputFormat::Dash, TargetProtection::Clear),
+        (OutputFormat::Hls, TargetProtection::Clear),
+        (OutputFormat::Dash, TargetProtection::Cenc),
+        (OutputFormat::Hls, TargetProtection::Cenc),
+        (OutputFormat::Dash, TargetProtection::Cbcs),
+        (OutputFormat::Hls, TargetProtection::Cbcs),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let presentation = owner.path().join(format!("presentation-{ordinal}"));
+        command
+            .convert(ConversionRequest {
+                input: &source,
+                output: &presentation,
+                format,
+                target: protection,
+                input_keys: &empty,
+                hls_input_keys: &hls,
+                output_key: (protection != TargetProtection::Clear).then_some(&output_key),
+                hls_key_uri: (format == OutputFormat::Hls && protection != TargetProtection::Clear)
+                    .then_some("https://operator.invalid/joint-key"),
+                hls_output_key: None,
+            })
+            .unwrap();
+        let entry = presentation.join(if format == OutputFormat::Dash {
+            "manifest.mpd"
+        } else {
+            "master.m3u8"
+        });
+        let keys = if protection == TargetProtection::Clear {
+            &empty
+        } else {
+            &input_keys
+        };
+        let qualification = command
+            .validate_source(
+                VerificationSource {
+                    input: &entry,
+                    input_keys: keys,
+                    hls_keys: &hls,
+                },
+                SourceValidationPurpose::Conversion,
+            )
+            .unwrap();
+        assert!(
+            qualification.eligible_formats.contains(&OutputFormat::Mp4),
+            "{format:?}/{protection:?}"
+        );
+        for (index, target) in [
+            TargetProtection::Clear,
+            TargetProtection::Cenc,
+            TargetProtection::Cbcs,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let output = owner.path().join(format!("result-{ordinal}-{index}.mp4"));
+            let report = convert(&command, &entry, &output, keys, target)
+                .unwrap_or_else(|error| panic!("{format:?}/{protection:?}->{target:?}: {error:?}"));
+            assert!(report.verification.passed);
+            assert_eq!(report.output.tracks.len(), 2);
+            let result_keys = if target == TargetProtection::Clear {
+                &empty
+            } else {
+                &input_keys
+            };
+            assert!(
+                command
+                    .verify(VerificationRequest {
+                        source: VerificationSource {
+                            input: &entry,
+                            input_keys: keys,
+                            hls_keys: &hls
+                        },
+                        output: VerificationSource {
+                            input: &output,
+                            input_keys: result_keys,
+                            hls_keys: &hls
+                        },
+                    })
+                    .unwrap()
+                    .passed
+            );
+            assert!(
+                command
+                    .verify(VerificationRequest {
+                        source: VerificationSource {
+                            input: &source,
+                            input_keys: &empty,
+                            hls_keys: &hls
+                        },
+                        output: VerificationSource {
+                            input: &output,
+                            input_keys: result_keys,
+                            hls_keys: &hls
+                        },
+                    })
+                    .unwrap()
+                    .passed
+            );
+        }
+    }
+    assert!(!events.records().iter().any(|record| {
+        serde_json::to_string(record)
+            .unwrap()
+            .contains("absent-ffmpeg")
+            || serde_json::to_string(record)
+                .unwrap()
+                .contains("absent-ffprobe")
+    }));
 }

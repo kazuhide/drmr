@@ -1672,10 +1672,13 @@ impl Converter {
         }
         result =
             self.match_presentations(&source, result, source_keys, result_keys, output_format)?;
+        let manifest_mp4 = ts_mp4::manifest_comparison(output_format, &source, &result);
         for (a, b) in source.iter().zip(&result) {
-            if ts_mp4::transport_comparison(output_format, a, b) {
+            if ts_mp4::transport_comparison(output_format, a, b)
+                || (manifest_mp4 && a.metadata.audio.is_some())
+            {
                 ts_mp4::metadata_pair(a, b, &self.backend, result_keys)?;
-            } else {
+            } else if !manifest_mp4 {
                 metadata::pair(&a.metadata, &b.metadata)?;
             }
         }
@@ -2407,6 +2410,7 @@ fn validate_prepared_output(
     }
     if request.format == OutputFormat::Mp4
         && !transport
+        && !ts_mp4::canonical_tracks(prepared, inspection::InputFormat::Dash)
         && prepared
             .iter()
             .any(|p| p.metadata.audio.is_some() || p.metadata.audio_group.is_some())

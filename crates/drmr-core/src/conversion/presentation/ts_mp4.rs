@@ -1,4 +1,4 @@
-//! Standalone MP4 from qualified transport streams retains the complete selected tracks.
+//! Standalone MP4 preserves complete tracks and only invertible manifest selection metadata.
 use super::{
     ConversionError, ConversionReport, ConversionRequest, Converter, InputKeys, Inspection,
     Prepared, TrackKind, VerificationSource, copy_private, inspection, prepare_presentation,
@@ -153,8 +153,11 @@ pub(super) fn supported_tracks(prepared: &[Prepared]) -> bool {
 }
 
 pub(super) fn canonical_tracks(prepared: &[Prepared], format: inspection::InputFormat) -> bool {
+    let joint_manifest = joint_manifest_tracks(prepared, format);
     !prepared.is_empty()
-        && (prepared.len() == 1 || (format == inspection::InputFormat::Mp4 && prepared.len() == 2))
+        && (prepared.len() == 1
+            || (format == inspection::InputFormat::Mp4 && prepared.len() == 2)
+            || joint_manifest)
         && prepared.iter().all(|track| {
             track.transport_index.is_none()
                 && track.index == 0
@@ -167,7 +170,11 @@ pub(super) fn canonical_tracks(prepared: &[Prepared], format: inspection::InputF
             .iter()
             .filter(|track| track.audio_presentation.is_some())
             .count()
-            == 1
+            <= 1
+        && (joint_manifest
+            || prepared
+                .iter()
+                .any(|track| track.audio_presentation.is_some()))
         && [TrackKind::Video, TrackKind::Audio]
             .into_iter()
             .all(|kind| {
@@ -178,6 +185,80 @@ pub(super) fn canonical_tracks(prepared: &[Prepared], format: inspection::InputF
                     <= 1
             })
         && supported_metadata(prepared)
+}
+
+fn joint_manifest_tracks(prepared: &[Prepared], format: inspection::InputFormat) -> bool {
+    if !matches!(
+        format,
+        inspection::InputFormat::Dash | inspection::InputFormat::Hls
+    ) || prepared.len() != 2
+        || [TrackKind::Video, TrackKind::Audio]
+            .into_iter()
+            .any(|kind| {
+                prepared
+                    .iter()
+                    .filter(|track| track.report.tracks[0].kind == kind)
+                    .count()
+                    != 1
+            })
+    {
+        return false;
+    }
+    let audio = prepared
+        .iter()
+        .find(|track| track.report.tracks[0].kind == TrackKind::Audio)
+        .expect("one audio");
+    let ordinal = prepared
+        .iter()
+        .filter(|track| track.report.tracks[0].kind == TrackKind::Video)
+        .count();
+    let expected = audio.metadata.audio.as_ref().map(|value| {
+        super::metadata::container_rendition(
+            ordinal,
+            value.language.clone(),
+            value.channels.clone(),
+        )
+    });
+    prepared.iter().all(|track| {
+        track
+            .metadata
+            .audio
+            .as_ref()
+            .is_none_or(|value| Some(value) == expected.as_ref())
+            && track
+                .metadata
+                .audio_group
+                .as_ref()
+                .is_none_or(|group| expected.as_ref().is_some_and(|audio| &audio.group == group))
+    })
+}
+
+pub(super) fn manifest_comparison(
+    output: inspection::OutputFormat,
+    source: &[Prepared],
+    result: &[Prepared],
+) -> bool {
+    let format = if source
+        .iter()
+        .all(|track| track.metadata.origin == super::metadata::Origin::Dash)
+    {
+        inspection::InputFormat::Dash
+    } else if source
+        .iter()
+        .all(|track| track.metadata.origin == super::metadata::Origin::Hls)
+    {
+        inspection::InputFormat::Hls
+    } else {
+        return false;
+    };
+    output == inspection::OutputFormat::Mp4
+        && joint_manifest_tracks(source, format)
+        && canonical_tracks(source, format)
+        && result.iter().all(|track| {
+            track.transport_index.is_none()
+                && !track.dash_reference
+                && track.playlist_reference.is_none()
+        })
 }
 
 impl Converter {

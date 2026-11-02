@@ -185,6 +185,9 @@ impl Converter {
             }
             return Ok(prepared.len() == 1);
         }
+        if super::ts_mp4::canonical_tracks(prepared, original.format) {
+            return Ok(true);
+        }
         Ok(actual != OutputFormat::HlsTs
             && prepared.len() == 1
             && prepared[0].metadata.audio.is_none()

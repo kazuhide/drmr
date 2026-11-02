@@ -558,17 +558,30 @@ pub(super) fn materialize(
         if track.report.tracks[0].kind == super::TrackKind::Audio && track.metadata.audio.is_none()
         {
             let profile = materialization_profile(track, backend, keys)?;
-            track.metadata.audio = Some(Rendition {
-                group: "default-audio-group".into(),
-                name: Some(format!("stream_{index}")),
-                language: normalized_language(profile["language"].as_str().unwrap_or("und"))?,
-                is_default: Some(false),
-                autoselect: Some(true),
-                channels: profile["channels"].as_u64().map(|n| n.to_string()),
-            });
+            track.metadata.audio = Some(container_rendition(
+                index,
+                normalized_language(profile["language"].as_str().unwrap_or("und"))?,
+                profile["channels"].as_u64().map(|n| n.to_string()),
+            ));
         }
     }
     Ok(())
+}
+
+/// The reversible selection declaration generated from one container audio track.
+pub(super) fn container_rendition(
+    index: usize,
+    language: String,
+    channels: Option<String>,
+) -> Rendition {
+    Rendition {
+        group: "default-audio-group".into(),
+        name: Some(format!("stream_{index}")),
+        language,
+        is_default: Some(false),
+        autoselect: Some(true),
+        channels,
+    }
 }
 
 fn materialization_profile(
