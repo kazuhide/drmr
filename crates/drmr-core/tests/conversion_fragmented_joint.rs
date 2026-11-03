@@ -565,6 +565,167 @@ fn vp9_presentations_return_to_clear_and_cenc_mp4_without_decoders() {
     );
 }
 
+fn assert_audio_first_declaration(entry: &Path, format: OutputFormat) {
+    let manifest = fs::read_to_string(entry).unwrap();
+    let expected = if format == OutputFormat::Dash {
+        "<Label>stream_0</Label>"
+    } else {
+        "NAME=\"stream_0\""
+    };
+    assert!(manifest.contains(expected), "{format:?}: {expected}");
+}
+
+fn audio_first_manifest(
+    command: &Converter,
+    source: &Path,
+    output: &Path,
+    format: OutputFormat,
+    protection: TargetProtection,
+) -> PathBuf {
+    let key = OutputKey::from_hex(VIDEO_KID, KEY).unwrap();
+    command
+        .convert(ConversionRequest {
+            input: source,
+            output,
+            format,
+            target: protection,
+            input_keys: &InputKeys::default(),
+            hls_input_keys: &HlsInputKeys::default(),
+            output_key: (protection != TargetProtection::Clear).then_some(&key),
+            hls_key_uri: (format == OutputFormat::Hls && protection != TargetProtection::Clear)
+                .then_some("https://operator.invalid/joint-key"),
+            hls_output_key: None,
+        })
+        .unwrap();
+    let entry = output.join(if format == OutputFormat::Dash {
+        "manifest.mpd"
+    } else {
+        "master.m3u8"
+    });
+    assert_audio_first_declaration(&entry, format);
+    entry
+}
+
+fn assert_audio_first_manifest_return(
+    command: &Converter,
+    source: VerificationSource<'_>,
+    output: &Path,
+    returned: &Path,
+    format: OutputFormat,
+    mp4_protection: TargetProtection,
+    manifest_protection: TargetProtection,
+) {
+    let converted = convert(
+        command,
+        source.input,
+        output,
+        source.input_keys,
+        mp4_protection,
+    )
+    .unwrap();
+    assert!(converted.verification.passed);
+    let keys = if mp4_protection == TargetProtection::Clear {
+        InputKeys::default()
+    } else {
+        role_keys()
+    };
+    let key = OutputKey::from_hex(VIDEO_KID, KEY).unwrap();
+    let hls = HlsInputKeys::default();
+    command
+        .convert(ConversionRequest {
+            input: output,
+            output: returned,
+            format,
+            target: manifest_protection,
+            input_keys: &keys,
+            hls_input_keys: &hls,
+            output_key: (manifest_protection != TargetProtection::Clear).then_some(&key),
+            hls_key_uri: (format == OutputFormat::Hls
+                && manifest_protection != TargetProtection::Clear)
+                .then_some("https://operator.invalid/joint-key"),
+            hls_output_key: None,
+        })
+        .unwrap();
+    let entry = returned.join(if format == OutputFormat::Dash {
+        "manifest.mpd"
+    } else {
+        "master.m3u8"
+    });
+    let returned_keys = if manifest_protection == TargetProtection::Clear {
+        InputKeys::default()
+    } else {
+        role_keys()
+    };
+    let verified = command.verify(VerificationRequest {
+        source,
+        output: VerificationSource { input: &entry, input_keys: &returned_keys, hls_keys: &hls },
+    }).unwrap_or_else(|error| panic!("original manifest {format:?}/{manifest_protection:?} via MP4/{mp4_protection:?}: {error:?}"));
+    assert!(verified.passed);
+    assert_audio_first_declaration(&entry, format);
+    assert_eq!(
+        converted.output.tracks[0].kind,
+        drmr_core::inspection::TrackKind::Audio
+    );
+}
+
+#[test]
+fn audio_first_canonical_manifests_preserve_selection_through_mp4_and_back() {
+    let owner = common::private_tempdir().unwrap();
+    let source = owner.path().join("audio-first.mp4");
+    roundtrip_fixture(&source, "hevc-main10.mp4", Some(44100), true);
+    assert_eq!(
+        drmr_core::inspection::inspect(&source).unwrap().tracks[0].kind,
+        drmr_core::inspection::TrackKind::Audio
+    );
+    let (command, _) = command();
+    let command = command.with_max_workers(Some(1)).unwrap();
+    let protections = [
+        TargetProtection::Clear,
+        TargetProtection::Cenc,
+        TargetProtection::Cbcs,
+    ];
+    let hls = HlsInputKeys::default();
+    for format in [OutputFormat::Dash, OutputFormat::Hls] {
+        for protection in protections {
+            let entry = audio_first_manifest(
+                &command,
+                &source,
+                &owner
+                    .path()
+                    .join(format!("source-{format:?}-{protection:?}")),
+                format,
+                protection,
+            );
+            let keys = if protection == TargetProtection::Clear {
+                InputKeys::default()
+            } else {
+                role_keys()
+            };
+            let original = VerificationSource {
+                input: &entry,
+                input_keys: &keys,
+                hls_keys: &hls,
+            };
+            assert_mp4_admitted(&command, original, "audio-first canonical manifest");
+            for target in protections {
+                assert_audio_first_manifest_return(
+                    &command,
+                    original,
+                    &owner
+                        .path()
+                        .join(format!("result-{format:?}-{protection:?}-{target:?}.mp4")),
+                    &owner
+                        .path()
+                        .join(format!("returned-{format:?}-{protection:?}-{target:?}")),
+                    format,
+                    target,
+                    protection,
+                );
+            }
+        }
+    }
+}
+
 fn assert_audio_only_selection_refused(command: &Converter, entry: &Path, original: &str) {
     let empty = InputKeys::default();
     let hls = HlsInputKeys::default();

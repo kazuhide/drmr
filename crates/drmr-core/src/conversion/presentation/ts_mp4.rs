@@ -194,6 +194,38 @@ pub(super) fn canonical_tracks(prepared: &[Prepared], format: inspection::InputF
         && supported_metadata(prepared)
 }
 
+fn container_audio_ordinal(audio: &super::metadata::Rendition, tracks: usize) -> Option<usize> {
+    (0..tracks).find(|&ordinal| {
+        *audio
+            == super::metadata::container_rendition(
+                ordinal,
+                audio.language.clone(),
+                audio.channels.clone(),
+            )
+    })
+}
+
+fn sort_container_tracks(prepared: &mut [Prepared], format: inspection::InputFormat) {
+    let audio_first = matches!(
+        format,
+        inspection::InputFormat::Dash | inspection::InputFormat::Hls
+    ) && canonical_tracks(prepared, format)
+        && prepared
+            .iter()
+            .find(|track| track.report.tracks[0].kind == TrackKind::Audio)
+            .and_then(|track| track.metadata.audio.as_ref())
+            .and_then(|audio| container_audio_ordinal(audio, prepared.len()))
+            == Some(0);
+    prepared.sort_by_key(|track| {
+        let kind = track.report.tracks[0].kind;
+        if audio_first {
+            u8::from(kind != TrackKind::Audio)
+        } else {
+            super::kind_order(kind)
+        }
+    });
+}
+
 fn joint_manifest_tracks(prepared: &[Prepared], format: inspection::InputFormat) -> bool {
     if !matches!(
         format,
@@ -216,16 +248,7 @@ fn joint_manifest_tracks(prepared: &[Prepared], format: inspection::InputFormat)
         .find(|track| track.report.tracks[0].kind == TrackKind::Audio)
         .expect("one audio");
     let expected = audio.metadata.audio.as_ref();
-    if expected.is_some_and(|value| {
-        !(0..prepared.len()).any(|ordinal| {
-            *value
-                == super::metadata::container_rendition(
-                    ordinal,
-                    value.language.clone(),
-                    value.channels.clone(),
-                )
-        })
-    }) {
+    if expected.is_some_and(|value| container_audio_ordinal(value, prepared.len()).is_none()) {
         return false;
     }
     prepared.iter().all(|track| {
@@ -403,7 +426,7 @@ impl Converter {
             }
         }
         let destination = super::destination(request.output)?;
-        prepared.sort_by_key(|p| super::kind_order(p.report.tracks[0].kind));
+        sort_container_tracks(&mut prepared, input.format);
         let work = workspace()?;
         let parts = self.transport_mp4_parts(&prepared, request, work.path())?;
         let candidate = work.path().join("result.mp4");
