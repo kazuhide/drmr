@@ -31,6 +31,8 @@ Completed changes are recorded by category before the next release.
 
 - Apply the same output defaults during direct conversion and independent
   configured verification, including the default DASH SegmentTemplate addressing.
+- Keep validated media dimensions available for resource reservations, so small
+  inputs avoid the fallback 4K estimate when replaying older decoded plans.
 - Use the current `hls-fmp4`, `output_format` and `encryption` names consistently
   in the output tables and English/Japanese guides.
 
