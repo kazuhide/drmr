@@ -600,7 +600,16 @@ test('every matrix recipe belongs to one complete navigation batch including the
   assert.deepEqual(matrixRecipeBatches.map(batch => batch.recipes.length), [15, 15, 15, 15, 5]);
   assert.deepEqual(matrixRecipeBatches.flatMap(batch => batch.recipes), matrixRecipes);
   assert.equal(new Set(matrixRecipeBatches.flatMap(batch => batch.recipes.map(recipe => recipe.id))).size, 65);
-  assert.deepEqual(landingFocusTargetCounts, { en: 102, ja: 101 });
+  assert.deepEqual(landingFocusTargetCounts, { en: 103, ja: 102 });
+});
+
+test('landing keyboard inventory includes every source link and focusable region', () => {
+  for (const [language, file] of [['en', 'index.html'], ['ja', 'ja/index.html']]) {
+    const html = readFileSync(new URL('../../site/' + file, import.meta.url), 'utf8');
+    const links = [...html.matchAll(/<a\b[^>]*\bhref\s*=/g)].length;
+    const regions = [...html.matchAll(/<[^>]+\btabindex="0"[^>]*>/g)].length;
+    assert.equal(landingFocusTargetCounts[language], links + regions, language);
+  }
 });
 
 test('guide code inventory counts literal Markdown examples and every independently expected recipe figure', () => {

@@ -110,6 +110,7 @@ fn transport_view(
                     Vec::new()
                 },
                 source_dictionary: false,
+                complete_track: None,
                 source: source.to_path_buf(),
                 media: source.to_path_buf(),
                 index,
@@ -143,26 +144,29 @@ impl Converter {
         use super::super::{audio, progressive};
         use crate::inspection::OutputFormat;
         if declared_audio {
-            return Ok(super::ts_mp4::canonical_tracks(prepared, original.format));
+            return Ok(super::ts_mp4::canonical_tracks(prepared, original.format)
+                && self.standalone_metadata_supported(prepared, input.input_keys)?);
         }
         if original.format == InputFormat::Mp4 {
             let first = &prepared[0];
-            let report = inspection::inspect(&first.media)
-                .map_err(|_| ConversionError("invalid-input-media"))?;
-            if super::super::finite::has_audio(&first.media)?
-                && !audio::movie(&first.media)?.fragmented
-            {
+            let complete = super::ts_mp4::complete_tracks(prepared);
+            let media = complete
+                .as_ref()
+                .map_or(first.media.as_path(), |tracks| tracks[0].source.as_path());
+            let report =
+                inspection::inspect(media).map_err(|_| ConversionError("invalid-input-media"))?;
+            if super::super::finite::has_audio(media)? && !audio::movie(media)?.fragmented {
                 let finite = match purpose {
                     SourceValidationPurpose::Conversion => {
-                        progressive::validate_input(&first.media, &report, input.input_keys)?
+                        progressive::validate_input(media, &report, input.input_keys)?
                     }
                     SourceValidationPurpose::Verification => {
-                        progressive::verification_input(&first.media, &report, input.input_keys)?
+                        progressive::verification_input(media, &report, input.input_keys)?
                     }
                 };
                 if finite {
                     self.progressive_codecs(
-                        &first.media,
+                        media,
                         &report,
                         (report.protection != Protection::Clear)
                             .then_some(super::super::keys::ProbeKeys::All(input.input_keys)),
@@ -170,13 +174,9 @@ impl Converter {
                 }
                 return Ok(finite);
             }
-            if super::super::finite::fragmented_joint_profile(
-                &first.media,
-                &report,
-                &self.backend.stop,
-            )? {
+            if super::super::finite::fragmented_joint_profile(media, &report, &self.backend.stop)? {
                 self.progressive_codecs(
-                    &first.media,
+                    media,
                     &report,
                     (report.protection != Protection::Clear)
                         .then_some(super::super::keys::ProbeKeys::All(input.input_keys)),
@@ -184,6 +184,9 @@ impl Converter {
                 return Ok(true);
             }
             return Ok(prepared.len() == 1);
+        }
+        if super::ts_mp4::canonical_tracks(prepared, original.format) {
+            return self.standalone_metadata_supported(prepared, input.input_keys);
         }
         Ok(actual != OutputFormat::HlsTs
             && prepared.len() == 1
@@ -197,6 +200,7 @@ impl Converter {
         b: &Prepared,
         source_keys: &InputKeys,
         result_keys: &InputKeys,
+        languages: (Option<&str>, Option<&str>),
     ) -> Result<VerificationReport, ConversionError> {
         let mut report = if a.transport_index.is_some() || b.transport_index.is_some() {
             self.backend.native_verify_transport_with_clock(
@@ -230,10 +234,12 @@ impl Converter {
                 StreamView::new(&a.source, a.index, key_for(a, source_keys))
                     .with_metadata(&a.media)
                     .with_clock(a.clock)
+                    .with_manifest_language(languages.0)
                     .with_all_keys(source_keys),
                 StreamView::new(&b.source, b.index, key_for(b, result_keys))
                     .with_metadata(&b.media)
                     .with_clock(b.clock)
+                    .with_manifest_language(languages.1)
                     .with_all_keys(result_keys),
             )?
         };

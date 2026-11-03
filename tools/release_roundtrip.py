@@ -285,8 +285,6 @@ def fixture_profiles(executor, seeds, root):
 
 
 def execute_case(case, executor, profiles, root):
-    if case["kind"] == "layout-condition":
-        return {**case, "status": "not-qualified"}
     source_profile, target_profile = tuple(case["source"]), tuple(case["target"])
     if (case["layout"], source_profile) not in profiles:
         return {**case, "status": "not-checked", "failure_code": "source-fixture-unavailable"}
@@ -301,15 +299,14 @@ def execute_case(case, executor, profiles, root):
         operation = "forward"
         forward_path, forward = executor.convert(source, target_profile, case["layout"], workspace.path / "f")
         result = {**case, "status": "complete", "forward": forward, "source_unchanged": True}
-        if case["kind"] == "roundtrip":
-            operation = "backward"
-            final_path, backward = executor.convert(forward_path, source_profile, case["layout"], workspace.path / "b")
-            operation = "final"
-            final_root = workspace.path / "v"
-            final_root.mkdir(mode=0o700)
-            key_file = executor.key_file(final_root, source_profile)
-            result.update(backward=backward, final_against_original=executor.verify(
-                executor.runner(final_root), source, final_path, key_file, source_profile, "final-against-original"))
+        operation = "backward"
+        final_path, backward = executor.convert(forward_path, source_profile, case["layout"], workspace.path / "b")
+        operation = "final"
+        final_root = workspace.path / "v"
+        final_root.mkdir(mode=0o700)
+        key_file = executor.key_file(final_root, source_profile)
+        result.update(backward=backward, final_against_original=executor.verify(
+            executor.runner(final_root), source, final_path, key_file, source_profile, "final-against-original"))
         operation = "source-check"
         require(graph(source) == before, "roundtrip-source-changed")
         return result

@@ -631,7 +631,7 @@ pub fn verify_direct(args: &VerifyArgs) -> ExitCode {
         args.decode,
         args.keys_file.as_ref(),
     ) {
-        Ok(session) => session,
+        Ok(session) => session.with_new_intent(ProcessingMode::Auto, None),
         Err(code) => return code,
     };
     let mut outputs = config.outputs;

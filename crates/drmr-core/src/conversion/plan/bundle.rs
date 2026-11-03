@@ -766,6 +766,7 @@ impl Converter {
         entrypoint: &Path,
         intent: &BundleOutputIntent,
         keys: &OperatorKeys,
+        shared: Option<&crate::conversion::presentation::BundlePrepared<'_>>,
     ) -> Result<(bool, VerificationReport), ConversionError> {
         let media_keys = keys.output_verification_keys()?;
         let hls_keys = keys.output_hls_verification_keys()?;
@@ -774,6 +775,15 @@ impl Converter {
             input_keys: &media_keys,
             hls_keys: &hls_keys,
         };
+        if self.backend.validation_depth == ValidationDepth::Native
+            && let Some(shared) = shared.filter(|shared| shared.native_verification_available())
+        {
+            return self.verify_prepared_bundle_output(
+                VerificationRequest { source, output },
+                (intent.format, intent.target),
+                shared,
+            );
+        }
         let qualified = self.validate_source_preparing(
             output,
             SourceValidationPurpose::Verification,

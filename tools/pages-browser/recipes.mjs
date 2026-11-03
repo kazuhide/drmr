@@ -10,7 +10,7 @@ export const matrixRecipes = matrixRows.flatMap(row => row.output.flatMap((label
     id: `recipe-${row.id}-${formats[column]}-${targets[label]}` }))));
 
 // Non-matrix targets are the independently inventoried navigation and code links.
-export const landingFocusTargetCounts = { en: 37 + matrixRecipes.length, ja: 36 + matrixRecipes.length };
+export const landingFocusTargetCounts = { en: 38 + matrixRecipes.length, ja: 37 + matrixRecipes.length };
 export const matrixRecipeBatches = Array.from({ length: Math.ceil(matrixRecipes.length / 15) }, (_, index) => {
   const offset = index * 15, end = Math.min(offset + 15, matrixRecipes.length);
   return { offset, end, recipes: matrixRecipes.slice(offset, end) };

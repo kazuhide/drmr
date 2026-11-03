@@ -166,8 +166,8 @@ fn sample_aes_candidate(input: &Inspection) -> bool {
             })
 }
 
-fn transport_mp4_candidate(input: &Inspection, target: TargetProtection) -> bool {
-    input.format == InputFormat::Hls
+fn manifest_mp4_candidate(input: &Inspection, target: TargetProtection) -> bool {
+    matches!(input.format, InputFormat::Hls | InputFormat::Dash)
         && input.evidence == super::Evidence::Manifest
         && matches!(
             target,
@@ -189,8 +189,12 @@ fn transport_mp4_candidate(input: &Inspection, target: TargetProtection) -> bool
 }
 
 fn fragmented_mp4_condition(input: &Inspection, target: TargetProtection) -> Option<&'static str> {
-    if transport_mp4_candidate(input, target) {
-        Some("local-transport-stream-single-video-audio-profile-and-presentation-windows-must-pass")
+    if manifest_mp4_candidate(input, target) {
+        Some(if input.format == InputFormat::Hls {
+            "local-transport-stream-single-video-audio-profile-and-presentation-windows-must-pass"
+        } else {
+            "local-fragmented-single-video-audio-profile-and-presentation-windows-must-pass"
+        })
     } else if input.tracks.len() == 1 || progressive_candidate(input, target) {
         Some("fragmented-output-profile-and-presentation-windows-must-pass")
     } else {
@@ -270,7 +274,7 @@ pub fn plan(
     if formats == [OutputFormat::Mp4]
         && input.tracks.len() != 1
         && !progressive_candidate
-        && !transport_mp4_candidate(&input, target)
+        && !manifest_mp4_candidate(&input, target)
     {
         execution_available = false;
         findings.push(Finding::new("mp4-output-requires-one-track"));

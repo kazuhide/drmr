@@ -54,6 +54,27 @@ fn text(value: &str) -> Result<String, ConversionError> {
     }
     Ok(value.into())
 }
+pub(super) fn mp4_language(value: &str) -> Result<String, ConversionError> {
+    let value = value.to_ascii_lowercase();
+    Ok(match value.as_str() {
+        "en" => "eng",
+        "ja" => "jpn",
+        "fr" => "fra",
+        "de" => "deu",
+        "es" => "spa",
+        "it" => "ita",
+        "pt" => "por",
+        "zh" => "zho",
+        "ko" => "kor",
+        "ru" => "rus",
+        "ar" => "ara",
+        "nl" => "nld",
+        value if value.len() == 3 && value.bytes().all(|b| b.is_ascii_lowercase()) => value,
+        _ => return Err(ConversionError("mp4-audio-language-not-supported")),
+    }
+    .to_owned())
+}
+
 fn normalized_language(value: &str) -> Result<String, ConversionError> {
     let value = text(value)?;
     Ok(if value.eq_ignore_ascii_case("und") {
@@ -477,7 +498,11 @@ pub(super) fn dash(rep: roxmltree::Node<'_, '_>) -> Result<Metadata, ConversionE
 pub(in crate::conversion) fn pair(a: &Metadata, b: &Metadata) -> Result<(), ConversionError> {
     if let Some(source) = &a.audio {
         let target = b.audio.as_ref().ok_or(BAD)?;
-        if source.language != target.language
+        if !(source.language == target.language
+            || matches!(
+                (mp4_language(&source.language), mp4_language(&target.language)),
+                (Ok(first), Ok(second)) if first == second
+            ))
             || source
                 .name
                 .as_ref()
@@ -558,17 +583,30 @@ pub(super) fn materialize(
         if track.report.tracks[0].kind == super::TrackKind::Audio && track.metadata.audio.is_none()
         {
             let profile = materialization_profile(track, backend, keys)?;
-            track.metadata.audio = Some(Rendition {
-                group: "default-audio-group".into(),
-                name: Some(format!("stream_{index}")),
-                language: normalized_language(profile["language"].as_str().unwrap_or("und"))?,
-                is_default: Some(false),
-                autoselect: Some(true),
-                channels: profile["channels"].as_u64().map(|n| n.to_string()),
-            });
+            track.metadata.audio = Some(container_rendition(
+                index,
+                normalized_language(profile["language"].as_str().unwrap_or("und"))?,
+                profile["channels"].as_u64().map(|n| n.to_string()),
+            ));
         }
     }
     Ok(())
+}
+
+/// The reversible selection declaration generated from one container audio track.
+pub(super) fn container_rendition(
+    index: usize,
+    language: String,
+    channels: Option<String>,
+) -> Rendition {
+    Rendition {
+        group: "default-audio-group".into(),
+        name: Some(format!("stream_{index}")),
+        language,
+        is_default: Some(false),
+        autoselect: Some(true),
+        channels,
+    }
 }
 
 fn materialization_profile(

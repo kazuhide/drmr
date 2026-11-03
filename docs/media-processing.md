@@ -109,6 +109,15 @@ Optional `--decode` still adds complete decoding and may prepare whole-track tem
 
 Rust independently reads the complete original and final tracks. Conversion requires matching stream metadata, every selected encoded sample, presentation/decode time and duration, and supported playback windows. `--decode` additionally requires complete decoded video/audio equality. Metadata checks include codec configuration, sample rate, channel count/layout, video dimensions and pixel format, aspect ratio, color characteristics, display rotation, and language. Encryption initialization data is expected to change and is checked separately.
 
+Development for 1.3 can reuse the byte-bound checked source data within one
+native clear-TS multi-output `stitch` conversion. Each final output is freshly
+prepared once for both qualification and complete original-source comparison;
+source and output changes remain checked. This retains the checks above while
+avoiding duplicate parsing. Separate `verify` still reads the source and result
+afresh, and additional decoding keeps its existing route. See the
+[scope and lifetime](multiple-outputs.md#reusing-original-source-checks).
+This addition is absent from the 1.2.0 archives.
+
 Silent audio has the same sample bytes at different sample rates, so decoded-byte identity alone cannot verify its presentation. Native checks read stream metadata from the actual initialization data and compare complete source and output sample evidence. Original playlist declarations remain independent timing references.
 
 Presentation times determine when content is displayed; decode times determine when a decoder must process it. Comparing absolute times across all tracks also detects changes to relative audio/video timing. Manifest timeline declarations are checked separately from media bytes. DASH compares times exactly in their declared clock units. HLS segment durations allow the greater of one media-clock tick or about one millisecond for decimal playlist rounding; this does not relax the exact packet timing comparison.
@@ -199,6 +208,20 @@ The [finite-output regression](https://github.com/kazuhide/drmr/blob/main/crates
 A complete joint fragmented MP4 can be reimported when it has exactly one supported video and one AAC-LC audio track, the same supported protection on both, and one positive normal-rate finite edit per track. Rust first validates all source media and keys. Protected fragmented input uses private single-track views of the original configuration and fragments. Each view must independently match its original track before Shaka Packager processes it. Every original presentation window is restored before the fragments are combined. The final clear, CENC or CBCS MP4 is independently compared with the original. Clear output stays fragmented. This does not combine unrelated files or admit arbitrary multi-track layouts.
 
 This separation avoids an observed selected-track decryption problem in the tested Shaka Packager 3.8.0: reading the combined CBCS fixture changed all 470 AAC packet payloads while its 240 video packets matched. Reading the validated single-track views preserved both video and AAC. A successful tool exit never replaces the per-view or final media comparison.
+
+For development toward 1.3, the same native MP4 assembly and independent media
+comparison also accept one qualified video and one AAC track from a DASH or
+fMP4 HLS presentation. Admission validates the inverse of drmr's MP4-to-manifest
+rendition mapping before packaging; the presence of a single audio choice alone
+does not permit dropping its name, group or selection controls. The resulting
+MP4 retains the checked codec, clocks and playback windows. If a completely
+validated native track declares language `und`, an explicit validated manifest
+language supplies the output language; a contradiction with a known native
+language is refused. The original source bytes remain unchanged, and native
+comparison and additional decoding use the same resolved source language.
+See the [exact presentation and metadata conditions](conversion-support.md#fragmented-presentations-to-one-mp4).
+This source addition is not present in the 1.2.0 archives. Arbitrary rendition
+selection and unrelated-file combination remain outside this profile.
 
 ## Generic resource limits
 

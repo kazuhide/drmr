@@ -1,5 +1,6 @@
 //! Joint, codec-preserving presentations with independent evidence for every source stream.
 mod bundle_source;
+mod bundle_verification;
 mod dash_preparation;
 mod hls_preparation;
 pub(in crate::conversion) use bundle_source::BundlePrepared;
@@ -43,11 +44,18 @@ pub struct TrackConversionRequest<'a> {
     pub hls_output_key: Option<&'a HlsOutputKey>,
 }
 #[derive(Clone)]
+struct CompleteTrack {
+    source: PathBuf,
+    index: usize,
+    kind: TrackKind,
+}
+#[derive(Clone)]
 struct Prepared {
     metadata: metadata::Metadata,
     outer_protection: SourceProtection,
     compatibility: Vec<SourceCompatibilityNote>,
     source_dictionary: bool,
+    complete_track: Option<CompleteTrack>,
     source: PathBuf,
     media: PathBuf,
     index: usize,
@@ -823,6 +831,7 @@ fn prepare_for(
             _ => return Err(ConversionError("input-protection-not-supported")),
         },
         source_dictionary,
+        complete_track: None,
         source: source.into(),
         media: source.into(),
         index,
@@ -994,6 +1003,16 @@ impl Converter {
         input: VerificationSource<'_>,
         purpose: SourceValidationPurpose,
     ) -> Result<SourceQualification, ConversionError> {
+        let command = self.qualification_command(input, purpose)?;
+        let qualified = command.validate_source_inner(input, purpose)?;
+        Ok(command.finish_qualification(qualified, purpose))
+    }
+
+    fn qualification_command(
+        &self,
+        input: VerificationSource<'_>,
+        purpose: SourceValidationPurpose,
+    ) -> Result<Self, ConversionError> {
         if matches!(purpose, SourceValidationPurpose::Conversion)
             && self
                 .output_signaling
@@ -1004,8 +1023,15 @@ impl Converter {
         }
         let mut command = self.with_processing_clone(self.processing_mode);
         command.backend = self.backend.vp9_admission_scope(purpose);
-        let mut qualified = command.validate_source_inner(input, purpose)?;
-        if command.backend.vp9_source_needs_repair() {
+        Ok(command)
+    }
+
+    fn finish_qualification(
+        &self,
+        mut qualified: SourceQualification,
+        purpose: SourceValidationPurpose,
+    ) -> SourceQualification {
+        if self.backend.vp9_source_needs_repair() {
             qualified
                 .compatibility_notes
                 .push(SourceCompatibilityNote::Vp9CencPrefixNormalizationRequired);
@@ -1024,7 +1050,7 @@ impl Converter {
                 .unwrap(),
             );
         }
-        Ok(qualified)
+        qualified
     }
 
     pub(in crate::conversion) fn validate_source_preparing(
@@ -1064,6 +1090,18 @@ impl Converter {
             purpose,
             false,
         )?;
+        let qualified = self.qualify_prepared(input, purpose, original, &prepared)?;
+        self.backend.checkpoint(&[&work]);
+        Ok(qualified)
+    }
+
+    fn qualify_prepared(
+        &self,
+        input: VerificationSource<'_>,
+        purpose: SourceValidationPurpose,
+        original: Inspection,
+        prepared: &[Prepared],
+    ) -> Result<SourceQualification, ConversionError> {
         let actual_format = if prepared.iter().all(|t| t.transport_index.is_some()) {
             OutputFormat::HlsTs
         } else {
@@ -1083,14 +1121,14 @@ impl Converter {
         if self.standalone_mp4_eligible(
             &input,
             &original,
-            &prepared,
+            prepared,
             actual_format,
             declared_audio,
             purpose,
         )? {
             eligible_formats.push(OutputFormat::Mp4);
         }
-        if metadata::dash_representable(&prepared) {
+        if metadata::dash_representable(prepared) {
             eligible_formats.push(OutputFormat::Dash);
         }
         if prepared
@@ -1101,28 +1139,27 @@ impl Converter {
         {
             eligible_formats.push(OutputFormat::Hls);
         }
-        if actual_format == OutputFormat::HlsTs || ts_output::fragmented_sources(&prepared)? {
+        if actual_format == OutputFormat::HlsTs || ts_output::fragmented_sources(prepared)? {
             eligible_formats.push(OutputFormat::HlsTs);
-            if ts_mp4::supported_tracks(&prepared) && ts_mp4::supported_metadata(&prepared) {
+            if ts_mp4::supported_tracks(prepared) && ts_mp4::supported_metadata(prepared) {
                 eligible_formats.push(OutputFormat::Mp4);
             }
         }
         if eligible_formats.contains(&OutputFormat::Mp4)
             && actual_format != OutputFormat::HlsTs
-            && !self.standalone_clocks_supported(&prepared, input.input_keys)?
+            && !self.standalone_clocks_supported(prepared, input.input_keys)?
         {
             eligible_formats.retain(|format| *format != OutputFormat::Mp4);
         }
         let verification =
-            self.validate_prepared_sources(&prepared, input.input_keys, actual_format)?;
+            self.validate_prepared_sources(prepared, input.input_keys, actual_format)?;
         if !verification.passed {
             return Err(ConversionError("source-media-verification-failed"));
         }
-        self.backend.checkpoint(&[&work]);
         Ok(SourceQualification {
-            has_vp9: prepared_has_vp9(&prepared),
-            layout_tracks: qualified_layout_tracks(&prepared, original.format),
-            hls_timing: self.qualified_hls_timing(&prepared, original.format, purpose)?,
+            has_vp9: prepared_has_vp9(prepared),
+            layout_tracks: qualified_layout_tracks(prepared, original.format),
+            hls_timing: self.qualified_hls_timing(prepared, original.format, purpose)?,
             input: original,
             actual_format,
             track_protection,
@@ -1545,12 +1582,36 @@ impl Converter {
         result_keys: &InputKeys,
         output_format: OutputFormat,
     ) -> Result<VerificationReport, ConversionError> {
-        let native = self.native_prepared_pair(a, b, source_keys, result_keys)?;
+        self.verify_prepared_pair_languages(
+            a,
+            b,
+            source_keys,
+            result_keys,
+            output_format,
+            (None, None),
+        )
+    }
+    fn verify_prepared_pair_languages(
+        &self,
+        a: &Prepared,
+        b: &Prepared,
+        source_keys: &InputKeys,
+        result_keys: &InputKeys,
+        output_format: OutputFormat,
+        languages: (Option<&str>, Option<&str>),
+    ) -> Result<VerificationReport, ConversionError> {
+        let native = self.native_prepared_pair(a, b, source_keys, result_keys, languages)?;
         if self.backend.validation_depth == super::ValidationDepth::Native {
             return Ok(native);
         }
-        let mut report =
-            self.verify_prepared_pair_decoded(a, b, source_keys, result_keys, output_format)?;
+        let mut report = self.verify_prepared_pair_decoded(
+            a,
+            b,
+            source_keys,
+            result_keys,
+            output_format,
+            languages,
+        )?;
         report.require_native(&native)?;
         Ok(report)
     }
@@ -1561,6 +1622,7 @@ impl Converter {
         source_keys: &InputKeys,
         result_keys: &InputKeys,
         output_format: OutputFormat,
+        languages: (Option<&str>, Option<&str>),
     ) -> Result<VerificationReport, ConversionError> {
         if a.audio_presentation.is_some() || b.audio_presentation.is_some() {
             let (Some(first), Some(second)) = (a.audio_presentation, b.audio_presentation) else {
@@ -1574,7 +1636,10 @@ impl Converter {
             )?;
             let source = raw_audio_view(a, source_keys);
             let result = raw_audio_view(b, result_keys);
-            let mut proof = if ts_mp4::transport_comparison(output_format, a, b) {
+            let mut proof = if languages.0.is_some() || languages.1.is_some() {
+                self.backend
+                    .verify_manifest_languages_decoded(source, result, languages)?
+            } else if ts_mp4::transport_comparison(output_format, a, b) {
                 self.backend
                     .verify_transport_mp4(source, result, &ts_mp4::declared_language(a)?)?
             } else {
@@ -1641,10 +1706,12 @@ impl Converter {
         }
         let a_view = StreamView::new(&a.source, a.index, key_for(a, source_keys))
             .with_metadata(&a.media)
-            .with_clock(a.clock);
+            .with_clock(a.clock)
+            .with_manifest_language(languages.0);
         let b_view = StreamView::new(&b.source, b.index, key_for(b, result_keys))
             .with_metadata(&b.media)
-            .with_clock(b.clock);
+            .with_clock(b.clock)
+            .with_manifest_language(languages.1);
         self.backend.verify_views(
             a_view.with_all_keys(source_keys),
             b_view.with_all_keys(result_keys),
@@ -1658,6 +1725,7 @@ impl Converter {
         result_keys: &InputKeys,
         output_format: OutputFormat,
     ) -> Result<VerificationReport, ConversionError> {
+        ts_mp4::verify_manifest_order(output_format, &source, &result)?;
         source.sort_by_key(|p| kind_order(p.report.tracks[0].kind));
         result.sort_by_key(|p| kind_order(p.report.tracks[0].kind));
         if source.len() != result.len() {
@@ -1672,10 +1740,13 @@ impl Converter {
         }
         result =
             self.match_presentations(&source, result, source_keys, result_keys, output_format)?;
+        let manifest_mp4 = ts_mp4::manifest_comparison(output_format, &source, &result);
         for (a, b) in source.iter().zip(&result) {
-            if ts_mp4::transport_comparison(output_format, a, b) {
+            if ts_mp4::transport_comparison(output_format, a, b)
+                || (manifest_mp4 && a.metadata.audio.is_some())
+            {
                 ts_mp4::metadata_pair(a, b, &self.backend, result_keys)?;
-            } else {
+            } else if !manifest_mp4 {
                 metadata::pair(&a.metadata, &b.metadata)?;
             }
         }
@@ -1707,14 +1778,20 @@ impl Converter {
                 }
             }
         }
+        let source_languages = ts_mp4::manifest_languages(&source)?;
+        let result_languages = ts_mp4::manifest_languages(&result)?;
         let verified_tracks = self.run_tracks(source.len(), |ordinal| {
             let task = tasks.as_ref().and_then(|tasks| tasks.start(ordinal));
-            let report = self.verify_prepared_pair(
+            let report = self.verify_prepared_pair_languages(
                 &source[ordinal],
                 &result[ordinal],
                 source_keys,
                 result_keys,
                 output_format,
+                (
+                    source_languages[ordinal].as_deref(),
+                    result_languages[ordinal].as_deref(),
+                ),
             )?;
             if let Some(progress) = &progress {
                 progress.completed(ordinal);
@@ -1997,6 +2074,13 @@ fn prepare_presentation_mode(
                         .map_or((&path, index), |views| (&views[index], 0));
                     let mut prepared =
                         prepare_for(selected, selector, track.kind, input.input_keys, purpose)?;
+                    if track_views.is_some() {
+                        prepared.complete_track = Some(CompleteTrack {
+                            source: path.clone(),
+                            index,
+                            kind: track.kind,
+                        });
+                    }
                     if (actual.tracks.len() == 1 || track_views.is_some())
                         && super::audio::movie(selected)?.fragmented
                     {
@@ -2407,6 +2491,7 @@ fn validate_prepared_output(
     }
     if request.format == OutputFormat::Mp4
         && !transport
+        && !ts_mp4::canonical_tracks(prepared, inspection::InputFormat::Dash)
         && prepared
             .iter()
             .any(|p| p.metadata.audio.is_some() || p.metadata.audio_group.is_some())
@@ -2797,6 +2882,12 @@ impl Converter {
         let descriptions: Vec<_> = prepared.iter().map(|p| p.metadata.clone()).collect();
         let mut tracks = Vec::new();
         self.verify_source_tracks(&prepared, &mut tracks, request.input_keys)?;
+        if request.format == OutputFormat::Mp4
+            && input_report.format == InputFormat::Mp4
+            && let Some(complete) = ts_mp4::complete_tracks(&prepared)
+        {
+            tracks = complete;
+        }
         let destination = transport.then(|| destination(request.output)).transpose()?;
         let stage = destination
             .as_ref()

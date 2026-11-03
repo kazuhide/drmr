@@ -5,6 +5,42 @@ for installation, stable interfaces and versioning.
 
 ## [Unreleased]
 
+Development for 1.3. Changes below are not included in the 1.2.0 release.
+Completed changes are recorded by category before the next release.
+
+### Added
+
+- Write one fragmented MP4 from qualified separate video and AAC audio tracks
+  in DASH or fMP4 HLS, with clear, CENC or CBCS protection subject to the existing
+  codec profiles. Preserve encoded samples, clocks and audio playback windows;
+  refuse selection metadata that cannot be represented faithfully in MP4.
+  Use an explicit manifest language when the media language is unspecified,
+  while rejecting conflicts with known languages.
+- Extend native release round-trip checks to cover joint DASH/fMP4 HLS and MP4
+  in both directions, including final comparison against the original MP4.
+
+### Changed
+
+- Reuse checked source data during native conversion from clear MPEG-TS HLS
+  to multiple fMP4 HLS/DASH outputs with `stitch` processing. Prepare each final
+  output once for qualification and complete comparison. Keep encryption and
+  final media, manifest and DRM checks separate for each output; standalone
+  `verify` still reads the source and outputs afresh.
+
+### Fixed
+
+- Apply the same output defaults during direct conversion and independent
+  configured verification, including the default DASH SegmentTemplate addressing.
+- Keep validated media dimensions available for resource reservations, so small
+  inputs avoid the fallback 4K estimate when replaying older decoded plans.
+- Use the current `hls-fmp4`, `output_format` and `encryption` names consistently
+  in the output tables and English/Japanese guides.
+
+### Before the 1.3 release
+
+- Qualify the final archives on every supported operating system, including the
+  [full release round-trip matrix](docs/releases.md#release-only-round-trip-qualification).
+
 ## [1.2.0] - 2026-11-02
 
 ### Changed

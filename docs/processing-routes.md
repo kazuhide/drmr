@@ -126,7 +126,7 @@ TS segmentation and requested protection → independent final-playlist checks
 against the original media. Joint audio/video produces separate playlists and
 an HLS master; audio-only uses native AAC frame boundaries and original clocks.
 The packaging step disables an initial clear interval and timestamp shifting.
-This route is selected explicitly by `--output-format hls-ts`; the existing `hls`
+This route is selected explicitly by `--output-format hls-ts`; the existing `hls-fmp4`
 format continues to produce fragmented MP4.
 
 Metadata alone may not qualify a finite MP4 profile or distinguish supported fragmented MP4 HLS from transport-stream HLS. A metadata-only plan can therefore contain several conditional candidates. Each has `revalidation_required: true` and fixed condition codes. Actual source validation selects a handler or refuses the input; a rejected progressive profile does not imply permission to fall back to another route. A saved plan with `--output-config` executes its named outputs together, using the appropriate route for each one.

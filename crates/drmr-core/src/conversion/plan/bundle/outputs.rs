@@ -116,7 +116,7 @@ impl Conversion<'_> {
             hls_keys: &keys.hls_input,
         };
         let (matches, verification) =
-            child.bundle_media(source, bound.entrypoint(), output, output_keys)?;
+            child.bundle_media(source, bound.entrypoint(), output, output_keys, shared)?;
         if plan.output_options.is_some() {
             child.verify_selected_output_options(
                 bound.entrypoint(),
@@ -241,7 +241,7 @@ impl Verification<'_> {
             hls_keys: &keys.hls_input,
         };
         let (output_matches_plan, verification) =
-            child.bundle_media(source, result.entrypoint(), intent, output_keys)?;
+            child.bundle_media(source, result.entrypoint(), intent, output_keys, None)?;
         if plan.output_options.is_some() {
             child.verify_selected_output_options(
                 result.entrypoint(),

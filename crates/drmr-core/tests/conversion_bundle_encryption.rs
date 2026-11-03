@@ -204,6 +204,95 @@ fn direct_sample_bundle() -> (
     (records, result.outputs)
 }
 
+fn preparation_starts(records: &Collector, subject: &str, purpose: &str) -> usize {
+    records
+        .records()
+        .iter()
+        .filter(|record| {
+            record["stage"] == "media-progress"
+                && record["task"] == "preparation"
+                && record["state"] == "started"
+                && record["subject"] == subject
+                && record["purpose"] == purpose
+        })
+        .count()
+}
+
+#[test]
+fn final_native_bundle_reuses_checked_source_and_prepares_each_output_once() {
+    let (observed, outputs) = direct_sample_bundle();
+    assert_eq!(outputs.len(), 2);
+    assert_eq!(
+        preparation_starts(&observed, "source", "verification"),
+        0,
+        "the byte-bound common source must feed both final native comparisons"
+    );
+    assert_eq!(
+        preparation_starts(&observed, "result", "admission"),
+        0,
+        "qualification must reuse the fresh final-output preparation"
+    );
+    assert_eq!(
+        preparation_starts(&observed, "result", "verification"),
+        2,
+        "each final output must still be prepared and independently checked"
+    );
+}
+
+#[test]
+fn standalone_bundle_verification_freshly_reads_each_source_and_detects_later_output_changes() {
+    let root = drmr_core::native::private_tempdir().unwrap();
+    let source = root.path().join("source");
+    let input = transport(&source);
+    let original = common::snapshot_tree(&source);
+    let mut keys = keys(root.path());
+    keys.outputs
+        .retain(|id, _| matches!(id.as_str(), "dash" | "hls"));
+    let outputs = outputs().into_iter().take(2).collect::<Vec<_>>();
+    let command = Converter::new(
+        Arc::new(ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink))),
+        "packager",
+        "must-not-run-decoder",
+    );
+    let destination = root.path().join("result");
+    command
+        .convert_bundle(
+            &input,
+            &outputs,
+            &destination,
+            &keys,
+            &ManifestValidationTools::default(),
+        )
+        .unwrap();
+    let observed = Arc::new(Collector::default());
+    let command = command.with_activity_sink(observed.clone());
+    let checked = command
+        .verify_bundle_config(
+            &input,
+            &outputs,
+            &destination,
+            &keys,
+            &ManifestValidationTools::default(),
+        )
+        .unwrap();
+    assert!(checked.passed);
+    assert_eq!(preparation_starts(&observed, "source", "verification"), 2);
+    let path = destination.join("dash/track-0000/seg_1.m4s");
+    let mut bytes = std::fs::read(&path).unwrap();
+    *bytes.last_mut().unwrap() ^= 1;
+    std::fs::write(path, bytes).unwrap();
+    if let Ok(report) = command.verify_bundle_config(
+        &input,
+        &outputs,
+        &destination,
+        &keys,
+        &ManifestValidationTools::default(),
+    ) {
+        assert!(!report.passed);
+    }
+    assert_eq!(common::snapshot_tree(&source), original);
+}
+
 #[test]
 fn direct_bundle_progress_declares_planned_work_and_each_checked_output_stage() {
     let (observed, _) = direct_sample_bundle();

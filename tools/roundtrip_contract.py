@@ -34,8 +34,6 @@ FIXTURE_METADATA = {
         "group": "default-audio-group", "name": "stream_1", "language": "en", "default": False, "autoselect": True,
     } if layout.startswith("video-") else None} for layout in LAYOUTS},
 }
-LAYOUT_CONDITION = "joint-dash-hls-to-mp4-not-qualified"
-REVERSE_CONDITION = "reverse-joint-dash-hls-to-mp4-not-qualified"
 
 
 class Failure(RuntimeError):
@@ -67,10 +65,6 @@ def joint(layout):
     return layout.startswith("video-")
 
 
-def supported(layout, source, target):
-    return not (joint(layout) and target[0] == "mp4" and source[0] in ("dash", "hls-fmp4"))
-
-
 def cases():
     result = []
     for layout in LAYOUTS:
@@ -80,15 +74,9 @@ def cases():
             for target in OUTPUTS:
                 output = "hls" if target[0] == "hls-fmp4" else target[0]
                 recipe = EXAMPLES.identifier(recipe_source, output, target[1])
-                if not supported(layout, source, target):
-                    kind, condition = "layout-condition", LAYOUT_CONDITION
-                elif not supported(layout, target, source):
-                    kind, condition = "forward-only", REVERSE_CONDITION
-                else:
-                    kind, condition = "roundtrip", None
                 result.append({"id": f"{layout}:{profile_id(source)}->{profile_id(target)}", "layout": layout,
                                "source": list(source), "target": list(target), "recipe": recipe,
-                               "kind": kind, "condition": condition})
+                               "kind": "roundtrip", "condition": None})
     return result
 
 
@@ -193,19 +181,13 @@ def validate(report, head, tree, target, version, archive_hash, binary_hash):
     records = report["records"]
     require(isinstance(records, list) and len(records) == len(expected), "roundtrip-records-incomplete")
     for record, case in zip(records, expected):
-        fields = ("status",) if case["kind"] == "layout-condition" else ("status", "forward", "source_unchanged")
-        if case["kind"] == "roundtrip":
-            fields += ("backward", "final_against_original")
+        fields = ("status", "forward", "source_unchanged", "backward", "final_against_original")
         exact(record, (*case, *fields))
         require(all(record[key] == value for key, value in case.items()), "roundtrip-case-binding-invalid")
-        if case["kind"] == "layout-condition":
-            require(record["status"] == "not-qualified", "roundtrip-condition-invalid")
-            continue
         require(record["status"] == "complete" and record["source_unchanged"] is True, "roundtrip-case-incomplete")
         leg(record["forward"], case["target"], case["layout"])
-        if case["kind"] == "roundtrip":
-            leg(record["backward"], case["source"], case["layout"])
-            native_proof(record["final_against_original"], case["source"][0], case["source"][1])
+        leg(record["backward"], case["source"], case["layout"])
+        native_proof(record["final_against_original"], case["source"][0], case["source"][1])
     exact(report["counts"], ("expected", "complete", "failed", "not_checked", "not_qualified", "kinds"))
     require(all(type(report["counts"][name]) is int for name in ("expected", "complete", "failed", "not_checked", "not_qualified"))
             and isinstance(report["counts"]["kinds"], dict)

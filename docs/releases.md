@@ -335,13 +335,21 @@ arbitrary original HLS selection groups or player selection attributes; see
 Each matrix cell expands to the input protection schemes and qualified track
 layouts. The matrix uses automatic processing and default DASH `SegmentTemplate`
 references; separate regressions cover other processing and addressing options.
-The report retains 845 H.264/AAC records across 13 input and output profiles:
+The released 1.2.0 report retains 845 H.264/AAC records across 13 input and output profiles:
 
 | Records per native archive | Required check |
 | --- | --- |
 | 761 reversible cases | Convert A → B, independently verify B against A, convert B → A, independently verify the return leg, and compare final A directly with original A |
 | 42 joint MP4 → DASH/HLS cases | Convert and independently verify the forward direction; the reverse joint DASH/HLS → MP4 layout is not qualified |
 | 42 joint DASH/HLS → MP4 conditions | Explicitly record the single-track MP4 output restriction rather than report a successful conversion |
+
+Development for 1.3 extends the joint DASH/fMP4 HLS-to-MP4 profile. Its release
+contract requires all 845 H.264/AAC records to complete the full reversible check,
+including the 84 records previously limited to forward or restriction evidence.
+The table above remains the scope of the unchanged 1.2.0 reports, not a claim
+that those old archives implement the new MP4 route. See
+[Unreleased changes](../CHANGELOG.md#unreleased) and the
+[qualified metadata mapping](conversion-support.md#fragmented-presentations-to-one-mp4).
 
 An additional codec report requires 534 reversible cases: all 100 valid
 container/protection pairs for each HEVC fixture, all 49 pairs for each VP9

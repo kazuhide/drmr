@@ -311,10 +311,13 @@ fn legacy_single_keeps_two_seconds(schema: u32) {
 }
 
 fn legacy_bundle_keeps_two_seconds(schema: u32) {
+    legacy_bundle_keeps_two_seconds_with(&converter(), schema);
+}
+
+fn legacy_bundle_keeps_two_seconds_with(command: &Converter, schema: u32) {
     let root = common::private_tempdir().unwrap();
     let source = source(&root.path().join("source"));
     let original = common::snapshot_tree(source.parent().unwrap());
-    let command = converter();
     let outputs = [BundleOutputIntent {
         id: "hls".into(),
         format: OutputFormat::Hls,
@@ -374,6 +377,14 @@ fn legacy_bundle_keeps_two_seconds(schema: u32) {
             .passed
     );
     assert_eq!(common::snapshot_tree(source.parent().unwrap()), original);
+}
+
+#[test]
+fn bundle_schema_two_uses_admitted_dimensions_with_one_cpu_and_640_mib() {
+    let limiter = Arc::new(drmr_core::resources::Limiter::new(1, 640 * 1024 * 1024));
+    let runner = ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink)).with_limiter(limiter);
+    let command = Converter::new(Arc::new(runner), "packager", "ffmpeg");
+    legacy_bundle_keeps_two_seconds_with(&command, 2);
 }
 
 macro_rules! legacy_regression {

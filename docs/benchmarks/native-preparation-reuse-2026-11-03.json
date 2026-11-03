@@ -1,0 +1,1996 @@
+{
+  "schema_version": 1,
+  "benchmark": "offline-clear-hls-ts-native-preparation-reuse-for-two-independent-cbcs-fmp4-outputs",
+  "measurement_date": "2026-11-03",
+  "source_commit": "55b760560bb7088fa39857ab32c6ff7c5d56b20c",
+  "source_tree": "efc9292867016ec360485bfa52e5050e9b651830",
+  "baseline_commit": "10dba3e2db26f0cf1653652cf4c9e9053362f5a9",
+  "baseline_tree": "67f89ea03a6d07005849bf80cae8c29c422aaba2",
+  "build": {
+    "product_version": "1.2.0",
+    "compiler": "rustc 1.99.0 (b940084d7 2026-09-28)",
+    "profile": "release",
+    "locked_dependencies": true,
+    "packager": "packager version v3.8.0-75b2faf-release",
+    "packager_sha256": "c8a26c3639cf2ebfa542dd9b638a2ea3299090ed9b9485d47179d4aa1fdb96b7",
+    "baseline_executable_sha256": "174f9cb2b9bdb5c2626fc61b3e1d00868dfc882824ffa090f025bab06d8dde0a",
+    "optimized_executable_sha256": "199ccca4028edced57a0bc86ecef60b263b340711300a2adac5713aee77e4464"
+  },
+  "host": {
+    "system": "Darwin",
+    "architecture": "arm64",
+    "hardware_model": "Mac17,2",
+    "logical_cores": 10,
+    "physical_cores": 10,
+    "memory_bytes": 34359738368
+  },
+  "input": {
+    "description": "Retained licensed Big Buck Bunny VOD; originals unchanged; no network acquisition",
+    "retained_tree_files": 717,
+    "retained_tree_bytes": 857794891,
+    "retained_tree_sha256": "5d14b23a6ca599003cbdf7b3b4c865352fd2140d4a2da11d4c127e81409922f5",
+    "video_tracks": 6,
+    "audio_tracks": 1,
+    "codecs": [
+      "H.264",
+      "AAC"
+    ]
+  },
+  "outputs": [
+    {
+      "format": "dash",
+      "encryption": "cbcs",
+      "drms": [
+        "widevine",
+        "playready"
+      ]
+    },
+    {
+      "format": "hls-fmp4",
+      "encryption": "cbcs",
+      "drms": [
+        "fairplay"
+      ]
+    }
+  ],
+  "options": {
+    "processing": "auto",
+    "resolved_processing": "stitch",
+    "max_workers": "automatic",
+    "decode": false,
+    "external_manifest_validators": false,
+    "network_download_included": false,
+    "dash_addressing": "template",
+    "encryption": "independent per output",
+    "media_key_policy": "identical public test key and KID in both output configurations; no key values recorded",
+    "standalone_verification": "fresh source and output in a separate CLI invocation after each conversion"
+  },
+  "runs": [
+    {
+      "variant": "baseline",
+      "pair": 0,
+      "source_commit": "10dba3e2db26f0cf1653652cf4c9e9053362f5a9",
+      "executable_sha256": "174f9cb2b9bdb5c2626fc61b3e1d00868dfc882824ffa090f025bab06d8dde0a",
+      "wall_seconds": 37.377082958,
+      "cpu_total_seconds_including_process_table_observer": 117.185884,
+      "load_average_1_5_15_before": [
+        6.97998046875,
+        7.1943359375,
+        9.9404296875
+      ],
+      "memory_observation": {
+        "schema_version": 1,
+        "metric_kind": "unix-rss",
+        "scope": "ppid-process-table-samples-no-generation-proof",
+        "status": "partial",
+        "reason": "incomplete-process-observation",
+        "sample_interval_seconds": 0.1,
+        "samples": 238,
+        "failed_samples": 0,
+        "root_missing_samples": 0,
+        "parent_zero_samples": 1,
+        "no_descendant_observation_samples": 222,
+        "zero_descendant_memory_samples": 0,
+        "positive_descendant_memory_samples": 16,
+        "incomplete_samples": 0,
+        "identity_rejections": 0,
+        "parent_sampled_peak_bytes": 65929216,
+        "descendant_sampled_peak_bytes": 214614016,
+        "observed_peak_descendant_count": 5
+      },
+      "measurement_report_status": "partial",
+      "phases": [
+        {
+          "phase": "input-preparation",
+          "status": "observed-scopes",
+          "scopes": 3,
+          "scope_elapsed_sum_seconds": 15.200041375000001
+        },
+        {
+          "phase": "inspection",
+          "status": "observed-scopes",
+          "scopes": 6,
+          "scope_elapsed_sum_seconds": 0.002066583
+        },
+        {
+          "phase": "normalization",
+          "status": "observed-scopes",
+          "scopes": 7,
+          "scope_elapsed_sum_seconds": 1.1658015
+        },
+        {
+          "phase": "packaging",
+          "status": "observed-scopes",
+          "scopes": 2,
+          "scope_elapsed_sum_seconds": 1.773519458
+        },
+        {
+          "phase": "verification",
+          "status": "observed-scopes",
+          "scopes": 25,
+          "scope_elapsed_sum_seconds": 5.183577167
+        },
+        {
+          "phase": "publication",
+          "status": "observed-scopes",
+          "scopes": 3,
+          "scope_elapsed_sum_seconds": 1.883177583
+        }
+      ],
+      "tools": [
+        {
+          "tool": "ffmpeg",
+          "status": "unobserved",
+          "calls": 0,
+          "reported_duration_sum_seconds": 0.0,
+          "unsuccessful_calls": 0
+        },
+        {
+          "tool": "ffprobe",
+          "status": "unobserved",
+          "calls": 0,
+          "reported_duration_sum_seconds": 0.0,
+          "unsuccessful_calls": 0
+        },
+        {
+          "tool": "packager",
+          "status": "observed-calls",
+          "calls": 15,
+          "reported_duration_sum_seconds": 3.897,
+          "unsuccessful_calls": 0
+        }
+      ],
+      "workspace_measurement": {
+        "status": "partial",
+        "scope": "selected-quiescent-stage-sets-not-all-live-command-stages",
+        "reason": "checkpoint-metadata-unavailable",
+        "checkpoints": 8,
+        "incomplete_checkpoints": 2,
+        "checkpoint_regular_file_bytes_max": 5042493490
+      },
+      "io_measurement": {
+        "status": "unmeasured",
+        "reason": "total-process-io-not-collected"
+      },
+      "source_unchanged": true,
+      "renditions": {
+        "dash": {
+          "video": 6,
+          "audio": 1
+        },
+        "hls": {
+          "video": 6,
+          "audio": 1
+        }
+      },
+      "initialization_pssh_counts": {
+        "dash": [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        "hls": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "quality": {
+        "dash": {
+          "schema_version": 2,
+          "required_depth": "native",
+          "scope": "comparison",
+          "passed": true,
+          "checks": {
+            "stream_metadata": "pass",
+            "packet_payloads_equal": true,
+            "packet_timing_equal": true
+          },
+          "decode_evidence": {
+            "status": "not-checked",
+            "reason": "not-requested"
+          },
+          "license_playback_verified": false,
+          "native_manifest": {
+            "schema_version": 1,
+            "scope": "manifest-only",
+            "profile": "dash-static-manifest",
+            "errors": 0,
+            "warnings": 0,
+            "truncated": false,
+            "incomplete": false,
+            "document_count": 1
+          }
+        },
+        "hls": {
+          "schema_version": 2,
+          "required_depth": "native",
+          "scope": "comparison",
+          "passed": true,
+          "checks": {
+            "stream_metadata": "pass",
+            "packet_payloads_equal": true,
+            "packet_timing_equal": true
+          },
+          "decode_evidence": {
+            "status": "not-checked",
+            "reason": "not-requested"
+          },
+          "license_playback_verified": false,
+          "native_manifest": {
+            "schema_version": 1,
+            "scope": "manifest-only",
+            "profile": "hls-base-manifest",
+            "errors": 0,
+            "warnings": 0,
+            "truncated": false,
+            "incomplete": false,
+            "document_count": 8
+          }
+        }
+      },
+      "drm_signaling": {
+        "dash": {
+          "systems": [
+            "playready",
+            "widevine"
+          ],
+          "verified": true
+        },
+        "hls": {
+          "systems": [
+            "fairplay"
+          ],
+          "verified": true
+        }
+      },
+      "independent_verification": {
+        "measurement": {
+          "status": "completed",
+          "elapsed_seconds": 13.057180000000002,
+          "exit_code": 0,
+          "memory": {
+            "schema_version": 1,
+            "metric_kind": "unix-rss",
+            "scope": "ppid-process-table-samples-no-generation-proof",
+            "status": "partial",
+            "reason": "descendant-memory-not-observed",
+            "sample_interval_seconds": 0.1,
+            "samples": 84,
+            "failed_samples": 0,
+            "root_missing_samples": 0,
+            "parent_zero_samples": 0,
+            "no_descendant_observation_samples": 84,
+            "zero_descendant_memory_samples": 0,
+            "positive_descendant_memory_samples": 0,
+            "incomplete_samples": 0,
+            "identity_rejections": 0,
+            "parent_sampled_peak_bytes": 24625152,
+            "descendant_sampled_peak_bytes": null,
+            "observed_peak_descendant_count": null
+          }
+        },
+        "quality": {
+          "dash": {
+            "schema_version": 2,
+            "required_depth": "native",
+            "scope": "comparison",
+            "passed": true,
+            "checks": {
+              "stream_metadata": "pass",
+              "packet_payloads_equal": true,
+              "packet_timing_equal": true
+            },
+            "decode_evidence": {
+              "status": "not-checked",
+              "reason": "not-requested"
+            },
+            "license_playback_verified": false,
+            "native_manifest": {
+              "schema_version": 1,
+              "scope": "manifest-only",
+              "profile": "dash-static-manifest",
+              "errors": 0,
+              "warnings": 0,
+              "truncated": false,
+              "incomplete": false,
+              "document_count": 1
+            }
+          },
+          "hls": {
+            "schema_version": 2,
+            "required_depth": "native",
+            "scope": "comparison",
+            "passed": true,
+            "checks": {
+              "stream_metadata": "pass",
+              "packet_payloads_equal": true,
+              "packet_timing_equal": true
+            },
+            "decode_evidence": {
+              "status": "not-checked",
+              "reason": "not-requested"
+            },
+            "license_playback_verified": false,
+            "native_manifest": {
+              "schema_version": 1,
+              "scope": "manifest-only",
+              "profile": "hls-base-manifest",
+              "errors": 0,
+              "warnings": 0,
+              "truncated": false,
+              "incomplete": false,
+              "document_count": 8
+            }
+          }
+        },
+        "drm_signaling": {
+          "dash": {
+            "systems": [
+              "playready",
+              "widevine"
+            ],
+            "verified": true
+          },
+          "hls": {
+            "systems": [
+              "fairplay"
+            ],
+            "verified": true
+          }
+        }
+      }
+    },
+    {
+      "variant": "optimized",
+      "pair": 0,
+      "source_commit": "55b760560bb7088fa39857ab32c6ff7c5d56b20c",
+      "executable_sha256": "199ccca4028edced57a0bc86ecef60b263b340711300a2adac5713aee77e4464",
+      "wall_seconds": 31.659406665999995,
+      "cpu_total_seconds_including_process_table_observer": 103.72996400000001,
+      "load_average_1_5_15_before": [
+        7.64892578125,
+        7.27001953125,
+        9.78955078125
+      ],
+      "memory_observation": {
+        "schema_version": 1,
+        "metric_kind": "unix-rss",
+        "scope": "ppid-process-table-samples-no-generation-proof",
+        "status": "partial",
+        "reason": "incomplete-process-observation",
+        "sample_interval_seconds": 0.1,
+        "samples": 203,
+        "failed_samples": 0,
+        "root_missing_samples": 0,
+        "parent_zero_samples": 0,
+        "no_descendant_observation_samples": 188,
+        "zero_descendant_memory_samples": 1,
+        "positive_descendant_memory_samples": 14,
+        "incomplete_samples": 0,
+        "identity_rejections": 0,
+        "parent_sampled_peak_bytes": 63848448,
+        "descendant_sampled_peak_bytes": 215334912,
+        "observed_peak_descendant_count": 7
+      },
+      "measurement_report_status": "partial",
+      "phases": [
+        {
+          "phase": "input-preparation",
+          "status": "observed-scopes",
+          "scopes": 3,
+          "scope_elapsed_sum_seconds": 12.227917167
+        },
+        {
+          "phase": "inspection",
+          "status": "observed-scopes",
+          "scopes": 6,
+          "scope_elapsed_sum_seconds": 0.0028212069999999996
+        },
+        {
+          "phase": "normalization",
+          "status": "observed-scopes",
+          "scopes": 7,
+          "scope_elapsed_sum_seconds": 1.224508417
+        },
+        {
+          "phase": "packaging",
+          "status": "observed-scopes",
+          "scopes": 2,
+          "scope_elapsed_sum_seconds": 1.368589791
+        },
+        {
+          "phase": "verification",
+          "status": "observed-scopes",
+          "scopes": 25,
+          "scope_elapsed_sum_seconds": 5.100965459000001
+        },
+        {
+          "phase": "publication",
+          "status": "observed-scopes",
+          "scopes": 3,
+          "scope_elapsed_sum_seconds": 1.918033501
+        }
+      ],
+      "tools": [
+        {
+          "tool": "ffmpeg",
+          "status": "unobserved",
+          "calls": 0,
+          "reported_duration_sum_seconds": 0.0,
+          "unsuccessful_calls": 0
+        },
+        {
+          "tool": "ffprobe",
+          "status": "unobserved",
+          "calls": 0,
+          "reported_duration_sum_seconds": 0.0,
+          "unsuccessful_calls": 0
+        },
+        {
+          "tool": "packager",
+          "status": "observed-calls",
+          "calls": 15,
+          "reported_duration_sum_seconds": 3.407,
+          "unsuccessful_calls": 0
+        }
+      ],
+      "workspace_measurement": {
+        "status": "partial",
+        "scope": "selected-quiescent-stage-sets-not-all-live-command-stages",
+        "reason": "checkpoint-metadata-unavailable",
+        "checkpoints": 6,
+        "incomplete_checkpoints": 2,
+        "checkpoint_regular_file_bytes_max": 5042493490
+      },
+      "io_measurement": {
+        "status": "unmeasured",
+        "reason": "total-process-io-not-collected"
+      },
+      "source_unchanged": true,
+      "renditions": {
+        "dash": {
+          "video": 6,
+          "audio": 1
+        },
+        "hls": {
+          "video": 6,
+          "audio": 1
+        }
+      },
+      "initialization_pssh_counts": {
+        "dash": [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        "hls": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "quality": {
+        "dash": {
+          "schema_version": 2,
+          "required_depth": "native",
+          "scope": "comparison",
+          "passed": true,
+          "checks": {
+            "stream_metadata": "pass",
+            "packet_payloads_equal": true,
+            "packet_timing_equal": true
+          },
+          "decode_evidence": {
+            "status": "not-checked",
+            "reason": "not-requested"
+          },
+          "license_playback_verified": false,
+          "native_manifest": {
+            "schema_version": 1,
+            "scope": "manifest-only",
+            "profile": "dash-static-manifest",
+            "errors": 0,
+            "warnings": 0,
+            "truncated": false,
+            "incomplete": false,
+            "document_count": 1
+          }
+        },
+        "hls": {
+          "schema_version": 2,
+          "required_depth": "native",
+          "scope": "comparison",
+          "passed": true,
+          "checks": {
+            "stream_metadata": "pass",
+            "packet_payloads_equal": true,
+            "packet_timing_equal": true
+          },
+          "decode_evidence": {
+            "status": "not-checked",
+            "reason": "not-requested"
+          },
+          "license_playback_verified": false,
+          "native_manifest": {
+            "schema_version": 1,
+            "scope": "manifest-only",
+            "profile": "hls-base-manifest",
+            "errors": 0,
+            "warnings": 0,
+            "truncated": false,
+            "incomplete": false,
+            "document_count": 8
+          }
+        }
+      },
+      "drm_signaling": {
+        "dash": {
+          "systems": [
+            "playready",
+            "widevine"
+          ],
+          "verified": true
+        },
+        "hls": {
+          "systems": [
+            "fairplay"
+          ],
+          "verified": true
+        }
+      },
+      "independent_verification": {
+        "measurement": {
+          "status": "completed",
+          "elapsed_seconds": 12.297952832999997,
+          "exit_code": 0,
+          "memory": {
+            "schema_version": 1,
+            "metric_kind": "unix-rss",
+            "scope": "ppid-process-table-samples-no-generation-proof",
+            "status": "partial",
+            "reason": "descendant-memory-not-observed",
+            "sample_interval_seconds": 0.1,
+            "samples": 79,
+            "failed_samples": 0,
+            "root_missing_samples": 0,
+            "parent_zero_samples": 0,
+            "no_descendant_observation_samples": 79,
+            "zero_descendant_memory_samples": 0,
+            "positive_descendant_memory_samples": 0,
+            "incomplete_samples": 0,
+            "identity_rejections": 0,
+            "parent_sampled_peak_bytes": 24444928,
+            "descendant_sampled_peak_bytes": null,
+            "observed_peak_descendant_count": null
+          }
+        },
+        "quality": {
+          "dash": {
+            "schema_version": 2,
+            "required_depth": "native",
+            "scope": "comparison",
+            "passed": true,
+            "checks": {
+              "stream_metadata": "pass",
+              "packet_payloads_equal": true,
+              "packet_timing_equal": true
+            },
+            "decode_evidence": {
+              "status": "not-checked",
+              "reason": "not-requested"
+            },
+            "license_playback_verified": false,
+            "native_manifest": {
+              "schema_version": 1,
+              "scope": "manifest-only",
+              "profile": "dash-static-manifest",
+              "errors": 0,
+              "warnings": 0,
+              "truncated": false,
+              "incomplete": false,
+              "document_count": 1
+            }
+          },
+          "hls": {
+            "schema_version": 2,
+            "required_depth": "native",
+            "scope": "comparison",
+            "passed": true,
+            "checks": {
+              "stream_metadata": "pass",
+              "packet_payloads_equal": true,
+              "packet_timing_equal": true
+            },
+            "decode_evidence": {
+              "status": "not-checked",
+              "reason": "not-requested"
+            },
+            "license_playback_verified": false,
+            "native_manifest": {
+              "schema_version": 1,
+              "scope": "manifest-only",
+              "profile": "hls-base-manifest",
+              "errors": 0,
+              "warnings": 0,
+              "truncated": false,
+              "incomplete": false,
+              "document_count": 8
+            }
+          }
+        },
+        "drm_signaling": {
+          "dash": {
+            "systems": [
+              "playready",
+              "widevine"
+            ],
+            "verified": true
+          },
+          "hls": {
+            "systems": [
+              "fairplay"
+            ],
+            "verified": true
+          }
+        }
+      }
+    },
+    {
+      "variant": "optimized",
+      "pair": 1,
+      "source_commit": "55b760560bb7088fa39857ab32c6ff7c5d56b20c",
+      "executable_sha256": "199ccca4028edced57a0bc86ecef60b263b340711300a2adac5713aee77e4464",
+      "wall_seconds": 31.090722,
+      "cpu_total_seconds_including_process_table_observer": 103.449735,
+      "load_average_1_5_15_before": [
+        5.63134765625,
+        6.771484375,
+        9.24755859375
+      ],
+      "memory_observation": {
+        "schema_version": 1,
+        "metric_kind": "unix-rss",
+        "scope": "ppid-process-table-samples-no-generation-proof",
+        "status": "sampled",
+        "reason": null,
+        "sample_interval_seconds": 0.1,
+        "samples": 198,
+        "failed_samples": 0,
+        "root_missing_samples": 0,
+        "parent_zero_samples": 0,
+        "no_descendant_observation_samples": 183,
+        "zero_descendant_memory_samples": 0,
+        "positive_descendant_memory_samples": 15,
+        "incomplete_samples": 0,
+        "identity_rejections": 0,
+        "parent_sampled_peak_bytes": 66830336,
+        "descendant_sampled_peak_bytes": 229916672,
+        "observed_peak_descendant_count": 6
+      },
+      "measurement_report_status": "partial",
+      "phases": [
+        {
+          "phase": "input-preparation",
+          "status": "observed-scopes",
+          "scopes": 3,
+          "scope_elapsed_sum_seconds": 11.311950792000001
+        },
+        {
+          "phase": "inspection",
+          "status": "observed-scopes",
+          "scopes": 6,
+          "scope_elapsed_sum_seconds": 0.002909999
+        },
+        {
+          "phase": "normalization",
+          "status": "observed-scopes",
+          "scopes": 7,
+          "scope_elapsed_sum_seconds": 1.164740793
+        },
+        {
+          "phase": "packaging",
+          "status": "observed-scopes",
+          "scopes": 2,
+          "scope_elapsed_sum_seconds": 1.600230375
+        },
+        {
+          "phase": "verification",
+          "status": "observed-scopes",
+          "scopes": 25,
+          "scope_elapsed_sum_seconds": 5.355387836000001
+        },
+        {
+          "phase": "publication",
+          "status": "observed-scopes",
+          "scopes": 3,
+          "scope_elapsed_sum_seconds": 2.160004709
+        }
+      ],
+      "tools": [
+        {
+          "tool": "ffmpeg",
+          "status": "unobserved",
+          "calls": 0,
+          "reported_duration_sum_seconds": 0.0,
+          "unsuccessful_calls": 0
+        },
+        {
+          "tool": "ffprobe",
+          "status": "unobserved",
+          "calls": 0,
+          "reported_duration_sum_seconds": 0.0,
+          "unsuccessful_calls": 0
+        },
+        {
+          "tool": "packager",
+          "status": "observed-calls",
+          "calls": 15,
+          "reported_duration_sum_seconds": 3.538,
+          "unsuccessful_calls": 0
+        }
+      ],
+      "workspace_measurement": {
+        "status": "partial",
+        "scope": "selected-quiescent-stage-sets-not-all-live-command-stages",
+        "reason": "checkpoint-metadata-unavailable",
+        "checkpoints": 6,
+        "incomplete_checkpoints": 2,
+        "checkpoint_regular_file_bytes_max": 5042493490
+      },
+      "io_measurement": {
+        "status": "unmeasured",
+        "reason": "total-process-io-not-collected"
+      },
+      "source_unchanged": true,
+      "renditions": {
+        "dash": {
+          "video": 6,
+          "audio": 1
+        },
+        "hls": {
+          "video": 6,
+          "audio": 1
+        }
+      },
+      "initialization_pssh_counts": {
+        "dash": [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        "hls": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "quality": {
+        "dash": {
+          "schema_version": 2,
+          "required_depth": "native",
+          "scope": "comparison",
+          "passed": true,
+          "checks": {
+            "stream_metadata": "pass",
+            "packet_payloads_equal": true,
+            "packet_timing_equal": true
+          },
+          "decode_evidence": {
+            "status": "not-checked",
+            "reason": "not-requested"
+          },
+          "license_playback_verified": false,
+          "native_manifest": {
+            "schema_version": 1,
+            "scope": "manifest-only",
+            "profile": "dash-static-manifest",
+            "errors": 0,
+            "warnings": 0,
+            "truncated": false,
+            "incomplete": false,
+            "document_count": 1
+          }
+        },
+        "hls": {
+          "schema_version": 2,
+          "required_depth": "native",
+          "scope": "comparison",
+          "passed": true,
+          "checks": {
+            "stream_metadata": "pass",
+            "packet_payloads_equal": true,
+            "packet_timing_equal": true
+          },
+          "decode_evidence": {
+            "status": "not-checked",
+            "reason": "not-requested"
+          },
+          "license_playback_verified": false,
+          "native_manifest": {
+            "schema_version": 1,
+            "scope": "manifest-only",
+            "profile": "hls-base-manifest",
+            "errors": 0,
+            "warnings": 0,
+            "truncated": false,
+            "incomplete": false,
+            "document_count": 8
+          }
+        }
+      },
+      "drm_signaling": {
+        "dash": {
+          "systems": [
+            "playready",
+            "widevine"
+          ],
+          "verified": true
+        },
+        "hls": {
+          "systems": [
+            "fairplay"
+          ],
+          "verified": true
+        }
+      },
+      "independent_verification": {
+        "measurement": {
+          "status": "completed",
+          "elapsed_seconds": 12.837610708,
+          "exit_code": 0,
+          "memory": {
+            "schema_version": 1,
+            "metric_kind": "unix-rss",
+            "scope": "ppid-process-table-samples-no-generation-proof",
+            "status": "partial",
+            "reason": "descendant-memory-not-observed",
+            "sample_interval_seconds": 0.1,
+            "samples": 82,
+            "failed_samples": 0,
+            "root_missing_samples": 0,
+            "parent_zero_samples": 1,
+            "no_descendant_observation_samples": 82,
+            "zero_descendant_memory_samples": 0,
+            "positive_descendant_memory_samples": 0,
+            "incomplete_samples": 0,
+            "identity_rejections": 0,
+            "parent_sampled_peak_bytes": 24231936,
+            "descendant_sampled_peak_bytes": null,
+            "observed_peak_descendant_count": null
+          }
+        },
+        "quality": {
+          "dash": {
+            "schema_version": 2,
+            "required_depth": "native",
+            "scope": "comparison",
+            "passed": true,
+            "checks": {
+              "stream_metadata": "pass",
+              "packet_payloads_equal": true,
+              "packet_timing_equal": true
+            },
+            "decode_evidence": {
+              "status": "not-checked",
+              "reason": "not-requested"
+            },
+            "license_playback_verified": false,
+            "native_manifest": {
+              "schema_version": 1,
+              "scope": "manifest-only",
+              "profile": "dash-static-manifest",
+              "errors": 0,
+              "warnings": 0,
+              "truncated": false,
+              "incomplete": false,
+              "document_count": 1
+            }
+          },
+          "hls": {
+            "schema_version": 2,
+            "required_depth": "native",
+            "scope": "comparison",
+            "passed": true,
+            "checks": {
+              "stream_metadata": "pass",
+              "packet_payloads_equal": true,
+              "packet_timing_equal": true
+            },
+            "decode_evidence": {
+              "status": "not-checked",
+              "reason": "not-requested"
+            },
+            "license_playback_verified": false,
+            "native_manifest": {
+              "schema_version": 1,
+              "scope": "manifest-only",
+              "profile": "hls-base-manifest",
+              "errors": 0,
+              "warnings": 0,
+              "truncated": false,
+              "incomplete": false,
+              "document_count": 8
+            }
+          }
+        },
+        "drm_signaling": {
+          "dash": {
+            "systems": [
+              "playready",
+              "widevine"
+            ],
+            "verified": true
+          },
+          "hls": {
+            "systems": [
+              "fairplay"
+            ],
+            "verified": true
+          }
+        }
+      }
+    },
+    {
+      "variant": "baseline",
+      "pair": 1,
+      "source_commit": "10dba3e2db26f0cf1653652cf4c9e9053362f5a9",
+      "executable_sha256": "174f9cb2b9bdb5c2626fc61b3e1d00868dfc882824ffa090f025bab06d8dde0a",
+      "wall_seconds": 34.80479166599999,
+      "cpu_total_seconds_including_process_table_observer": 113.66055,
+      "load_average_1_5_15_before": [
+        4.962890625,
+        6.3798828125,
+        8.9716796875
+      ],
+      "memory_observation": {
+        "schema_version": 1,
+        "metric_kind": "unix-rss",
+        "scope": "ppid-process-table-samples-no-generation-proof",
+        "status": "partial",
+        "reason": "incomplete-process-observation",
+        "sample_interval_seconds": 0.1,
+        "samples": 224,
+        "failed_samples": 0,
+        "root_missing_samples": 0,
+        "parent_zero_samples": 0,
+        "no_descendant_observation_samples": 209,
+        "zero_descendant_memory_samples": 1,
+        "positive_descendant_memory_samples": 14,
+        "incomplete_samples": 0,
+        "identity_rejections": 0,
+        "parent_sampled_peak_bytes": 63569920,
+        "descendant_sampled_peak_bytes": 217038848,
+        "observed_peak_descendant_count": 6
+      },
+      "measurement_report_status": "partial",
+      "phases": [
+        {
+          "phase": "input-preparation",
+          "status": "observed-scopes",
+          "scopes": 3,
+          "scope_elapsed_sum_seconds": 13.782329459
+        },
+        {
+          "phase": "inspection",
+          "status": "observed-scopes",
+          "scopes": 6,
+          "scope_elapsed_sum_seconds": 0.001904166
+        },
+        {
+          "phase": "normalization",
+          "status": "observed-scopes",
+          "scopes": 7,
+          "scope_elapsed_sum_seconds": 1.011799917
+        },
+        {
+          "phase": "packaging",
+          "status": "observed-scopes",
+          "scopes": 2,
+          "scope_elapsed_sum_seconds": 1.583788959
+        },
+        {
+          "phase": "verification",
+          "status": "observed-scopes",
+          "scopes": 25,
+          "scope_elapsed_sum_seconds": 5.205747331999999
+        },
+        {
+          "phase": "publication",
+          "status": "observed-scopes",
+          "scopes": 3,
+          "scope_elapsed_sum_seconds": 1.7842121670000002
+        }
+      ],
+      "tools": [
+        {
+          "tool": "ffmpeg",
+          "status": "unobserved",
+          "calls": 0,
+          "reported_duration_sum_seconds": 0.0,
+          "unsuccessful_calls": 0
+        },
+        {
+          "tool": "ffprobe",
+          "status": "unobserved",
+          "calls": 0,
+          "reported_duration_sum_seconds": 0.0,
+          "unsuccessful_calls": 0
+        },
+        {
+          "tool": "packager",
+          "status": "observed-calls",
+          "calls": 15,
+          "reported_duration_sum_seconds": 3.382,
+          "unsuccessful_calls": 0
+        }
+      ],
+      "workspace_measurement": {
+        "status": "partial",
+        "scope": "selected-quiescent-stage-sets-not-all-live-command-stages",
+        "reason": "checkpoint-metadata-unavailable",
+        "checkpoints": 8,
+        "incomplete_checkpoints": 2,
+        "checkpoint_regular_file_bytes_max": 5042493490
+      },
+      "io_measurement": {
+        "status": "unmeasured",
+        "reason": "total-process-io-not-collected"
+      },
+      "source_unchanged": true,
+      "renditions": {
+        "dash": {
+          "video": 6,
+          "audio": 1
+        },
+        "hls": {
+          "video": 6,
+          "audio": 1
+        }
+      },
+      "initialization_pssh_counts": {
+        "dash": [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        "hls": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "quality": {
+        "dash": {
+          "schema_version": 2,
+          "required_depth": "native",
+          "scope": "comparison",
+          "passed": true,
+          "checks": {
+            "stream_metadata": "pass",
+            "packet_payloads_equal": true,
+            "packet_timing_equal": true
+          },
+          "decode_evidence": {
+            "status": "not-checked",
+            "reason": "not-requested"
+          },
+          "license_playback_verified": false,
+          "native_manifest": {
+            "schema_version": 1,
+            "scope": "manifest-only",
+            "profile": "dash-static-manifest",
+            "errors": 0,
+            "warnings": 0,
+            "truncated": false,
+            "incomplete": false,
+            "document_count": 1
+          }
+        },
+        "hls": {
+          "schema_version": 2,
+          "required_depth": "native",
+          "scope": "comparison",
+          "passed": true,
+          "checks": {
+            "stream_metadata": "pass",
+            "packet_payloads_equal": true,
+            "packet_timing_equal": true
+          },
+          "decode_evidence": {
+            "status": "not-checked",
+            "reason": "not-requested"
+          },
+          "license_playback_verified": false,
+          "native_manifest": {
+            "schema_version": 1,
+            "scope": "manifest-only",
+            "profile": "hls-base-manifest",
+            "errors": 0,
+            "warnings": 0,
+            "truncated": false,
+            "incomplete": false,
+            "document_count": 8
+          }
+        }
+      },
+      "drm_signaling": {
+        "dash": {
+          "systems": [
+            "playready",
+            "widevine"
+          ],
+          "verified": true
+        },
+        "hls": {
+          "systems": [
+            "fairplay"
+          ],
+          "verified": true
+        }
+      },
+      "independent_verification": {
+        "measurement": {
+          "status": "completed",
+          "elapsed_seconds": 12.434769541999998,
+          "exit_code": 0,
+          "memory": {
+            "schema_version": 1,
+            "metric_kind": "unix-rss",
+            "scope": "ppid-process-table-samples-no-generation-proof",
+            "status": "partial",
+            "reason": "descendant-memory-not-observed",
+            "sample_interval_seconds": 0.1,
+            "samples": 79,
+            "failed_samples": 0,
+            "root_missing_samples": 0,
+            "parent_zero_samples": 0,
+            "no_descendant_observation_samples": 79,
+            "zero_descendant_memory_samples": 0,
+            "positive_descendant_memory_samples": 0,
+            "incomplete_samples": 0,
+            "identity_rejections": 0,
+            "parent_sampled_peak_bytes": 25067520,
+            "descendant_sampled_peak_bytes": null,
+            "observed_peak_descendant_count": null
+          }
+        },
+        "quality": {
+          "dash": {
+            "schema_version": 2,
+            "required_depth": "native",
+            "scope": "comparison",
+            "passed": true,
+            "checks": {
+              "stream_metadata": "pass",
+              "packet_payloads_equal": true,
+              "packet_timing_equal": true
+            },
+            "decode_evidence": {
+              "status": "not-checked",
+              "reason": "not-requested"
+            },
+            "license_playback_verified": false,
+            "native_manifest": {
+              "schema_version": 1,
+              "scope": "manifest-only",
+              "profile": "dash-static-manifest",
+              "errors": 0,
+              "warnings": 0,
+              "truncated": false,
+              "incomplete": false,
+              "document_count": 1
+            }
+          },
+          "hls": {
+            "schema_version": 2,
+            "required_depth": "native",
+            "scope": "comparison",
+            "passed": true,
+            "checks": {
+              "stream_metadata": "pass",
+              "packet_payloads_equal": true,
+              "packet_timing_equal": true
+            },
+            "decode_evidence": {
+              "status": "not-checked",
+              "reason": "not-requested"
+            },
+            "license_playback_verified": false,
+            "native_manifest": {
+              "schema_version": 1,
+              "scope": "manifest-only",
+              "profile": "hls-base-manifest",
+              "errors": 0,
+              "warnings": 0,
+              "truncated": false,
+              "incomplete": false,
+              "document_count": 8
+            }
+          }
+        },
+        "drm_signaling": {
+          "dash": {
+            "systems": [
+              "playready",
+              "widevine"
+            ],
+            "verified": true
+          },
+          "hls": {
+            "systems": [
+              "fairplay"
+            ],
+            "verified": true
+          }
+        }
+      }
+    },
+    {
+      "variant": "baseline",
+      "pair": 2,
+      "source_commit": "10dba3e2db26f0cf1653652cf4c9e9053362f5a9",
+      "executable_sha256": "174f9cb2b9bdb5c2626fc61b3e1d00868dfc882824ffa090f025bab06d8dde0a",
+      "wall_seconds": 34.544217125,
+      "cpu_total_seconds_including_process_table_observer": 114.76289500000001,
+      "load_average_1_5_15_before": [
+        4.32373046875,
+        6.005859375,
+        8.68505859375
+      ],
+      "memory_observation": {
+        "schema_version": 1,
+        "metric_kind": "unix-rss",
+        "scope": "ppid-process-table-samples-no-generation-proof",
+        "status": "sampled",
+        "reason": null,
+        "sample_interval_seconds": 0.1,
+        "samples": 221,
+        "failed_samples": 0,
+        "root_missing_samples": 0,
+        "parent_zero_samples": 0,
+        "no_descendant_observation_samples": 208,
+        "zero_descendant_memory_samples": 0,
+        "positive_descendant_memory_samples": 13,
+        "incomplete_samples": 0,
+        "identity_rejections": 0,
+        "parent_sampled_peak_bytes": 63668224,
+        "descendant_sampled_peak_bytes": 197394432,
+        "observed_peak_descendant_count": 3
+      },
+      "measurement_report_status": "partial",
+      "phases": [
+        {
+          "phase": "input-preparation",
+          "status": "observed-scopes",
+          "scopes": 3,
+          "scope_elapsed_sum_seconds": 13.967534082
+        },
+        {
+          "phase": "inspection",
+          "status": "observed-scopes",
+          "scopes": 6,
+          "scope_elapsed_sum_seconds": 0.001557707
+        },
+        {
+          "phase": "normalization",
+          "status": "observed-scopes",
+          "scopes": 7,
+          "scope_elapsed_sum_seconds": 0.949681751
+        },
+        {
+          "phase": "packaging",
+          "status": "observed-scopes",
+          "scopes": 2,
+          "scope_elapsed_sum_seconds": 1.386885624
+        },
+        {
+          "phase": "verification",
+          "status": "observed-scopes",
+          "scopes": 25,
+          "scope_elapsed_sum_seconds": 5.303536168
+        },
+        {
+          "phase": "publication",
+          "status": "observed-scopes",
+          "scopes": 3,
+          "scope_elapsed_sum_seconds": 1.906333124
+        }
+      ],
+      "tools": [
+        {
+          "tool": "ffmpeg",
+          "status": "unobserved",
+          "calls": 0,
+          "reported_duration_sum_seconds": 0.0,
+          "unsuccessful_calls": 0
+        },
+        {
+          "tool": "ffprobe",
+          "status": "unobserved",
+          "calls": 0,
+          "reported_duration_sum_seconds": 0.0,
+          "unsuccessful_calls": 0
+        },
+        {
+          "tool": "packager",
+          "status": "observed-calls",
+          "calls": 15,
+          "reported_duration_sum_seconds": 3.1430000000000002,
+          "unsuccessful_calls": 0
+        }
+      ],
+      "workspace_measurement": {
+        "status": "partial",
+        "scope": "selected-quiescent-stage-sets-not-all-live-command-stages",
+        "reason": "checkpoint-metadata-unavailable",
+        "checkpoints": 8,
+        "incomplete_checkpoints": 2,
+        "checkpoint_regular_file_bytes_max": 5042493490
+      },
+      "io_measurement": {
+        "status": "unmeasured",
+        "reason": "total-process-io-not-collected"
+      },
+      "source_unchanged": true,
+      "renditions": {
+        "dash": {
+          "video": 6,
+          "audio": 1
+        },
+        "hls": {
+          "video": 6,
+          "audio": 1
+        }
+      },
+      "initialization_pssh_counts": {
+        "dash": [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        "hls": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "quality": {
+        "dash": {
+          "schema_version": 2,
+          "required_depth": "native",
+          "scope": "comparison",
+          "passed": true,
+          "checks": {
+            "stream_metadata": "pass",
+            "packet_payloads_equal": true,
+            "packet_timing_equal": true
+          },
+          "decode_evidence": {
+            "status": "not-checked",
+            "reason": "not-requested"
+          },
+          "license_playback_verified": false,
+          "native_manifest": {
+            "schema_version": 1,
+            "scope": "manifest-only",
+            "profile": "dash-static-manifest",
+            "errors": 0,
+            "warnings": 0,
+            "truncated": false,
+            "incomplete": false,
+            "document_count": 1
+          }
+        },
+        "hls": {
+          "schema_version": 2,
+          "required_depth": "native",
+          "scope": "comparison",
+          "passed": true,
+          "checks": {
+            "stream_metadata": "pass",
+            "packet_payloads_equal": true,
+            "packet_timing_equal": true
+          },
+          "decode_evidence": {
+            "status": "not-checked",
+            "reason": "not-requested"
+          },
+          "license_playback_verified": false,
+          "native_manifest": {
+            "schema_version": 1,
+            "scope": "manifest-only",
+            "profile": "hls-base-manifest",
+            "errors": 0,
+            "warnings": 0,
+            "truncated": false,
+            "incomplete": false,
+            "document_count": 8
+          }
+        }
+      },
+      "drm_signaling": {
+        "dash": {
+          "systems": [
+            "playready",
+            "widevine"
+          ],
+          "verified": true
+        },
+        "hls": {
+          "systems": [
+            "fairplay"
+          ],
+          "verified": true
+        }
+      },
+      "independent_verification": {
+        "measurement": {
+          "status": "completed",
+          "elapsed_seconds": 12.871123167000007,
+          "exit_code": 0,
+          "memory": {
+            "schema_version": 1,
+            "metric_kind": "unix-rss",
+            "scope": "ppid-process-table-samples-no-generation-proof",
+            "status": "partial",
+            "reason": "descendant-memory-not-observed",
+            "sample_interval_seconds": 0.1,
+            "samples": 83,
+            "failed_samples": 0,
+            "root_missing_samples": 0,
+            "parent_zero_samples": 1,
+            "no_descendant_observation_samples": 83,
+            "zero_descendant_memory_samples": 0,
+            "positive_descendant_memory_samples": 0,
+            "incomplete_samples": 0,
+            "identity_rejections": 0,
+            "parent_sampled_peak_bytes": 25198592,
+            "descendant_sampled_peak_bytes": null,
+            "observed_peak_descendant_count": null
+          }
+        },
+        "quality": {
+          "dash": {
+            "schema_version": 2,
+            "required_depth": "native",
+            "scope": "comparison",
+            "passed": true,
+            "checks": {
+              "stream_metadata": "pass",
+              "packet_payloads_equal": true,
+              "packet_timing_equal": true
+            },
+            "decode_evidence": {
+              "status": "not-checked",
+              "reason": "not-requested"
+            },
+            "license_playback_verified": false,
+            "native_manifest": {
+              "schema_version": 1,
+              "scope": "manifest-only",
+              "profile": "dash-static-manifest",
+              "errors": 0,
+              "warnings": 0,
+              "truncated": false,
+              "incomplete": false,
+              "document_count": 1
+            }
+          },
+          "hls": {
+            "schema_version": 2,
+            "required_depth": "native",
+            "scope": "comparison",
+            "passed": true,
+            "checks": {
+              "stream_metadata": "pass",
+              "packet_payloads_equal": true,
+              "packet_timing_equal": true
+            },
+            "decode_evidence": {
+              "status": "not-checked",
+              "reason": "not-requested"
+            },
+            "license_playback_verified": false,
+            "native_manifest": {
+              "schema_version": 1,
+              "scope": "manifest-only",
+              "profile": "hls-base-manifest",
+              "errors": 0,
+              "warnings": 0,
+              "truncated": false,
+              "incomplete": false,
+              "document_count": 8
+            }
+          }
+        },
+        "drm_signaling": {
+          "dash": {
+            "systems": [
+              "playready",
+              "widevine"
+            ],
+            "verified": true
+          },
+          "hls": {
+            "systems": [
+              "fairplay"
+            ],
+            "verified": true
+          }
+        }
+      }
+    },
+    {
+      "variant": "optimized",
+      "pair": 2,
+      "source_commit": "55b760560bb7088fa39857ab32c6ff7c5d56b20c",
+      "executable_sha256": "199ccca4028edced57a0bc86ecef60b263b340711300a2adac5713aee77e4464",
+      "wall_seconds": 31.038987125000006,
+      "cpu_total_seconds_including_process_table_observer": 104.39514599999998,
+      "load_average_1_5_15_before": [
+        3.9931640625,
+        5.6787109375,
+        8.4248046875
+      ],
+      "memory_observation": {
+        "schema_version": 1,
+        "metric_kind": "unix-rss",
+        "scope": "ppid-process-table-samples-no-generation-proof",
+        "status": "sampled",
+        "reason": null,
+        "sample_interval_seconds": 0.1,
+        "samples": 198,
+        "failed_samples": 0,
+        "root_missing_samples": 0,
+        "parent_zero_samples": 0,
+        "no_descendant_observation_samples": 186,
+        "zero_descendant_memory_samples": 0,
+        "positive_descendant_memory_samples": 12,
+        "incomplete_samples": 0,
+        "identity_rejections": 0,
+        "parent_sampled_peak_bytes": 63209472,
+        "descendant_sampled_peak_bytes": 229801984,
+        "observed_peak_descendant_count": 2
+      },
+      "measurement_report_status": "partial",
+      "phases": [
+        {
+          "phase": "input-preparation",
+          "status": "observed-scopes",
+          "scopes": 3,
+          "scope_elapsed_sum_seconds": 12.129875792000002
+        },
+        {
+          "phase": "inspection",
+          "status": "observed-scopes",
+          "scopes": 6,
+          "scope_elapsed_sum_seconds": 0.002448709
+        },
+        {
+          "phase": "normalization",
+          "status": "observed-scopes",
+          "scopes": 7,
+          "scope_elapsed_sum_seconds": 0.91626925
+        },
+        {
+          "phase": "packaging",
+          "status": "observed-scopes",
+          "scopes": 2,
+          "scope_elapsed_sum_seconds": 1.42469175
+        },
+        {
+          "phase": "verification",
+          "status": "observed-scopes",
+          "scopes": 25,
+          "scope_elapsed_sum_seconds": 5.305478914
+        },
+        {
+          "phase": "publication",
+          "status": "observed-scopes",
+          "scopes": 3,
+          "scope_elapsed_sum_seconds": 1.903577083
+        }
+      ],
+      "tools": [
+        {
+          "tool": "ffmpeg",
+          "status": "unobserved",
+          "calls": 0,
+          "reported_duration_sum_seconds": 0.0,
+          "unsuccessful_calls": 0
+        },
+        {
+          "tool": "ffprobe",
+          "status": "unobserved",
+          "calls": 0,
+          "reported_duration_sum_seconds": 0.0,
+          "unsuccessful_calls": 0
+        },
+        {
+          "tool": "packager",
+          "status": "observed-calls",
+          "calls": 15,
+          "reported_duration_sum_seconds": 3.131,
+          "unsuccessful_calls": 0
+        }
+      ],
+      "workspace_measurement": {
+        "status": "partial",
+        "scope": "selected-quiescent-stage-sets-not-all-live-command-stages",
+        "reason": "checkpoint-metadata-unavailable",
+        "checkpoints": 6,
+        "incomplete_checkpoints": 2,
+        "checkpoint_regular_file_bytes_max": 5042493490
+      },
+      "io_measurement": {
+        "status": "unmeasured",
+        "reason": "total-process-io-not-collected"
+      },
+      "source_unchanged": true,
+      "renditions": {
+        "dash": {
+          "video": 6,
+          "audio": 1
+        },
+        "hls": {
+          "video": 6,
+          "audio": 1
+        }
+      },
+      "initialization_pssh_counts": {
+        "dash": [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        "hls": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "quality": {
+        "dash": {
+          "schema_version": 2,
+          "required_depth": "native",
+          "scope": "comparison",
+          "passed": true,
+          "checks": {
+            "stream_metadata": "pass",
+            "packet_payloads_equal": true,
+            "packet_timing_equal": true
+          },
+          "decode_evidence": {
+            "status": "not-checked",
+            "reason": "not-requested"
+          },
+          "license_playback_verified": false,
+          "native_manifest": {
+            "schema_version": 1,
+            "scope": "manifest-only",
+            "profile": "dash-static-manifest",
+            "errors": 0,
+            "warnings": 0,
+            "truncated": false,
+            "incomplete": false,
+            "document_count": 1
+          }
+        },
+        "hls": {
+          "schema_version": 2,
+          "required_depth": "native",
+          "scope": "comparison",
+          "passed": true,
+          "checks": {
+            "stream_metadata": "pass",
+            "packet_payloads_equal": true,
+            "packet_timing_equal": true
+          },
+          "decode_evidence": {
+            "status": "not-checked",
+            "reason": "not-requested"
+          },
+          "license_playback_verified": false,
+          "native_manifest": {
+            "schema_version": 1,
+            "scope": "manifest-only",
+            "profile": "hls-base-manifest",
+            "errors": 0,
+            "warnings": 0,
+            "truncated": false,
+            "incomplete": false,
+            "document_count": 8
+          }
+        }
+      },
+      "drm_signaling": {
+        "dash": {
+          "systems": [
+            "playready",
+            "widevine"
+          ],
+          "verified": true
+        },
+        "hls": {
+          "systems": [
+            "fairplay"
+          ],
+          "verified": true
+        }
+      },
+      "independent_verification": {
+        "measurement": {
+          "status": "completed",
+          "elapsed_seconds": 13.073283457999992,
+          "exit_code": 0,
+          "memory": {
+            "schema_version": 1,
+            "metric_kind": "unix-rss",
+            "scope": "ppid-process-table-samples-no-generation-proof",
+            "status": "partial",
+            "reason": "descendant-memory-not-observed",
+            "sample_interval_seconds": 0.1,
+            "samples": 82,
+            "failed_samples": 0,
+            "root_missing_samples": 0,
+            "parent_zero_samples": 0,
+            "no_descendant_observation_samples": 82,
+            "zero_descendant_memory_samples": 0,
+            "positive_descendant_memory_samples": 0,
+            "incomplete_samples": 0,
+            "identity_rejections": 0,
+            "parent_sampled_peak_bytes": 23707648,
+            "descendant_sampled_peak_bytes": null,
+            "observed_peak_descendant_count": null
+          }
+        },
+        "quality": {
+          "dash": {
+            "schema_version": 2,
+            "required_depth": "native",
+            "scope": "comparison",
+            "passed": true,
+            "checks": {
+              "stream_metadata": "pass",
+              "packet_payloads_equal": true,
+              "packet_timing_equal": true
+            },
+            "decode_evidence": {
+              "status": "not-checked",
+              "reason": "not-requested"
+            },
+            "license_playback_verified": false,
+            "native_manifest": {
+              "schema_version": 1,
+              "scope": "manifest-only",
+              "profile": "dash-static-manifest",
+              "errors": 0,
+              "warnings": 0,
+              "truncated": false,
+              "incomplete": false,
+              "document_count": 1
+            }
+          },
+          "hls": {
+            "schema_version": 2,
+            "required_depth": "native",
+            "scope": "comparison",
+            "passed": true,
+            "checks": {
+              "stream_metadata": "pass",
+              "packet_payloads_equal": true,
+              "packet_timing_equal": true
+            },
+            "decode_evidence": {
+              "status": "not-checked",
+              "reason": "not-requested"
+            },
+            "license_playback_verified": false,
+            "native_manifest": {
+              "schema_version": 1,
+              "scope": "manifest-only",
+              "profile": "hls-base-manifest",
+              "errors": 0,
+              "warnings": 0,
+              "truncated": false,
+              "incomplete": false,
+              "document_count": 8
+            }
+          }
+        },
+        "drm_signaling": {
+          "dash": {
+            "systems": [
+              "playready",
+              "widevine"
+            ],
+            "verified": true
+          },
+          "hls": {
+            "systems": [
+              "fairplay"
+            ],
+            "verified": true
+          }
+        }
+      }
+    }
+  ],
+  "observed_medians": {
+    "baseline": {
+      "wall_seconds": 34.80479166599999,
+      "cpu_seconds_including_observer": 114.76289500000001
+    },
+    "candidate": {
+      "wall_seconds": 31.090722,
+      "cpu_seconds_including_observer": 103.72996400000001
+    }
+  },
+  "pairs": [
+    {
+      "pair": 0,
+      "order": "baseline-candidate",
+      "wall_reduction_percent": 15.297278009696115,
+      "cpu_reduction_percent_including_observer": 11.482543409409274
+    },
+    {
+      "pair": 1,
+      "order": "candidate-baseline",
+      "wall_reduction_percent": 10.671144656292208,
+      "cpu_reduction_percent_including_observer": 8.98360512948424
+    },
+    {
+      "pair": 2,
+      "order": "baseline-candidate",
+      "wall_reduction_percent": 10.1470818901935,
+      "cpu_reduction_percent_including_observer": 9.034060181211034
+    }
+  ],
+  "observed_change": {
+    "wall_reduction_percent": 10.671144656292208,
+    "cpu_reduction_percent_including_observer": 9.613674350058876,
+    "packager_calls_before": 15,
+    "packager_calls_after": 15,
+    "ffmpeg_calls": 0,
+    "ffprobe_calls": 0,
+    "all_candidate_walls_below_all_baselines": true,
+    "all_candidate_cpus_below_all_baselines": true
+  },
+  "evidence_limits": [
+    "One Darwin arm64 host, three rotated matched pairs, uncontrolled filesystem cache and other host processes; load averages recorded per run. This is no universal speed guarantee.",
+    "Conversion wall timing excludes retained-input fingerprinting, output hash inspection, setup, network acquisition and the separately measured standalone verification.",
+    "CPU RUSAGE_CHILDREN totals include process-table observer subprocesses; they are not isolated drmr CPU.",
+    "RSS uses 100 ms process-table samples keyed by parent PID without process-generation proof, not a hard memory bound or an exact peak.",
+    "Workspace logical file bytes cover selected quiescent checkpoints only; incomplete checkpoints are retained in the report, not interpreted as zero.",
+    "Total physical process or filesystem I/O was not measured.",
+    "Scope duration sums overlap and do not equal wall time or CPU time.",
+    "No decoding was requested; native metadata, every sample payload and timing comparison, exact DRM declarations and native manifest lint passed for every output.",
+    "No DRM device or license-server playback was qualified. Encryption and packaging remain independent; ciphertext identity across outputs is not a criterion.",
+    "Parent and descendant RSS peaks are separate observations and must not be added as a simultaneous combined peak. No memory or disk improvement is claimed from these partial observations."
+  ],
+  "resource_observation_summary": {
+    "baseline": {
+      "parent_sampled_peak_bytes": {
+        "values": [
+          65929216,
+          63569920,
+          63668224
+        ],
+        "median": 63668224,
+        "min": 63569920,
+        "max": 65929216
+      },
+      "descendant_sampled_peak_bytes": {
+        "values": [
+          214614016,
+          217038848,
+          197394432
+        ],
+        "median": 214614016,
+        "min": 197394432,
+        "max": 217038848
+      },
+      "workspace_selected_checkpoint_regular_file_bytes_max": [
+        5042493490,
+        5042493490,
+        5042493490
+      ]
+    },
+    "optimized": {
+      "parent_sampled_peak_bytes": {
+        "values": [
+          63848448,
+          66830336,
+          63209472
+        ],
+        "median": 63848448,
+        "min": 63209472,
+        "max": 66830336
+      },
+      "descendant_sampled_peak_bytes": {
+        "values": [
+          215334912,
+          229916672,
+          229801984
+        ],
+        "median": 229801984,
+        "min": 215334912,
+        "max": 229916672
+      },
+      "workspace_selected_checkpoint_regular_file_bytes_max": [
+        5042493490,
+        5042493490,
+        5042493490
+      ]
+    }
+  }
+}

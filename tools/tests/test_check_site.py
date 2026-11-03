@@ -107,7 +107,7 @@ class Site(unittest.TestCase):
         self.site = self.root / "site"
         shutil.copytree(SOURCE / "site", self.site)
         self.repo = self.root / "repository"
-        for relative in ("README.md", "LICENSE", "docs/usage.md", "docs/conversion-support.md", "docs/media-processing.md", "docs/requirements.md", "docs/windows.md", "docs/desktop.md", "docs/resources.md", "crates/drmr-desktop/icons/icon.svg"):
+        for relative in ("README.md", "CHANGELOG.md", "LICENSE", "docs/usage.md", "docs/conversion-support.md", "docs/media-processing.md", "docs/requirements.md", "docs/windows.md", "docs/desktop.md", "docs/resources.md", "crates/drmr-desktop/icons/icon.svg"):
             dest = self.repo / relative
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(SOURCE / relative, dest)

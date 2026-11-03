@@ -1,4 +1,4 @@
-//! Standalone MP4 from qualified transport streams retains the complete selected tracks.
+//! Standalone MP4 preserves complete tracks and only invertible manifest selection metadata.
 use super::{
     ConversionError, ConversionReport, ConversionRequest, Converter, InputKeys, Inspection,
     Prepared, TrackKind, VerificationSource, copy_private, inspection, prepare_presentation,
@@ -38,6 +38,11 @@ pub(super) fn complete_track_views(
         && movie.tracks.len() == 2
         && movie.tracks.iter().any(|track| {
             track.edits.len() == 2
+                // A finite joint CBCS input is normalized through independently
+                // verified track views, rather than relying on cross-track tool state.
+                || (track.codec == *b"mp4a"
+                    && track.protection.scheme == super::super::native_media::Scheme::Cbcs
+                    && !track.edits.is_empty())
                 || (track.codec == *b"mp4a"
                     && track.timescale == 90_000
                     && track.sample_entry_metadata.sample_rate == Some(44_100))
@@ -49,25 +54,19 @@ pub(super) fn complete_track_views(
     }
 }
 
-fn language(value: &str) -> Result<String, ConversionError> {
-    let value = value.to_ascii_lowercase();
-    Ok(match value.as_str() {
-        "en" => "eng",
-        "ja" => "jpn",
-        "fr" => "fra",
-        "de" => "deu",
-        "es" => "spa",
-        "it" => "ita",
-        "pt" => "por",
-        "zh" => "zho",
-        "ko" => "kor",
-        "ru" => "rus",
-        "ar" => "ara",
-        "nl" => "nld",
-        value if value.len() == 3 && value.bytes().all(|b| b.is_ascii_lowercase()) => value,
-        _ => return Err(ConversionError("mp4-audio-language-not-supported")),
+use super::metadata::mp4_language as language;
+
+fn validate_mp4_output_keys(request: &ConversionRequest<'_>) -> Result<(), ConversionError> {
+    if matches!(
+        request.target,
+        TargetProtection::Cenc | TargetProtection::Cbcs
+    ) != request.output_key.is_some()
+        || request.hls_output_key.is_some()
+        || request.hls_key_uri.is_some()
+    {
+        return Err(ConversionError("output-key-role-mismatch"));
     }
-    .to_owned())
+    Ok(())
 }
 
 pub(super) fn declared_language(source: &Prepared) -> Result<String, ConversionError> {
@@ -152,9 +151,44 @@ pub(super) fn supported_tracks(prepared: &[Prepared]) -> bool {
             })
 }
 
+/// Restore only selections created from the same complete private MP4 snapshot.
+pub(super) fn complete_tracks(prepared: &[Prepared]) -> Option<Vec<super::LocalTrack>> {
+    let first = prepared.first()?.complete_track.as_ref()?;
+    prepared
+        .iter()
+        .enumerate()
+        .map(|(index, track)| {
+            let selected = track.complete_track.as_ref()?;
+            (selected.source == first.source
+                && selected.index == index
+                && selected.kind == track.report.tracks[0].kind
+                && track.metadata.origin == super::metadata::Origin::Container
+                && track.transport_index.is_none()
+                && track.playlist_reference.is_none()
+                && !track.dash_reference)
+                .then(|| super::LocalTrack {
+                    source: selected.source.clone(),
+                    index: selected.index,
+                    kind: selected.kind,
+                })
+        })
+        .collect()
+}
+
 pub(super) fn canonical_tracks(prepared: &[Prepared], format: inspection::InputFormat) -> bool {
+    let joint_manifest = joint_manifest_tracks(prepared, format);
+    if format != inspection::InputFormat::Mp4
+        && !joint_manifest
+        && prepared
+            .iter()
+            .any(|track| track.metadata.audio.is_some() || track.metadata.audio_group.is_some())
+    {
+        return false;
+    }
     !prepared.is_empty()
-        && (prepared.len() == 1 || (format == inspection::InputFormat::Mp4 && prepared.len() == 2))
+        && (prepared.len() == 1
+            || (format == inspection::InputFormat::Mp4 && prepared.len() == 2)
+            || joint_manifest)
         && prepared.iter().all(|track| {
             track.transport_index.is_none()
                 && track.index == 0
@@ -167,7 +201,11 @@ pub(super) fn canonical_tracks(prepared: &[Prepared], format: inspection::InputF
             .iter()
             .filter(|track| track.audio_presentation.is_some())
             .count()
-            == 1
+            <= 1
+        && (joint_manifest
+            || prepared
+                .iter()
+                .any(|track| track.audio_presentation.is_some()))
         && [TrackKind::Video, TrackKind::Audio]
             .into_iter()
             .all(|kind| {
@@ -180,7 +218,205 @@ pub(super) fn canonical_tracks(prepared: &[Prepared], format: inspection::InputF
         && supported_metadata(prepared)
 }
 
+fn container_audio_ordinal(audio: &super::metadata::Rendition, tracks: usize) -> Option<usize> {
+    (0..tracks).find(|&ordinal| {
+        *audio
+            == super::metadata::container_rendition(
+                ordinal,
+                audio.language.clone(),
+                audio.channels.clone(),
+            )
+    })
+}
+
+fn sort_container_tracks(prepared: &mut [Prepared], format: inspection::InputFormat) {
+    let audio_first = matches!(
+        format,
+        inspection::InputFormat::Dash | inspection::InputFormat::Hls
+    ) && canonical_tracks(prepared, format)
+        && prepared
+            .iter()
+            .find(|track| track.report.tracks[0].kind == TrackKind::Audio)
+            .and_then(|track| track.metadata.audio.as_ref())
+            .and_then(|audio| container_audio_ordinal(audio, prepared.len()))
+            == Some(0);
+    prepared.sort_by_key(|track| {
+        let kind = track.report.tracks[0].kind;
+        if audio_first {
+            u8::from(kind != TrackKind::Audio)
+        } else {
+            super::kind_order(kind)
+        }
+    });
+}
+
+fn joint_manifest_tracks(prepared: &[Prepared], format: inspection::InputFormat) -> bool {
+    if !matches!(
+        format,
+        inspection::InputFormat::Dash | inspection::InputFormat::Hls
+    ) || prepared.len() != 2
+        || [TrackKind::Video, TrackKind::Audio]
+            .into_iter()
+            .any(|kind| {
+                prepared
+                    .iter()
+                    .filter(|track| track.report.tracks[0].kind == kind)
+                    .count()
+                    != 1
+            })
+    {
+        return false;
+    }
+    let audio = prepared
+        .iter()
+        .find(|track| track.report.tracks[0].kind == TrackKind::Audio)
+        .expect("one audio");
+    let expected = audio.metadata.audio.as_ref();
+    if expected.is_some_and(|value| container_audio_ordinal(value, prepared.len()).is_none()) {
+        return false;
+    }
+    prepared.iter().all(|track| {
+        track
+            .metadata
+            .audio
+            .as_ref()
+            .is_none_or(|value| Some(value) == expected)
+            && track
+                .metadata
+                .audio_group
+                .as_ref()
+                .is_none_or(|group| expected.is_some_and(|audio| &audio.group == group))
+    })
+}
+
+fn standalone_audio_ordinal(prepared: &[Prepared]) -> Option<usize> {
+    if prepared
+        .iter()
+        .any(|track| track.metadata.origin != super::metadata::Origin::Container)
+    {
+        return None;
+    }
+    if prepared.iter().any(|track| track.complete_track.is_some()) {
+        return complete_tracks(prepared)?
+            .into_iter()
+            .find(|track| track.kind == TrackKind::Audio)
+            .map(|track| track.index);
+    }
+    let first = prepared.first()?;
+    if prepared
+        .iter()
+        .enumerate()
+        .any(|(index, track)| track.source != first.source || track.index != index)
+    {
+        return None;
+    }
+    prepared
+        .iter()
+        .find(|track| track.report.tracks[0].kind == TrackKind::Audio)
+        .map(|track| track.index)
+}
+
+pub(super) fn verify_manifest_order(
+    output: inspection::OutputFormat,
+    source: &[Prepared],
+    result: &[Prepared],
+) -> Result<(), ConversionError> {
+    if !manifest_comparison(output, source, result) {
+        return Ok(());
+    }
+    let expected = source
+        .iter()
+        .find(|track| track.report.tracks[0].kind == TrackKind::Audio)
+        .and_then(|track| track.metadata.audio.as_ref())
+        .and_then(|audio| container_audio_ordinal(audio, source.len()));
+    if expected.is_some() && standalone_audio_ordinal(result) != expected {
+        return Err(ConversionError("presentation-metadata-mismatch"));
+    }
+    Ok(())
+}
+
+pub(super) fn manifest_comparison(
+    output: inspection::OutputFormat,
+    source: &[Prepared],
+    result: &[Prepared],
+) -> bool {
+    let format = if source
+        .iter()
+        .all(|track| track.metadata.origin == super::metadata::Origin::Dash)
+    {
+        inspection::InputFormat::Dash
+    } else if source
+        .iter()
+        .all(|track| track.metadata.origin == super::metadata::Origin::Hls)
+    {
+        inspection::InputFormat::Hls
+    } else {
+        return false;
+    };
+    output == inspection::OutputFormat::Mp4
+        && joint_manifest_tracks(source, format)
+        && canonical_tracks(source, format)
+        && result.iter().all(|track| {
+            track.transport_index.is_none()
+                && !track.dash_reference
+                && track.playlist_reference.is_none()
+        })
+}
+
+pub(super) fn manifest_languages(
+    prepared: &[Prepared],
+) -> Result<Vec<Option<String>>, ConversionError> {
+    let format = if prepared
+        .iter()
+        .all(|track| track.metadata.origin == super::metadata::Origin::Dash)
+    {
+        inspection::InputFormat::Dash
+    } else if prepared
+        .iter()
+        .all(|track| track.metadata.origin == super::metadata::Origin::Hls)
+    {
+        inspection::InputFormat::Hls
+    } else {
+        return Ok(vec![None; prepared.len()]);
+    };
+    if !joint_manifest_tracks(prepared, format) || !canonical_tracks(prepared, format) {
+        return Ok(vec![None; prepared.len()]);
+    }
+    prepared
+        .iter()
+        .map(|track| {
+            track
+                .metadata
+                .audio
+                .as_ref()
+                .map(|_| declared_language(track))
+                .transpose()
+        })
+        .collect()
+}
+
 impl Converter {
+    pub(super) fn standalone_metadata_supported(
+        &self,
+        prepared: &[Prepared],
+        keys: &InputKeys,
+    ) -> Result<bool, ConversionError> {
+        for source in prepared {
+            if source.metadata.audio.is_some() {
+                let profile = self.backend.profile_stream_keys(
+                    &source.media,
+                    source.index,
+                    Some(super::super::keys::ProbeKeys::All(keys)),
+                )?;
+                let physical = language(profile["language"].as_str().unwrap_or("und"))?;
+                if physical != "und" && physical != declared_language(source)? {
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(true)
+    }
+
     fn transport_mp4_parts(
         &self,
         prepared: &[Prepared],
@@ -250,22 +486,17 @@ impl Converter {
                 "mp4-requires-one-video-and-audio-selection",
             ));
         }
-        if matches!(
-            request.target,
-            TargetProtection::Cenc | TargetProtection::Cbcs
-        ) != request.output_key.is_some()
-            || request.hls_output_key.is_some()
-            || request.hls_key_uri.is_some()
-        {
-            return Err(ConversionError("output-key-role-mismatch"));
+        if !transport && !self.standalone_metadata_supported(&prepared, request.input_keys)? {
+            return Err(ConversionError("presentation-selection-not-representable"));
         }
+        validate_mp4_output_keys(request)?;
         for source in &prepared {
             if let Some(audio) = &source.metadata.audio {
                 language(&audio.language)?;
             }
         }
         let destination = super::destination(request.output)?;
-        prepared.sort_by_key(|p| super::kind_order(p.report.tracks[0].kind));
+        sort_container_tracks(&mut prepared, input.format);
         let work = workspace()?;
         let parts = self.transport_mp4_parts(&prepared, request, work.path())?;
         let candidate = work.path().join("result.mp4");
