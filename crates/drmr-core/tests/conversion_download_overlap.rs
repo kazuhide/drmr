@@ -51,6 +51,9 @@ fn resources() -> &'static BTreeMap<String, Vec<u8>> {
     })
 }
 
+// This bounds a causal ordering handshake, not the native parser's speed.
+const OVERLAP_BARRIER_WAIT: Duration = Duration::from_secs(15);
+
 fn last_video_resource() -> &'static str {
     resources()
         .keys()
@@ -149,7 +152,7 @@ impl Server {
                         let last = target == last_video_resource();
                         if fetch_failure && last {
                             witness.held.set();
-                            witness.prepared.wait(Some(Duration::from_secs(3)));
+                            witness.prepared.wait(Some(OVERLAP_BARRIER_WAIT));
                             let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
                             return;
                         }
@@ -165,7 +168,7 @@ impl Server {
                             witness.held.set();
                             if barrier {
                                 observed.store(
-                                    witness.prepared.wait(Some(Duration::from_secs(3))),
+                                    witness.prepared.wait(Some(OVERLAP_BARRIER_WAIT)),
                                     Ordering::Release,
                                 );
                             }
