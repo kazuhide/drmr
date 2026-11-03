@@ -15,6 +15,9 @@ use std::sync::{
 use std::thread::Scope;
 use std::time::{Duration, Instant};
 
+mod completion;
+pub(crate) use completion::run_completion_order;
+
 /// The cap of the default pool size (`concurrency.default_workers`); an explicit value is
 /// bounded separately, at 64.
 pub const DEFAULT_WORKERS_CAP: usize = 32;
@@ -39,6 +42,7 @@ struct StopState {
     set: AtomicBool,
     wait_gate: Mutex<()>,
     changed: Condvar,
+    parents: Option<[Stop; 2]>,
 }
 
 impl fmt::Debug for Stop {
@@ -53,6 +57,17 @@ impl Stop {
         Stop::default()
     }
 
+    /// One internal child observes the caller and pool-failure flags without
+    /// owning either flag. Construction only links already existing parents.
+    pub(crate) fn linked(caller: &Self, abort: &Self) -> Self {
+        Self {
+            inner: Arc::new(StopState {
+                parents: Some([caller.clone(), abort.clone()]),
+                ..StopState::default()
+            }),
+        }
+    }
+
     /// Set the flag and wake every waiter.
     pub fn set(&self) {
         // Serialize with the waiter's predicate check and sleep registration.
@@ -65,6 +80,11 @@ impl Stop {
     /// Whether the flag is set.
     pub fn is_set(&self) -> bool {
         self.inner.set.load(Ordering::Acquire)
+            || self
+                .inner
+                .parents
+                .as_ref()
+                .is_some_and(|parents| parents.iter().any(Stop::is_set))
     }
 
     /// Block until the flag is set or `timeout` passes (`None`: no limit); returns whether it
@@ -75,11 +95,20 @@ impl Stop {
         while !self.is_set() {
             match deadline {
                 None => {
-                    guard = self
-                        .inner
-                        .changed
-                        .wait(guard)
-                        .unwrap_or_else(PoisonError::into_inner);
+                    if self.inner.parents.is_some() {
+                        guard = self
+                            .inner
+                            .changed
+                            .wait_timeout(guard, Duration::from_millis(20))
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .0;
+                    } else {
+                        guard = self
+                            .inner
+                            .changed
+                            .wait(guard)
+                            .unwrap_or_else(PoisonError::into_inner);
+                    }
                 }
                 Some(deadline) => {
                     let now = Instant::now();
@@ -89,7 +118,14 @@ impl Stop {
                     guard = self
                         .inner
                         .changed
-                        .wait_timeout(guard, deadline - now)
+                        .wait_timeout(
+                            guard,
+                            if self.inner.parents.is_some() {
+                                (deadline - now).min(Duration::from_millis(20))
+                            } else {
+                                deadline - now
+                            },
+                        )
                         .unwrap_or_else(PoisonError::into_inner)
                         .0;
                 }

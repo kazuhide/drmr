@@ -16,6 +16,8 @@ pub use download::{DownloadedSource, preflight_download_output};
 mod audio;
 mod audio_presentation;
 mod backend;
+#[cfg(any(target_os = "macos", test))]
+mod buffered_copy;
 pub mod configuration;
 pub(crate) mod dash;
 pub mod dash_addressing;
@@ -67,8 +69,12 @@ use crate::{
     toolrun::ToolRunner,
 };
 use backend::Backend;
+#[cfg(target_os = "macos")]
+use buffered_copy::copy as stream_copy;
 pub use keys::{ContentKey, InputKeys, OutputKey};
 use serde::Serialize;
+#[cfg(not(target_os = "macos"))]
+use std::io::copy as stream_copy;
 use std::{
     fs::{self, File},
     io::Read,
@@ -681,7 +687,7 @@ fn copy_private(source: &Path, destination: &Path) -> Result<(), ConversionError
     let source = files::regular_input(source)?;
     validate_held_input(&source)?;
     let mut output = files::create_new(destination)?;
-    let count = std::io::copy(&mut source.take(MAX_MEDIA_BYTES + 1), &mut output)
+    let count = stream_copy(&mut source.take(MAX_MEDIA_BYTES + 1), &mut output)
         .map_err(|_| ConversionError("media-copy-failed"))?;
     if count > MAX_MEDIA_BYTES {
         return Err(ConversionError("media-size-limit"));

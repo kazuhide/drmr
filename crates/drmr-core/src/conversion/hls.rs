@@ -85,6 +85,7 @@ struct Playlist {
     clock: Option<super::timing::FragmentClock>,
     singleton_tags: std::collections::BTreeSet<String>,
     target_seconds: Option<u64>,
+    acquired_resources: Option<std::collections::BTreeMap<PathBuf, ([u8; 32], u64)>>,
 }
 #[derive(Default)]
 struct Cipher<'a> {
@@ -312,10 +313,19 @@ impl Playlist {
             && cipher.sample.is_none()
         {
             let _permit = self.native_permit()?;
-            self.native_scanner
+            let scanner = self
+                .native_scanner
                 .as_mut()
-                .ok_or(ConversionError("ts-original-evidence-required"))?
-                .copy_segment(original, copied, &self.stop)?;
+                .ok_or(ConversionError("ts-original-evidence-required"))?;
+            if let Some(resources) = &self.acquired_resources {
+                let expected = resources
+                    .get(original)
+                    .copied()
+                    .ok_or(ConversionError("download-source-changed"))?;
+                scanner.segment_expected(original, &self.stop, expected)?;
+            } else {
+                scanner.copy_segment(original, copied, &self.stop)?;
+            }
             Ok(true)
         } else {
             match self.localization {
@@ -455,7 +465,14 @@ impl Playlist {
                 "ts"
             }
         );
-        let copied = stage.join(&name);
+        // Acquired native evidence grants no execution authority. Read the
+        // fully received original twice through its creation-bound scanner;
+        // ordinary localization still owns an exclusive media snapshot.
+        let copied = if self.acquired_resources.is_some() {
+            original.clone()
+        } else {
+            stage.join(&name)
+        };
         let scanned = self.copy_resource(&original, &copied, cipher, map)?;
         let snapshot =
             File::open(&copied).map_err(|_| ConversionError("hls-resource-unreadable"))?;
@@ -923,12 +940,68 @@ pub(super) fn localize_native_transport(
     Ok(Some(completed.segmented))
 }
 
+pub(super) fn localize_acquired_transport(
+    path: &Path,
+    stage: &Path,
+    backend: &super::backend::Backend,
+    expected: ([u8; 32], u64),
+    resources: &std::collections::BTreeMap<PathBuf, ([u8; 32], u64)>,
+) -> Result<Segmented, ConversionError> {
+    let bytes = super::files::read_manifest(path)
+        .map_err(|_| ConversionError("download-source-changed"))?;
+    let mut hash = crate::sha256::Sha256::new();
+    hash.update(&bytes);
+    if bytes.len() as u64 != expected.1 || hash.finalize() != expected.0 {
+        return Err(ConversionError("download-source-changed"));
+    }
+    let text = std::str::from_utf8(&bytes).map_err(|_| ConversionError("hls-invalid-utf8"))?;
+    for line in text.lines().map(str::trim) {
+        if line.starts_with("#EXT-X-MAP:") || line.starts_with("#EXT-X-SESSION-KEY:") {
+            return Err(ConversionError("source-admission-mismatch"));
+        }
+        if let Some(value) = line.strip_prefix("#EXT-X-KEY:") {
+            let attributes = attributes(value)?;
+            if attributes.get("METHOD") != Some("NONE") {
+                return Err(ConversionError("source-admission-mismatch"));
+            }
+        }
+    }
+    localize_body(
+        path,
+        stage,
+        &HlsInputKeys::default(),
+        backend,
+        Localization::NativeTransport,
+        Some(AcquiredInput {
+            bytes,
+            resources: resources.clone(),
+        }),
+    )
+    .map(|completed| completed.segmented)
+}
+
+struct AcquiredInput {
+    bytes: Vec<u8>,
+    resources: std::collections::BTreeMap<PathBuf, ([u8; 32], u64)>,
+}
+
 fn localize_with(
     path: &Path,
     stage: &Path,
     keys: &HlsInputKeys,
     backend: &super::backend::Backend,
     localization: Localization,
+) -> Result<Completed, ConversionError> {
+    localize_body(path, stage, keys, backend, localization, None)
+}
+
+fn localize_body(
+    path: &Path,
+    stage: &Path,
+    keys: &HlsInputKeys,
+    backend: &super::backend::Backend,
+    localization: Localization,
+    body: Option<AcquiredInput>,
 ) -> Result<Completed, ConversionError> {
     if !localization.joined() {
         backend.check_cancelled()?;
@@ -944,8 +1017,14 @@ fn localize_with(
     let root = parent
         .canonicalize()
         .map_err(|_| ConversionError("input-unreadable"))?;
-    let bytes = super::files::read_manifest(path)
-        .map_err(|_| ConversionError("hls-manifest-unreadable-or-too-large"))?;
+    let (bytes, acquired_resources) = match body {
+        Some(body) => (body.bytes, Some(body.resources)),
+        None => (
+            super::files::read_manifest(path)
+                .map_err(|_| ConversionError("hls-manifest-unreadable-or-too-large"))?,
+            None,
+        ),
+    };
     let text = std::str::from_utf8(&bytes).map_err(|_| ConversionError("hls-invalid-utf8"))?;
     let mut lines = text
         .trim_start_matches('\u{feff}')
@@ -986,6 +1065,7 @@ fn localize_with(
         clock: None,
         singleton_tags: std::collections::BTreeSet::new(),
         target_seconds,
+        acquired_resources,
     };
     let mut localizer = Localizer {
         root,
@@ -1248,7 +1328,7 @@ fn append_bounded(
     output: &mut impl Write,
     remaining: u64,
 ) -> Result<(), ConversionError> {
-    std::io::copy(&mut input.take(remaining), output)
+    super::stream_copy(&mut input.take(remaining), output)
         .map_err(|_| ConversionError("media-copy-failed"))?;
     let mut extra = [0];
     if input
@@ -1399,6 +1479,52 @@ mod resource_tests {
             );
         }
         output
+    }
+
+    #[test]
+    fn acquired_native_transport_retains_original_resources_without_private_media_copies() {
+        let root = super::super::files::Stage::new(None).unwrap();
+        let source = clear_fixture(&root.path().join("clear"), true);
+        let digest = |bytes: &[u8]| {
+            let mut hash = crate::sha256::Sha256::new();
+            hash.update(bytes);
+            (hash.finalize(), bytes.len() as u64)
+        };
+        let manifest = super::super::files::read_manifest(&source).unwrap();
+        let source_root = source.parent().unwrap().canonicalize().unwrap();
+        let originals = std::str::from_utf8(&manifest)
+            .unwrap()
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .map(|line| {
+                let path = local_resource(&source_root, line).unwrap();
+                let expected = digest(&fs::read(&path).unwrap());
+                (path, expected)
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let stage = root.path().join("acquired");
+        super::super::files::create_dir(&stage).unwrap();
+        let view = localize_acquired_transport(
+            &source,
+            &stage,
+            &no_tool_backend(),
+            digest(&manifest),
+            &originals,
+        )
+        .unwrap();
+        assert_eq!(view.resources.len(), originals.len());
+        assert!(view.transport.is_some() && !view.native.is_empty());
+        for (path, _) in view.resources {
+            assert!(originals.contains_key(&path), "acquired media was copied");
+        }
+        for entry in fs::read_dir(stage).unwrap() {
+            let path = entry.unwrap().path();
+            assert_eq!(
+                path.extension().and_then(|value| value.to_str()),
+                Some("m3u8")
+            );
+        }
     }
 
     #[test]

@@ -110,6 +110,31 @@ impl NativeScanner {
         };
         self.scan_receipt(receipt, stop, observer)
     }
+    /// Scan an original resource without copying it; both passes check its creation hash.
+    pub fn segment_expected(
+        &mut self,
+        source: &Path,
+        stop: &Stop,
+        expected: ([u8; 32], u64),
+    ) -> Result<(), ConversionError> {
+        if let Some(error) = self.failed {
+            return Err(error);
+        }
+        let receipt = match receipt::Receipt::read(
+            &self.admission,
+            &self.receipt_context,
+            source,
+            expected,
+            stop,
+        ) {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                self.failed = Some(error);
+                return Err(error);
+            }
+        };
+        self.scan_receipt(receipt, stop, &mut |_, _, _, _, _| Ok(()))
+    }
     fn scan_receipt<F>(
         &mut self,
         receipt: receipt::Receipt,

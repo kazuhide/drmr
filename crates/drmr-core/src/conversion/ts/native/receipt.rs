@@ -1,4 +1,4 @@
-//! One-use proof binding an admitted private copy to its exact scanner state.
+//! One-use proof binding admitted source bytes to their exact scanner state.
 use super::{Admission, ConversionError, Stop};
 use crate::{native::FileIdentity, sha256::Sha256};
 use std::{
@@ -125,7 +125,10 @@ pub(super) struct Receipt {
     before: Admission,
     pub after: Admission,
     context: Arc<()>,
-    copy: Created,
+    path: PathBuf,
+    identity: FileIdentity,
+    held: Option<File>,
+    copy: Option<Created>,
     digest: [u8; 32],
     length: u64,
 }
@@ -180,9 +183,54 @@ impl Receipt {
             before: before.clone(),
             after,
             context: Arc::clone(context),
-            copy,
+            path: copy.path.clone(),
+            identity: copy.identity,
+            held: None,
+            copy: Some(copy),
             digest,
             length,
+        })
+    }
+    /// Read-only admission of a fully fetched resource, bound to its creation hash.
+    pub(super) fn read(
+        before: &Admission,
+        context: &Arc<()>,
+        source: &Path,
+        expected: ([u8; 32], u64),
+        stop: &Stop,
+    ) -> Result<Self, ConversionError> {
+        stopped(stop)?;
+        let file = super::super::super::files::regular_input(source)?;
+        let identity = FileIdentity::read(&file).map_err(|_| BAD)?;
+        unchanged(source, &file, identity, expected.1)?;
+        let mut after = before.clone();
+        let mut input = BufReader::with_capacity(
+            BUFFER_BYTES,
+            CheckedRead {
+                file,
+                digest: Sha256::new(),
+                count: 0,
+                length: expected.1,
+            },
+        );
+        after.segment_reader(&mut input, expected.1, stop)?;
+        eof(&mut input)?;
+        let input = input.into_inner();
+        unchanged(source, &input.file, identity, expected.1)?;
+        if input.count != expected.1 || input.digest.finalize() != expected.0 {
+            return Err(BAD);
+        }
+        stopped(stop)?;
+        Ok(Self {
+            before: before.clone(),
+            after,
+            context: Arc::clone(context),
+            path: source.into(),
+            identity,
+            held: Some(input.file),
+            copy: None,
+            digest: expected.0,
+            length: expected.1,
         })
     }
     pub fn matches(&self, before: &Admission, context: &Arc<()>) -> bool {
@@ -190,8 +238,8 @@ impl Receipt {
     }
     pub fn open(&self, stop: &Stop) -> Result<CheckedRead, ConversionError> {
         stopped(stop)?;
-        let file = super::super::super::files::regular_input(&self.copy.path)?;
-        unchanged(&self.copy.path, &file, self.copy.identity, self.length)?;
+        let file = super::super::super::files::regular_input(&self.path)?;
+        self.check(&file)?;
         Ok(CheckedRead {
             file,
             digest: Sha256::new(),
@@ -202,20 +250,24 @@ impl Receipt {
     pub fn verify(&self, mut input: CheckedRead, stop: &Stop) -> Result<(), ConversionError> {
         stopped(stop)?;
         eof(&mut input)?;
-        unchanged(
-            &self.copy.path,
-            &input.file,
-            self.copy.identity,
-            self.length,
-        )?;
+        self.check(&input.file)?;
         if input.count != self.length || input.digest.finalize() != self.digest {
             return Err(BAD);
         }
         stopped(stop)
     }
     pub fn accept(mut self) -> Admission {
-        self.copy.keep = true;
+        if let Some(copy) = self.copy.as_mut() {
+            copy.keep = true;
+        }
         self.after
+    }
+    fn check(&self, file: &File) -> Result<(), ConversionError> {
+        unchanged(&self.path, file, self.identity, self.length)?;
+        if let Some(held) = &self.held {
+            unchanged(&self.path, held, self.identity, self.length)?;
+        }
+        Ok(())
     }
 }
 

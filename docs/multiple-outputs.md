@@ -292,6 +292,31 @@ routes. A separate `verify` process always reads and checks the source and resul
 afresh; neither an earlier report nor this command's in-memory data replaces
 that verification. See [Unreleased changes](../CHANGELOG.md#unreleased).
 
+### Checking complete renditions during download
+
+Development for 1.3 can check a complete clear TS HLS rendition on its download
+worker while other renditions are still being fetched. The same command reuses
+those native input checks after downloading. This is automatic for compatible
+multiple-output conversions; no additional CLI option is needed.
+
+The profile requires at least two fMP4 HLS/DASH outputs using native checks and
+`auto` or `stitch`, at least two download workers, and at least 2 GiB of command
+memory capacity. Contended reservations fall back to the usual acquisition
+path. Single outputs, additional decoding, `segments`, encrypted HLS and other
+input containers use their existing acquisition and input-checking paths.
+
+Downloads continue to refill the bounded queue while an earlier rendition is
+being checked. Only closed, completely downloaded resources are inspected. Both native readers
+check the bytes they consume against the hashes and sizes recorded during
+acquisition. They read the retained TS files directly; the private temporary workspace
+holds small playlist projections and inspection data. After the complete source
+is downloaded, drmr still checks
+its files and their identities, verifies the final master playlist's track
+metadata, and builds the conversion plan. Joining, normalization and encryption
+start after acquisition completes. Each final output and a later standalone
+`verify` retain their full checks. This input data is held for one operation;
+it is not saved as a reusable validation result in a plan.
+
 For an already downloaded or local source, replace the URL with its entrypoint
 and omit `--download-dir`:
 

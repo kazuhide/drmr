@@ -577,13 +577,14 @@ pub fn convert_direct(args: &ConvertArgs) -> ExitCode {
             }
             Input::Url(url) => {
                 session.progress.mark("acquisition");
-                let downloaded = converter.download_source(
+                let downloaded = converter.download_bundle_source(
                     url,
                     args.download_dir
                         .as_deref()
                         .expect("download directory checked"),
                     output,
                     policy.as_ref().expect("fetch policy checked"),
+                    &outputs,
                 )?;
                 session.progress.mark("input-preparation");
                 session.progress.source_retained();

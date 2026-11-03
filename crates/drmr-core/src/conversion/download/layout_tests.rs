@@ -144,6 +144,8 @@ fn acquire_redirected(
         playlist_count: 0,
         layout_mode: mode,
         mapper: None,
+        native_plans: None,
+        backend: None,
     };
     let (entrypoint, contents) = graph.entrypoint(root)?;
     graph.fetch_media(2, &Stop::new())?;
@@ -170,6 +172,7 @@ fn acquire_redirected(
     Ok(DownloadedSource {
         entrypoint: seal.owned.path().join(entrypoint),
         seal: Arc::new(seal),
+        native: None,
     })
 }
 

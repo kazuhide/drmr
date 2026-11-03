@@ -1,4 +1,5 @@
 //! Joint, codec-preserving presentations with independent evidence for every source stream.
+pub(in crate::conversion) mod acquired;
 mod bundle_source;
 mod bundle_verification;
 mod dash_preparation;
@@ -50,7 +51,7 @@ struct CompleteTrack {
     kind: TrackKind,
 }
 #[derive(Clone)]
-struct Prepared {
+pub(in crate::conversion) struct Prepared {
     metadata: metadata::Metadata,
     outer_protection: SourceProtection,
     compatibility: Vec<SourceCompatibilityNote>,

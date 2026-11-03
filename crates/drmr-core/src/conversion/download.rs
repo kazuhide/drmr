@@ -5,6 +5,7 @@ mod dash;
 mod input;
 #[cfg(test)]
 mod layout_tests;
+pub(in crate::conversion) mod native;
 use input::{Acquired, Entrypoint};
 mod owned;
 pub(super) mod stream;
@@ -13,7 +14,7 @@ use owned::OwnedDownload;
 
 use super::{ConversionError, ConversionReport, ConversionRequest, Converter, files};
 use crate::{
-    concurrency::{Pool, Stop, Unit, run_ordered},
+    concurrency::{Pool, Stop, Unit, run_completion_order, run_ordered},
     resources::{Budget, Claim, ContextPermit, Hardware, Workload},
     source::{self, FetchPolicy, Fetcher, playlist},
 };
@@ -35,12 +36,27 @@ const GRAPH_BYTES: usize = 128 * 1024 * 1024;
 struct AcquisitionOptions {
     hls_only: bool,
     layout_mode: LayoutMode,
+    prepare_native: bool,
+}
+
+enum AcquisitionPermit {
+    Ordinary(crate::resources::Permit),
+    Overlapped(ContextPermit),
+}
+impl AcquisitionPermit {
+    fn release(self) {
+        match self {
+            Self::Ordinary(permit) => drop(permit),
+            Self::Overlapped(permit) => drop(permit),
+        }
+    }
 }
 
 /// A complete retained source graph. Debug deliberately omits URLs and filesystem names.
 pub struct DownloadedSource {
     entrypoint: PathBuf,
     seal: Arc<Seal>,
+    native: Option<native::AcquiredNative>,
 }
 impl fmt::Debug for DownloadedSource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -183,19 +199,24 @@ impl Converter {
                 return Err(CHANGED);
             }
         } else {
-            command.backend = self.downloaded_backend(&source.seal);
+            command.backend = self.downloaded_backend(
+                &source.seal,
+                source
+                    .native
+                    .as_ref()
+                    .map_or(0, native::AcquiredNative::retained_bytes),
+            );
             command.downloaded = Some(source.seal.clone());
         }
         Ok(command)
     }
 
-    fn downloaded_backend(&self, seal: &Seal) -> super::backend::Backend {
+    fn downloaded_backend(&self, seal: &Seal, additional: u64) -> super::backend::Backend {
         let mut backend = self.backend.clone();
-        backend.runner = Arc::new(
-            backend
-                .runner
-                .within_context(seal.retained_bytes, backend.runner.manifest_capacity().1),
-        );
+        backend.runner = Arc::new(backend.runner.within_context(
+            seal.retained_bytes.saturating_add(additional),
+            backend.runner.manifest_capacity().1,
+        ));
         backend
     }
     /// Retain a complete supported MP4, DASH, or HLS source for local analysis.
@@ -216,6 +237,44 @@ impl Converter {
         policy: &FetchPolicy,
     ) -> Result<DownloadedSource, ConversionError> {
         self.acquire_source_inner(url, directory, Some(output), policy, false)
+    }
+    /// Acquire originals for a configured output bundle. Qualified clear transport
+    /// HLS can prepare native admission while other renditions are downloading.
+    /// The returned handle owns this optional, byte-bound preparation; only
+    /// `convert_bundle_downloaded` consumes it. Other profiles keep ordinary acquisition.
+    pub fn download_bundle_source(
+        &self,
+        url: &str,
+        directory: &Path,
+        output: &Path,
+        policy: &FetchPolicy,
+        outputs: &[super::plan::bundle::BundleOutputIntent],
+    ) -> Result<DownloadedSource, ConversionError> {
+        let prepare_native = outputs.len() >= 2
+            && outputs.len() <= 8
+            && outputs.iter().all(|intent| {
+                matches!(
+                    intent.format,
+                    crate::inspection::OutputFormat::Hls | crate::inspection::OutputFormat::Dash
+                ) && matches!(
+                    intent.target,
+                    crate::inspection::TargetProtection::Clear
+                        | crate::inspection::TargetProtection::Cenc
+                        | crate::inspection::TargetProtection::Cbcs
+                ) && intent.processing.unwrap_or(self.processing_mode)
+                    != super::ProcessingMode::Segments
+            });
+        self.acquire_source_layout_inner(
+            url,
+            directory,
+            Some(output),
+            policy,
+            AcquisitionOptions {
+                hls_only: false,
+                layout_mode: self.layout_mode(),
+                prepare_native,
+            },
+        )
     }
     /// Fetch a complete supported HLS graph into a new directory, retaining original ciphertext.
     /// Key and license identifiers are retained, never fetched; conversion uses operator keys.
@@ -254,6 +313,7 @@ impl Converter {
             AcquisitionOptions {
                 hls_only,
                 layout_mode: self.layout_mode(),
+                prepare_native: false,
             },
         )
     }
@@ -295,7 +355,10 @@ impl Converter {
             .map_err(|_| ConversionError("invalid-fetch-policy"))?;
         policy.max_playlist_bytes = policy.max_playlist_bytes.min(4 * 1024 * 1024);
         let budget = self.acquisition_budget(&policy)?;
-        let (mut retained, _permit) = self.acquisition_permits(budget.workers)?;
+        let mut options = self.acquisition_options(options, budget.workers);
+        let (mut retained, acquisition_permit) =
+            self.acquisition_permits(budget.workers, options.prepare_native)?;
+        options.prepare_native = matches!(&acquisition_permit, AcquisitionPermit::Overlapped(_));
         let mut owned = match output {
             Some(output) => OwnedDownload::reserve(directory, output)?,
             None => OwnedDownload::reserve_source(directory)?,
@@ -308,6 +371,7 @@ impl Converter {
             progress.as_ref(),
             options,
         );
+        acquisition_permit.release();
         match result {
             Ok(acquired) => {
                 let retained_bytes = owned.retained_bytes()?;
@@ -354,6 +418,7 @@ impl Converter {
                 Ok(DownloadedSource {
                     entrypoint: seal.owned.path().join(seal.entrypoint),
                     seal: Arc::new(seal),
+                    native: acquired.native,
                 })
             }
             Err(error) => {
@@ -362,10 +427,25 @@ impl Converter {
             }
         }
     }
+    fn acquisition_options(
+        &self,
+        options: AcquisitionOptions,
+        workers: usize,
+    ) -> AcquisitionOptions {
+        AcquisitionOptions {
+            prepare_native: options.prepare_native
+                && workers > 1
+                && self.backend.validation_depth == super::ValidationDepth::Native
+                && self.backend.runner.native_capacity().0 > 1
+                && self.backend.runner.native_capacity().1 >= 2 * 1024 * 1024 * 1024,
+            ..options
+        }
+    }
     fn acquisition_permits(
         &self,
         workers: usize,
-    ) -> Result<(ContextPermit, crate::resources::Permit), ConversionError> {
+        overlap: bool,
+    ) -> Result<(ContextPermit, AcquisitionPermit), ConversionError> {
         let retained = self
             .backend
             .runner
@@ -379,21 +459,39 @@ impl Converter {
                 crate::resources::ReservationError::Cancelled => ConversionError("cancelled"),
                 _ => ConversionError("resource-budget"),
             })?;
-        let transient = self
-            .backend
-            .runner
-            .native_permit(
-                Claim {
-                    cpu_threads: workers,
-                    memory_bytes: GRAPH_BYTES as u64,
-                },
+        let ordinary = || {
+            self.backend
+                .runner
+                .native_permit(
+                    Claim {
+                        cpu_threads: workers,
+                        memory_bytes: GRAPH_BYTES as u64,
+                    },
+                    &self.backend.stop,
+                    self.backend.timeout,
+                )
+                .map(AcquisitionPermit::Ordinary)
+                .map_err(|error| match error {
+                    crate::resources::ReservationError::Cancelled => ConversionError("cancelled"),
+                    _ => ConversionError("resource-budget"),
+                })
+        };
+        let transient = if overlap {
+            match self.backend.runner.retain_context(
+                GRAPH_BYTES as u64,
+                GRAPH_BYTES as u64,
                 &self.backend.stop,
-                self.backend.timeout,
-            )
-            .map_err(|error| match error {
-                crate::resources::ReservationError::Cancelled => ConversionError("cancelled"),
-                _ => ConversionError("resource-budget"),
-            })?;
+                std::time::Duration::from_millis(1),
+            ) {
+                Ok(context) => AcquisitionPermit::Overlapped(context),
+                Err(crate::resources::ReservationError::Cancelled) => {
+                    return Err(ConversionError("cancelled"));
+                }
+                Err(_) => ordinary()?,
+            }
+        } else {
+            ordinary()?
+        };
         Ok((retained, transient))
     }
     fn acquisition_budget(&self, policy: &FetchPolicy) -> Result<Budget, ConversionError> {
@@ -460,8 +558,14 @@ impl Converter {
             playlist_count: 0,
             layout_mode: options.layout_mode,
             mapper: None,
+            native_plans: options.prepare_native.then(Vec::new),
+            backend: options.prepare_native.then_some(&self.backend),
         };
         let result = (|| {
+            let discovery = options
+                .prepare_native
+                .then(|| acquisition_cpu(&self.backend, &self.backend.stop))
+                .transpose()?;
             let (entrypoint, contents) = if options.hls_only {
                 graph.playlist(url, true)?;
                 (
@@ -472,10 +576,28 @@ impl Converter {
                 graph.entrypoint(url)?
             };
             owned.prepay_file(Path::new(entrypoint))?;
+            drop(discovery);
             if let Some(progress) = progress {
                 progress.discovered(graph.resources.len());
             }
-            graph.fetch_media(workers, &abort)?;
+            let preparation = if options.prepare_native {
+                native::Preparation::new(
+                    self,
+                    owned,
+                    graph.native_plans.take().unwrap_or_default(),
+                    &graph.resources,
+                    &graph.expected,
+                    workers,
+                    &abort,
+                )?
+            } else {
+                None
+            };
+            graph.fetch_media_preparing(workers, &abort, preparation.as_ref())?;
+            let native = preparation
+                .map(native::Preparation::finish)
+                .transpose()?
+                .flatten();
             graph.check_acquired_limits(entrypoint, &contents)?;
             let index = serde_json::to_vec(&graph.records).map_err(|_| IO)?;
             graph.save("raw/index.json", &index)?;
@@ -483,6 +605,7 @@ impl Converter {
                 entrypoint,
                 contents,
                 files: std::mem::take(&mut graph.expected),
+                native,
             })
         })();
         // fetch_media's scoped pool has joined before this point, including failures.
@@ -556,7 +679,20 @@ impl Converter {
     ) -> Result<super::plan::bundle::BundleConversionReport, ConversionError> {
         let converter = self.using_downloaded_source(source)?;
         source.seal.owned.check_output(output_root)?;
-        converter.convert_bundle(source.entrypoint(), outputs, output_root, keys, tools)
+        converter.convert_bundle_acquired(
+            super::plan::bundle::BundlePlanRequest {
+                input: super::VerificationSource {
+                    input: source.entrypoint(),
+                    input_keys: &keys.input,
+                    hls_keys: &keys.hls_input,
+                },
+                outputs,
+                output_root,
+            },
+            keys,
+            tools,
+            source.native.as_ref(),
+        )
     }
 }
 fn write_private(path: &Path, bytes: &[u8]) -> Result<std::fs::File, ConversionError> {
@@ -600,6 +736,26 @@ fn publish_entrypoint(
     owned.register_file(name, created)
 }
 
+fn acquisition_cpu(
+    backend: &super::backend::Backend,
+    stop: &Stop,
+) -> Result<crate::resources::Permit, ConversionError> {
+    backend
+        .runner
+        .native_permit(
+            Claim {
+                cpu_threads: 1,
+                memory_bytes: 0,
+            },
+            stop,
+            backend.timeout,
+        )
+        .map_err(|error| match error {
+            crate::resources::ReservationError::Cancelled => ConversionError("cancelled"),
+            crate::resources::ReservationError::Insufficient => ConversionError("resource-budget"),
+            crate::resources::ReservationError::Timeout => ConversionError("media-tool-timeout"),
+        })
+}
 fn failure(error: &source::Failure) -> ConversionError {
     if matches!(error, source::Failure::Cancelled) {
         ConversionError("cancelled")
@@ -632,6 +788,8 @@ struct Graph<'a> {
     resources: Vec<Resource>,
     layout_mode: LayoutMode,
     mapper: Option<UrlPathMapper>,
+    native_plans: Option<Vec<native::Plan>>,
+    backend: Option<&'a super::backend::Backend>,
 }
 struct Resource {
     url: String,
@@ -758,6 +916,12 @@ impl Graph<'_> {
         let master = lines
             .iter()
             .any(|line| line.starts_with("#EXT-X-STREAM-INF:"));
+        if lines
+            .iter()
+            .any(|line| line.starts_with("#EXT-X-SESSION-KEY:"))
+        {
+            self.native_plans = None;
+        }
         if !root && master {
             return Err(INVALID);
         }
@@ -796,7 +960,7 @@ impl Graph<'_> {
                 self.playlist(&child, false)?;
             }
         } else {
-            self.plan_media(&lines, &effective)?;
+            self.plan_media(&lines, &effective, &local, root)?;
         }
         let projected = self.rewrite(&body, &effective, master, Path::new(&local))?;
         if projected.len() as u64 > self.policy.max_playlist_bytes {
@@ -811,7 +975,13 @@ impl Graph<'_> {
         }
         Ok(local)
     }
-    fn plan_media(&mut self, lines: &[String], effective: &str) -> Result<(), ConversionError> {
+    fn plan_media(
+        &mut self,
+        lines: &[String],
+        effective: &str,
+        local: &str,
+        root: bool,
+    ) -> Result<(), ConversionError> {
         if lines.iter().any(|line| {
             line.starts_with("#EXT-X-BYTERANGE:")
                 || line.starts_with("#EXT-X-MAP:") && line.contains("BYTERANGE=")
@@ -848,11 +1018,47 @@ impl Graph<'_> {
                 INVALID
             }
         })?;
+        let clear_transport = self.native_plans.is_some()
+            && !root
+            && plan.init.is_none()
+            && !lines
+                .iter()
+                .any(|line| line.starts_with("#EXT-X-KEY:") && !line.contains("METHOD=NONE"));
+        let mut resources = Vec::new();
         if let Some(init) = plan.init {
             self.media(&init.url, "mp4")?;
         }
         for segment in plan.segments {
             self.media(&segment.url, if segment.has_init { "m4s" } else { "ts" })?;
+            if clear_transport {
+                resources.push(PathBuf::from(&self.media[&segment.url]));
+            }
+        }
+        if clear_transport {
+            let charge = resources
+                .iter()
+                .try_fold(local.len() + 1024usize, |sum, path| {
+                    sum.checked_add(std::mem::size_of::<PathBuf>() + path.as_os_str().len())
+                })
+                .ok_or(ConversionError("download-graph-limit"))?;
+            if self
+                .weight
+                .checked_add(charge)
+                .is_none_or(|bytes| bytes > GRAPH_BYTES)
+                || self.owned.check_expansion(charge).is_err()
+            {
+                self.native_plans = None;
+                return Ok(());
+            }
+            self.charge(charge)?;
+            if let Some(plans) = &mut self.native_plans {
+                plans.push(native::Plan {
+                    playlist: PathBuf::from(local),
+                    resources,
+                });
+            }
+        } else {
+            self.native_plans = None;
         }
         Ok(())
     }
@@ -873,8 +1079,20 @@ impl Graph<'_> {
         self.media.insert(url.into(), local);
         Ok(())
     }
+    #[cfg(test)]
     fn fetch_media(&mut self, workers: usize, abort: &Stop) -> Result<(), ConversionError> {
+        self.fetch_media_preparing(workers, abort, None)
+    }
+    fn fetch_media_preparing(
+        &mut self,
+        workers: usize,
+        abort: &Stop,
+        preparation: Option<&native::Preparation<'_>>,
+    ) -> Result<(), ConversionError> {
         let text_bytes = Mutex::new(self.text_bytes);
+        let backend = self.backend;
+        let stop = backend.map(|backend| Stop::linked(&backend.stop, abort));
+        let stop = stop.as_ref();
         let fetched = std::thread::scope(|scope| {
             let pool = Pool::new(scope, workers.min(self.resources.len()).max(1));
             let units = self.resources.iter().map(|resource| {
@@ -883,6 +1101,11 @@ impl Graph<'_> {
                 let owned = self.owned;
                 let text_bytes = &text_bytes;
                 Box::new(move || {
+                    let permit = backend
+                        .map(|backend| {
+                            acquisition_cpu(backend, stop.expect("backend has pool stop"))
+                        })
+                        .transpose()?;
                     let (received, created) = fetcher
                         .fetch_created(&resource.url, &path, None)
                         .map_err(|error| {
@@ -899,10 +1122,19 @@ impl Graph<'_> {
                         .checked_add(received.effective.len())
                         .filter(|total| *total <= 16 * 1024 * 1024)
                         .ok_or(ConversionError("download-graph-limit"))?;
+                    drop(total);
+                    drop(permit);
+                    if let Some(preparation) = preparation {
+                        preparation.completed(&resource.path, &received)?;
+                    }
                     Ok(received)
                 }) as Unit<'_, source::Fetched, ConversionError>
             });
-            run_ordered(|unit| pool.submit(unit), units, Some(abort))
+            if preparation.is_some() {
+                run_completion_order(|unit| pool.submit(unit), units, Some(abort))
+            } else {
+                run_ordered(|unit| pool.submit(unit), units, Some(abort))
+            }
         })?;
         for (resource, fetched) in self.resources.iter().zip(fetched) {
             let hash: [u8; 32] = hex::decode(&fetched.sha256)

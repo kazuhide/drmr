@@ -26,6 +26,126 @@ mod copied_segments {
     }
 
     #[test]
+    fn fetched_creation_digest_binds_the_stream_before_native_evidence_is_accepted() {
+        let (_owner, root) = root();
+        let original = resource(&root, "original.ts", 90_000, &[frame(1)], 0);
+        let replaced = resource(&root, "replaced.ts", 90_000, &[frame(2)], 0);
+        let bytes = std::fs::read(&original).unwrap();
+        let mut hash = crate::sha256::Sha256::new();
+        hash.update(&bytes);
+        let expected = (hash.finalize(), bytes.len() as u64);
+        let mut scanner = NativeScanner::new();
+        let invalid = ConversionError("ts-admitted-copy-invalid");
+        assert_eq!(
+            scanner.segment_expected(&replaced, &Stop::new(), expected),
+            Err(invalid)
+        );
+        assert!(replaced.is_file());
+        assert_poisoned(scanner, &original, &root.join("retry.ts"), invalid);
+    }
+
+    #[test]
+    fn creation_bound_read_only_scans_match_snapshots_without_writing_media() {
+        let (_owner, root) = root();
+        let first = resource(&root, "first.ts", 90_000, &[frame(1)], 0);
+        let second = resource(&root, "second.ts", 91_920, &[frame(2)], 1);
+        let mut direct = NativeScanner::new();
+        for source in [&first, &second] {
+            let bytes = std::fs::read(source).unwrap();
+            let mut hash = crate::sha256::Sha256::new();
+            hash.update(&bytes);
+            direct
+                .segment_expected(source, &Stop::new(), (hash.finalize(), bytes.len() as u64))
+                .unwrap();
+        }
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 2);
+        let mut copied = NativeScanner::new();
+        for (index, source) in [&first, &second].into_iter().enumerate() {
+            copied
+                .copy_segment(source, &root.join(format!("copy-{index}.ts")), &Stop::new())
+                .unwrap();
+        }
+        let (direct_admission, direct) = direct.finish().unwrap();
+        let (copied_admission, copied) = copied.finish().unwrap();
+        assert!(direct_admission == copied_admission);
+        for (pid, native) in direct {
+            let previous = &copied[&pid];
+            assert_eq!(native.config, previous.config);
+            assert_eq!(native.metadata().unwrap(), previous.metadata().unwrap());
+            assert_eq!(native.evidence().unwrap(), previous.evidence().unwrap());
+            assert_eq!(native.timing().unwrap(), previous.timing().unwrap());
+            assert_eq!(
+                native.segment_timings().unwrap(),
+                previous.segment_timings().unwrap()
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restored_read_only_source_cannot_hide_bytes_consumed_by_native_payload_scan() {
+        let (_owner, root) = root();
+        let source = resource(&root, "source.ts", 90_000, &[frame(1)], 0);
+        let alternate = resource(&root, "alternate.ts", 90_000, &[frame(2)], 0);
+        let original = std::fs::read(&source).unwrap();
+        let mut hash = crate::sha256::Sha256::new();
+        hash.update(&original);
+        let mut scanner = NativeScanner::new();
+        let before = scanner.admission.clone();
+        let receipt = receipt::Receipt::read(
+            &scanner.admission,
+            &scanner.receipt_context,
+            &source,
+            (hash.finalize(), original.len() as u64),
+            &Stop::new(),
+        )
+        .unwrap();
+        std::fs::write(&source, std::fs::read(alternate).unwrap()).unwrap();
+        let mut restored = false;
+        let invalid = ConversionError("ts-admitted-copy-invalid");
+        assert_eq!(
+            scanner.scan_receipt(receipt, &Stop::new(), &mut |_, _, _, _, _| {
+                std::fs::write(&source, &original).unwrap();
+                restored = true;
+                Ok(())
+            }),
+            Err(invalid)
+        );
+        assert!(restored);
+        assert!(scanner.admission == before);
+        assert_eq!(scanner.finish().err(), Some(invalid));
+        assert_eq!(std::fs::read(&source).unwrap(), original);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restoring_private_bytes_after_native_visitation_cannot_hide_consumed_changes() {
+        let (_owner, root) = root();
+        let source = resource(&root, "source.ts", 90_000, &[frame(1)], 0);
+        let alternate = resource(&root, "alternate.ts", 90_000, &[frame(2)], 0);
+        let original = std::fs::read(&source).unwrap();
+        let destination = root.join("copy.ts");
+        let mut scanner = NativeScanner::new();
+        let receipt = admitted(&scanner, &source, &destination);
+        std::fs::write(&destination, std::fs::read(alternate).unwrap()).unwrap();
+        let mut restored = false;
+        let error = scanner
+            .scan_receipt(receipt, &Stop::new(), &mut |_, _, _, _, _| {
+                std::fs::write(&destination, &original).unwrap();
+                restored = true;
+                Ok(())
+            })
+            .unwrap_err();
+        assert!(
+            restored,
+            "the adversarial restoration must happen before receipt verification"
+        );
+        assert_eq!(error, ConversionError("ts-admitted-copy-invalid"));
+        assert!(!destination.exists());
+        assert_eq!(std::fs::read(&source).unwrap(), original);
+    }
+
+    #[test]
     fn late_transport_failures_precede_every_observer_and_remove_only_the_owned_copy() {
         let (_owner, root) = root();
         let source = resource(&root, "source.ts", 90_000, &[frame(1)], 0);
