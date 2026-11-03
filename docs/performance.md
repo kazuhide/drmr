@@ -716,6 +716,62 @@ subprocesses. Workspace values cover selected checkpoints, and some concurrent
 output checkpoints are incomplete. Total physical I/O bytes are unmeasured.
 DRM device and license-server playback were not exercised.
 
+## Native preparation reuse (2026-11-03)
+
+**Unreleased development for 1.3.** The measured source builds retain the 1.2.0
+CLI version during development. The report identifies the exact commits and
+executables; the published 1.2.0 archives do not include this change.
+
+The same retained Big Buck Bunny presentation contains six H.264 video
+renditions and one AAC audio rendition. Both versions create CBCS fMP4 HLS with
+FairPlay and CBCS DASH with Widevine and PlayReady, using the same test key and
+key identifier. Automatic processing selects `stitch`, workers are automatic,
+and additional decoding and external manifest validators are not requested.
+
+Three pairs ran in the order before/after, after/before and before/after on one
+Darwin arm64 host with ten logical cores and 32 GiB of memory. Downloading,
+setup, input fingerprinting and the later standalone verification are outside
+the conversion wall time. Filesystem caches and other host processes were not
+controlled; the report retains each run's load averages.
+
+| Observation | Before | After |
+|---|---:|---:|
+| Median conversion wall time | 34.80 s | 31.09 s |
+| Wall-time range | 34.54–37.38 s | 31.04–31.66 s |
+| Median CPU time, including the process-table observer | 114.76 s | 103.73 s |
+| Shaka Packager calls | 15 | 15 |
+| FFmpeg / ffprobe calls | 0 / 0 | 0 / 0 |
+
+Median wall time decreased by 10.67%, and the observed CPU total decreased by
+9.61%. Each paired wall-time comparison improved by 10.15–15.30%. These results
+describe this workload and host, rather than a general speed guarantee.
+
+The change removes repeated native parsing. The checked source view remains
+bound to its original bytes within one conversion, and each final output is
+prepared once for both qualification and complete comparison. Encryption and
+packaging still run independently for each output. Standalone `verify` reads
+the source and results afresh. See the [conditions and lifetime](multiple-outputs.md#reusing-original-source-checks).
+
+Every run passed the complete native sample, configuration, timing, window and
+metadata comparison, native manifest checks and exact requested DRM declarations.
+All seven DASH initialization files contained two provider PSSH records; all
+seven FairPlay-only HLS initialization files contained none. A separate `verify`
+invocation also passed after every conversion, and the originals and measured
+executables remained unchanged. Decoding and DRM-device/license-server playback
+remain separate checks.
+
+No memory or disk reduction is claimed. Parent and descendant RSS observations
+are separate 100 ms process-table samples without process-generation proof;
+they cannot be added as a simultaneous peak. Selected workspace checkpoints
+reported the same maximum logical file bytes in both versions, with two
+incomplete checkpoints per run. Total physical I/O was not measured. Scope
+duration sums overlap and do not represent wall time or CPU time.
+
+The [complete six-run report](benchmarks/native-preparation-reuse-2026-11-03.json)
+includes raw timings, resource-observation limits, tool counts, source and
+binary identities, and the media, manifest, DRM and standalone-verification
+results.
+
 ## Compare your own retained input
 
 Use the same local original to separate processing from network transfer:

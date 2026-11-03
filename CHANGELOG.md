@@ -19,6 +19,14 @@ Completed changes are recorded by category before the next release.
 - Extend native release round-trip checks to cover joint DASH/fMP4 HLS and MP4
   in both directions, including final comparison against the original MP4.
 
+### Changed
+
+- Reuse checked source data during native conversion from clear MPEG-TS HLS
+  to multiple fMP4 HLS/DASH outputs with `stitch` processing. Prepare each final
+  output once for qualification and complete comparison. Keep encryption and
+  final media, manifest and DRM checks separate for each output; standalone
+  `verify` still reads the source and outputs afresh.
+
 ### Fixed
 
 - Apply the same output defaults during direct conversion and independent
@@ -26,10 +34,10 @@ Completed changes are recorded by category before the next release.
 - Use the current `hls-fmp4`, `output_format` and `encryption` names consistently
   in the output tables and English/Japanese guides.
 
-### Planned for 1.3
+### Before the 1.3 release
 
-- Share encryption and segment packaging between compatible HLS/DASH outputs
-  while retaining separate final media, manifest and DRM verification.
+- Qualify the final archives on every supported operating system, including the
+  [full release round-trip matrix](docs/releases.md#release-only-round-trip-qualification).
 
 ## [1.2.0] - 2026-11-02
 
