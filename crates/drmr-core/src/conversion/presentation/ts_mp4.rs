@@ -289,6 +289,52 @@ fn joint_manifest_tracks(prepared: &[Prepared], format: inspection::InputFormat)
     })
 }
 
+fn standalone_audio_ordinal(prepared: &[Prepared]) -> Option<usize> {
+    if prepared
+        .iter()
+        .any(|track| track.metadata.origin != super::metadata::Origin::Container)
+    {
+        return None;
+    }
+    if prepared.iter().any(|track| track.complete_track.is_some()) {
+        return complete_tracks(prepared)?
+            .into_iter()
+            .find(|track| track.kind == TrackKind::Audio)
+            .map(|track| track.index);
+    }
+    let first = prepared.first()?;
+    if prepared
+        .iter()
+        .enumerate()
+        .any(|(index, track)| track.source != first.source || track.index != index)
+    {
+        return None;
+    }
+    prepared
+        .iter()
+        .find(|track| track.report.tracks[0].kind == TrackKind::Audio)
+        .map(|track| track.index)
+}
+
+pub(super) fn verify_manifest_order(
+    output: inspection::OutputFormat,
+    source: &[Prepared],
+    result: &[Prepared],
+) -> Result<(), ConversionError> {
+    if !manifest_comparison(output, source, result) {
+        return Ok(());
+    }
+    let expected = source
+        .iter()
+        .find(|track| track.report.tracks[0].kind == TrackKind::Audio)
+        .and_then(|track| track.metadata.audio.as_ref())
+        .and_then(|audio| container_audio_ordinal(audio, source.len()));
+    if expected.is_some() && standalone_audio_ordinal(result) != expected {
+        return Err(ConversionError("presentation-metadata-mismatch"));
+    }
+    Ok(())
+}
+
 pub(super) fn manifest_comparison(
     output: inspection::OutputFormat,
     source: &[Prepared],

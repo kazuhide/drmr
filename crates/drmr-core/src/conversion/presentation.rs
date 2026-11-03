@@ -1696,6 +1696,7 @@ impl Converter {
         result_keys: &InputKeys,
         output_format: OutputFormat,
     ) -> Result<VerificationReport, ConversionError> {
+        ts_mp4::verify_manifest_order(output_format, &source, &result)?;
         source.sort_by_key(|p| kind_order(p.report.tracks[0].kind));
         result.sort_by_key(|p| kind_order(p.report.tracks[0].kind));
         if source.len() != result.len() {

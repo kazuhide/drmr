@@ -726,6 +726,140 @@ fn audio_first_canonical_manifests_preserve_selection_through_mp4_and_back() {
     }
 }
 
+fn reverse_container_track_order(input: &Path, output: &Path) {
+    let mut bytes = fs::read(input).unwrap();
+    let tree = mp4::parse_boxes(&bytes).unwrap();
+    let movie = tree.iter().find(|node| node.kind() == *b"moov").unwrap();
+    let mut tracks: Vec<_> = movie
+        .children
+        .iter()
+        .filter(|node| node.kind() == *b"trak")
+        .map(|node| node.header.bytes(&bytes).to_vec())
+        .collect();
+    assert_eq!(tracks.len(), 2);
+    tracks.reverse();
+    let mut tracks = tracks.into_iter();
+    let mut payload = Vec::new();
+    for child in &movie.children {
+        if child.kind() == *b"trak" {
+            payload.extend(tracks.next().unwrap());
+        } else {
+            payload.extend(child.header.bytes(&bytes));
+        }
+    }
+    let at = movie.header.offset + movie.header.header_size;
+    assert_eq!(payload.len(), movie.header.size - movie.header.header_size);
+    bytes[at..at + payload.len()].copy_from_slice(&payload);
+    fs::write(output, bytes).unwrap();
+    assert_eq!(
+        drmr_core::inspection::inspect(output).unwrap().tracks[0].kind,
+        drmr_core::inspection::TrackKind::Video
+    );
+}
+
+fn decoded_converter() -> Converter {
+    Converter::new(
+        Arc::new(ToolRunner::new(
+            Arc::new(Secrets::new()),
+            Arc::new(Collector::default()),
+        )),
+        "packager",
+        "ffmpeg",
+    )
+    .with_ffprobe("ffprobe")
+    .with_decode(true)
+    .with_max_workers(Some(1))
+    .unwrap()
+}
+
+#[test]
+fn independent_verification_rejects_a_container_order_that_changes_canonical_selection() {
+    let owner = common::private_tempdir().unwrap();
+    let source = owner.path().join("audio-first.mp4");
+    roundtrip_fixture(&source, "hevc-main10.mp4", Some(44100), true);
+    let (command, _) = command();
+    let command = command.with_max_workers(Some(1)).unwrap();
+    let decoded = decoded_converter();
+    let empty = InputKeys::default();
+    let hls = HlsInputKeys::default();
+    let mut unexpected = Vec::new();
+    for format in [OutputFormat::Dash, OutputFormat::Hls] {
+        let entry = audio_first_manifest(
+            &command,
+            &source,
+            &owner.path().join(format!("source-{format:?}")),
+            format,
+            TargetProtection::Clear,
+        );
+        let original = VerificationSource {
+            input: &entry,
+            input_keys: &empty,
+            hls_keys: &hls,
+        };
+        for protection in [
+            TargetProtection::Clear,
+            TargetProtection::Cenc,
+            TargetProtection::Cbcs,
+        ] {
+            let output = owner
+                .path()
+                .join(format!("audio-first-{format:?}-{protection:?}.mp4"));
+            assert!(
+                convert(&command, &entry, &output, &empty, protection)
+                    .unwrap()
+                    .verification
+                    .passed
+            );
+            let reordered = owner
+                .path()
+                .join(format!("video-first-{format:?}-{protection:?}.mp4"));
+            reverse_container_track_order(&output, &reordered);
+            let keys = if protection == TargetProtection::Clear {
+                InputKeys::default()
+            } else {
+                role_keys()
+            };
+            let result = VerificationSource {
+                input: &reordered,
+                input_keys: &keys,
+                hls_keys: &hls,
+            };
+            assert!(
+                command
+                    .verify(VerificationRequest {
+                        source: VerificationSource {
+                            input: &output,
+                            input_keys: &keys,
+                            hls_keys: &hls
+                        },
+                        output: result,
+                    })
+                    .unwrap()
+                    .passed,
+                "Reordering must leave all original media and metadata equal by role"
+            );
+            for (mode, verifier) in [("native", &command), ("decoded", &decoded)] {
+                let verified = verifier.verify(VerificationRequest {
+                    source: original,
+                    output: result,
+                });
+                match verified {
+                    Err(error) if error.0 == "presentation-metadata-mismatch" => (),
+                    Ok(report) if report.passed => {
+                        unexpected.push((format, protection, mode, "passed"));
+                    }
+                    Ok(_) => unexpected.push((format, protection, mode, "wrong-failure-kind")),
+                    Err(error) => unexpected.push((format, protection, mode, error.0)),
+                }
+            }
+        }
+    }
+    assert!(
+        unexpected.is_empty(),
+        "Canonical audio order was not rejected: {unexpected:?}"
+    );
+}
+
 fn assert_audio_only_selection_refused(command: &Converter, entry: &Path, original: &str) {
     let empty = InputKeys::default();
     let hls = HlsInputKeys::default();
