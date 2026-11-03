@@ -205,8 +205,12 @@ comparison also accept one qualified video and one AAC track from a DASH or
 fMP4 HLS presentation. Admission validates the inverse of drmr's MP4-to-manifest
 rendition mapping before packaging; the presence of a single audio choice alone
 does not permit dropping its name, group or selection controls. The resulting
-MP4 retains the checked language, codec, clocks and playback windows. See the
-[exact presentation and metadata conditions](conversion-support.md#fragmented-presentations-to-one-mp4).
+MP4 retains the checked codec, clocks and playback windows. If a completely
+validated native track declares language `und`, an explicit validated manifest
+language supplies the output language; a contradiction with a known native
+language is refused. The original source bytes remain unchanged, and native
+comparison and additional decoding use the same resolved source language.
+See the [exact presentation and metadata conditions](conversion-support.md#fragmented-presentations-to-one-mp4).
 This source addition is not present in the 1.2.0 archives. Arbitrary rendition
 selection and unrelated-file combination remain outside this profile.
 

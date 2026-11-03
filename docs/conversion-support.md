@@ -314,13 +314,23 @@ qualified AVC/HEVC with AAC; VP9 remains clear or CENC only. Encrypted input nee
 all input-track keys; encrypted output also needs its output key.
 
 The presentation must have rendition metadata that drmr can map back to its
-MP4 representation. When audio selection metadata is present, it must match the
-existing MP4-to-manifest declarations: `default-audio-group`, the corresponding
-`stream_0` or `stream_1` name, `DEFAULT=NO`, and `AUTOSELECT=YES`.
+MP4 representation. When HLS audio selection metadata is present, it must match
+the existing MP4-to-manifest declarations: group `default-audio-group`, the
+corresponding `stream_0` or `stream_1` name, `DEFAULT=NO`, and `AUTOSELECT=YES`.
+The corresponding DASH declarations use that `Label` and `selectionPriority=1`.
 DASH without selection metadata can also qualify. Partially specified or custom
 labels, groups and selection controls are refused rather than silently dropped.
-Declared language, channels and resolution must agree with the native tracks;
-recognized language aliases such as `en` and `eng` retain the same language.
+Declared channels and resolution must agree with the native tracks.
+
+Language is resolved from the complete native track and validated manifest.
+When the native track declares `und` (unspecified), an explicit supported
+manifest language supplies the value retained in the output MP4. A known native
+language that contradicts the manifest is refused. Recognized aliases such as
+`en` and `eng` describe the same language. This does not admit missing `mdhd`
+metadata, incomplete inspection or an unknown native profile. The physical source
+remains unchanged. Fresh verification requires the output to retain the resolved
+language. If that language is known, replacing it with another language or `und`
+fails. The same interpretation applies with additional `--decode` checks.
 These are implementation conditions, not limits of the MP4 format.
 
 Use `auto` or `stitch`; `segments` cannot turn separate input resources into one
