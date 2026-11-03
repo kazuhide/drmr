@@ -141,6 +141,7 @@ pub(in crate::conversion) struct BundlePrepared<'a> {
     source: VerificationSource<'a>,
     work: files::Stage,
     input: crate::inspection::Inspection,
+    depth: crate::conversion::ValidationDepth,
     prepared: Vec<Prepared>,
     sources: Vec<Prepared>,
     tracks: Vec<LocalTrack>,
@@ -149,6 +150,55 @@ pub(in crate::conversion) struct BundlePrepared<'a> {
 }
 
 impl BundlePrepared<'_> {
+    pub(in crate::conversion) fn native_verification_available(&self) -> bool {
+        self.input.format == crate::inspection::InputFormat::Hls
+            && !self.prepared.is_empty()
+            && self.prepared.len() == self.tracks.len()
+            && self
+                .prepared
+                .iter()
+                .zip(&self.tracks)
+                .all(|(prepared, track)| {
+                    prepared.transport_index.is_some()
+                        && prepared.transport_native.is_some()
+                        && prepared.outer_protection == crate::conversion::SourceProtection::Clear
+                        && prepared.report.tracks.first().map(|value| value.kind)
+                            == Some(track.kind)
+                })
+    }
+
+    fn check_verification_binding(
+        &self,
+        command: &Converter,
+        source: VerificationSource<'_>,
+    ) -> Result<(), ConversionError> {
+        if source.input != self.source.input
+            || !std::ptr::eq(source.input_keys, self.source.input_keys)
+            || !std::ptr::eq(source.hls_keys, self.source.hls_keys)
+            || self.input.format != crate::inspection::InputFormat::Hls
+            || self.depth != crate::conversion::ValidationDepth::Native
+            || command.backend.validation_depth != self.depth
+        {
+            return Err(ConversionError("source-admission-mismatch"));
+        }
+        self.work.directory_source()?;
+        command.backend.check_cancelled()
+    }
+
+    pub(super) fn verification_tracks(
+        &self,
+        command: &Converter,
+        source: VerificationSource<'_>,
+    ) -> Result<Vec<Prepared>, ConversionError> {
+        self.check_verification_binding(command, source)?;
+        if !self.native_verification_available() {
+            return Err(ConversionError("source-admission-mismatch"));
+        }
+        // Every track belongs to this one checked generation. The existing final
+        // receipt and original-graph checks remain required before publication.
+        Ok(self.prepared.clone())
+    }
+
     pub(in crate::conversion) fn check(&self, command: &Converter) -> Result<(), ConversionError> {
         self.work.directory_source()?;
         super::super::execution::Scheduler::new(&command.backend, command.maximum_workers)
@@ -265,6 +315,7 @@ impl Converter {
             source,
             work,
             input,
+            depth: self.backend.validation_depth,
             prepared,
             sources,
             tracks,
@@ -491,6 +542,77 @@ mod tests {
     }
 
     #[test]
+    fn final_comparison_source_binding_rejects_other_borrows_format_and_depth_before_reading() {
+        let command = command();
+        let keys = InputKeys::default();
+        let other_keys = InputKeys::default();
+        let hls = HlsInputKeys::default();
+        let other_hls = HlsInputKeys::default();
+        let source = VerificationSource {
+            input: Path::new("must-not-open-source.m3u8"),
+            input_keys: &keys,
+            hls_keys: &hls,
+        };
+        let mut shared = BundlePrepared {
+            source,
+            work: workspace().unwrap(),
+            input: Inspection::new(
+                InputFormat::Hls,
+                Evidence::ContainerMetadata,
+                vec![],
+                vec![],
+                vec![],
+            ),
+            depth: ValidationDepth::Native,
+            prepared: vec![],
+            sources: vec![],
+            tracks: vec![],
+            clears: vec![],
+            receipts: vec![],
+        };
+        shared.check_verification_binding(&command, source).unwrap();
+        for changed in [
+            VerificationSource {
+                input: Path::new("different.m3u8"),
+                ..source
+            },
+            VerificationSource {
+                input_keys: &other_keys,
+                ..source
+            },
+            VerificationSource {
+                hls_keys: &other_hls,
+                ..source
+            },
+        ] {
+            assert_eq!(
+                shared.check_verification_binding(&command, changed),
+                Err(ConversionError("source-admission-mismatch"))
+            );
+        }
+        assert_eq!(
+            shared.check_verification_binding(
+                &command
+                    .with_processing_clone(ProcessingMode::Stitch)
+                    .with_decode(true),
+                source
+            ),
+            Err(ConversionError("source-admission-mismatch"))
+        );
+        shared.depth = ValidationDepth::Decoded;
+        assert_eq!(
+            shared.check_verification_binding(&command, source),
+            Err(ConversionError("source-admission-mismatch"))
+        );
+        shared.depth = ValidationDepth::Native;
+        shared.input.format = InputFormat::Mp4;
+        assert_eq!(
+            shared.check_verification_binding(&command, source),
+            Err(ConversionError("source-admission-mismatch"))
+        );
+    }
+
+    #[test]
     fn bundle_admission_rejects_new_key_borrows_depth_and_input_before_any_source_read() {
         let input = Path::new("must-not-open-source.m3u8");
         let keys = InputKeys::default();
@@ -656,6 +778,7 @@ mod tests {
             source,
             work: shared_owner,
             input: crate::inspection::inspect(&input).unwrap(),
+            depth: ValidationDepth::Native,
             prepared: vec![],
             sources: vec![],
             tracks: vec![],

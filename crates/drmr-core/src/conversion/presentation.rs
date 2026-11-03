@@ -1,5 +1,6 @@
 //! Joint, codec-preserving presentations with independent evidence for every source stream.
 mod bundle_source;
+mod bundle_verification;
 mod dash_preparation;
 mod hls_preparation;
 pub(in crate::conversion) use bundle_source::BundlePrepared;
@@ -1002,6 +1003,16 @@ impl Converter {
         input: VerificationSource<'_>,
         purpose: SourceValidationPurpose,
     ) -> Result<SourceQualification, ConversionError> {
+        let command = self.qualification_command(input, purpose)?;
+        let qualified = command.validate_source_inner(input, purpose)?;
+        Ok(command.finish_qualification(qualified, purpose))
+    }
+
+    fn qualification_command(
+        &self,
+        input: VerificationSource<'_>,
+        purpose: SourceValidationPurpose,
+    ) -> Result<Self, ConversionError> {
         if matches!(purpose, SourceValidationPurpose::Conversion)
             && self
                 .output_signaling
@@ -1012,8 +1023,15 @@ impl Converter {
         }
         let mut command = self.with_processing_clone(self.processing_mode);
         command.backend = self.backend.vp9_admission_scope(purpose);
-        let mut qualified = command.validate_source_inner(input, purpose)?;
-        if command.backend.vp9_source_needs_repair() {
+        Ok(command)
+    }
+
+    fn finish_qualification(
+        &self,
+        mut qualified: SourceQualification,
+        purpose: SourceValidationPurpose,
+    ) -> SourceQualification {
+        if self.backend.vp9_source_needs_repair() {
             qualified
                 .compatibility_notes
                 .push(SourceCompatibilityNote::Vp9CencPrefixNormalizationRequired);
@@ -1032,7 +1050,7 @@ impl Converter {
                 .unwrap(),
             );
         }
-        Ok(qualified)
+        qualified
     }
 
     pub(in crate::conversion) fn validate_source_preparing(
@@ -1072,6 +1090,18 @@ impl Converter {
             purpose,
             false,
         )?;
+        let qualified = self.qualify_prepared(input, purpose, original, &prepared)?;
+        self.backend.checkpoint(&[&work]);
+        Ok(qualified)
+    }
+
+    fn qualify_prepared(
+        &self,
+        input: VerificationSource<'_>,
+        purpose: SourceValidationPurpose,
+        original: Inspection,
+        prepared: &[Prepared],
+    ) -> Result<SourceQualification, ConversionError> {
         let actual_format = if prepared.iter().all(|t| t.transport_index.is_some()) {
             OutputFormat::HlsTs
         } else {
@@ -1091,14 +1121,14 @@ impl Converter {
         if self.standalone_mp4_eligible(
             &input,
             &original,
-            &prepared,
+            prepared,
             actual_format,
             declared_audio,
             purpose,
         )? {
             eligible_formats.push(OutputFormat::Mp4);
         }
-        if metadata::dash_representable(&prepared) {
+        if metadata::dash_representable(prepared) {
             eligible_formats.push(OutputFormat::Dash);
         }
         if prepared
@@ -1109,28 +1139,27 @@ impl Converter {
         {
             eligible_formats.push(OutputFormat::Hls);
         }
-        if actual_format == OutputFormat::HlsTs || ts_output::fragmented_sources(&prepared)? {
+        if actual_format == OutputFormat::HlsTs || ts_output::fragmented_sources(prepared)? {
             eligible_formats.push(OutputFormat::HlsTs);
-            if ts_mp4::supported_tracks(&prepared) && ts_mp4::supported_metadata(&prepared) {
+            if ts_mp4::supported_tracks(prepared) && ts_mp4::supported_metadata(prepared) {
                 eligible_formats.push(OutputFormat::Mp4);
             }
         }
         if eligible_formats.contains(&OutputFormat::Mp4)
             && actual_format != OutputFormat::HlsTs
-            && !self.standalone_clocks_supported(&prepared, input.input_keys)?
+            && !self.standalone_clocks_supported(prepared, input.input_keys)?
         {
             eligible_formats.retain(|format| *format != OutputFormat::Mp4);
         }
         let verification =
-            self.validate_prepared_sources(&prepared, input.input_keys, actual_format)?;
+            self.validate_prepared_sources(prepared, input.input_keys, actual_format)?;
         if !verification.passed {
             return Err(ConversionError("source-media-verification-failed"));
         }
-        self.backend.checkpoint(&[&work]);
         Ok(SourceQualification {
-            has_vp9: prepared_has_vp9(&prepared),
-            layout_tracks: qualified_layout_tracks(&prepared, original.format),
-            hls_timing: self.qualified_hls_timing(&prepared, original.format, purpose)?,
+            has_vp9: prepared_has_vp9(prepared),
+            layout_tracks: qualified_layout_tracks(prepared, original.format),
+            hls_timing: self.qualified_hls_timing(prepared, original.format, purpose)?,
             input: original,
             actual_format,
             track_protection,
