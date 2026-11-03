@@ -206,7 +206,7 @@ pub(super) fn observe_profile(
         .len();
     Ok(profile_workload(profile, size))
 }
-fn profile_workload(profile: &serde_json::Value, size: u64) -> Workload {
+pub(super) fn profile_workload(profile: &serde_json::Value, size: u64) -> Workload {
     let pixels = if profile["codec_type"] == "audio" {
         0
     } else {

@@ -632,4 +632,34 @@ fn recognizing_a_codec_name_never_qualifies_its_unimplemented_sample_syntax() {
             )
             .is_err()
     );
+    assert!(converter.backend.runner.registered_workload().is_none());
+}
+
+#[test]
+fn native_admission_registers_known_dimensions_only_after_success() {
+    let input = fixture();
+    let (converter, events) = converter();
+    let backend = &converter.backend;
+    assert!(
+        backend
+            .native_validate_mp4(&input, usize::MAX, None)
+            .is_err()
+    );
+    assert!(backend.runner.registered_workload().is_none());
+    assert!(
+        backend
+            .native_validate_complete_mp4(&input, None, None)
+            .unwrap()
+            .passed
+    );
+    let observed = backend.runner.registered_workload().unwrap();
+    let pixels = observed.max_pixels.unwrap();
+    assert!(pixels > 0 && pixels < 3840 * 2160);
+    assert_eq!(observed.input_buffer_bytes, Some(32 * 1024 * 1024));
+    assert_eq!(observed.tracks, 2);
+    assert!(
+        events.records().iter().all(|record| {
+            record.get("stage").and_then(serde_json::Value::as_str) != Some("tool")
+        })
+    );
 }

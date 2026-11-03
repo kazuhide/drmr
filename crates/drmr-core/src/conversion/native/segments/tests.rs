@@ -46,6 +46,29 @@ fn a_cancelled_scan_does_not_open_inputs_or_run_tools() {
     assert_no_tools(&events);
 }
 
+#[test]
+fn segmented_admission_registers_dimensions_only_after_all_controls_pass() {
+    let source = fixture();
+    let (producer, _) = converter();
+    let mut media = producer
+        .backend
+        .native_segmented_media(&source.init, &source.resources, &InputKeys::default())
+        .unwrap();
+    let (consumer, events) = converter();
+    let backend = &consumer.backend;
+    let rate = media.media.movie.rate;
+    media.media.movie.rate = 131_072;
+    assert!(backend.native_admit_segmented(&media).is_err());
+    assert!(backend.runner.registered_workload().is_none());
+    media.media.movie.rate = rate;
+    assert!(backend.native_admit_segmented(&media).unwrap().passed);
+    let observed = backend.runner.registered_workload().unwrap();
+    assert_eq!(observed.max_pixels, Some(96 * 54));
+    assert_eq!(observed.input_buffer_bytes, Some(32 * 1024 * 1024));
+    assert_eq!(observed.tracks, 1);
+    assert_no_tools(&events);
+}
+
 struct Fixture {
     directory: crate::native::PrivateTempDir,
     full: PathBuf,

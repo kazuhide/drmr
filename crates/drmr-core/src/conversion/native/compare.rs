@@ -341,11 +341,14 @@ impl Backend {
         {
             return Err(ConversionError("native-sample-evidence-incomplete"));
         }
+        let mut workload: Option<crate::resources::Workload> = None;
         for track in &media.media.tracks {
-            super::mp4_profile(&track.descriptor)?;
+            let profile = super::mp4_profile(&track.descriptor)?;
             fragmented_window(&media.media, track)?;
             admitted_controls(&media.media, track)?;
             self.observe_vp9_protection(track.samples.vp9_protection)?;
+            let observed = super::super::execution::profile_workload(&profile, 32 * 1024 * 1024);
+            workload = Some(workload.map_or(observed, |previous| previous.merge(observed)));
         }
         if let Some(presentation) = media.audio_presentation {
             let [track] = media.media.tracks.as_slice() else {
@@ -358,6 +361,10 @@ impl Backend {
             {
                 return Err(super::super::audio_presentation::MISMATCH);
             }
+        }
+        if let Some(mut workload) = workload {
+            workload.tracks = media.media.tracks.len();
+            self.runner.register_workload(workload);
         }
         let mut result = report(true, true, true);
         result.scope = VerificationScope::SourceAdmission;
@@ -463,8 +470,9 @@ impl Backend {
         if views.is_some_and(|views| views.len() != media.tracks.len()) {
             return Err(ConversionError("source-track-view-verification-failed"));
         }
+        let mut workload: Option<crate::resources::Workload> = None;
         for (index, track) in media.tracks.iter().enumerate() {
-            super::mp4_profile(&track.descriptor)?;
+            let profile = super::mp4_profile(&track.descriptor)?;
             let source_window = checked_window(
                 track,
                 media.movie.fragmented,
@@ -496,6 +504,12 @@ impl Backend {
                     return Err(ConversionError("source-track-view-verification-failed"));
                 }
             }
+            let observed = super::super::execution::profile_workload(&profile, 32 * 1024 * 1024);
+            workload = Some(workload.map_or(observed, |previous| previous.merge(observed)));
+        }
+        if let Some(mut workload) = workload {
+            workload.tracks = media.tracks.len();
+            self.runner.register_workload(workload);
         }
         let mut report = report(true, true, true);
         report.scope = VerificationScope::SourceAdmission;
@@ -517,7 +531,7 @@ impl Backend {
             .tracks
             .get(index)
             .ok_or(ConversionError("stream-selector-mismatch"))?;
-        super::mp4_profile(&track.descriptor)?;
+        let profile = super::mp4_profile(&track.descriptor)?;
         // Playback edits and controls are independently read, including the
         // declared terminal audio selection. No comparison with a remux is used.
         checked_window(
@@ -526,6 +540,11 @@ impl Backend {
             super::super::finite::window(input, index)?,
         )?;
         super::super::progressive::playback_controls_equal(input, index, input, index)?;
+        // A native admission already read the complete guarded media. Retain its
+        // dimensions and the conservative streaming window without another read.
+        let mut workload = super::super::execution::profile_workload(&profile, 32 * 1024 * 1024);
+        workload.tracks = media.tracks.len();
+        self.runner.register_workload(workload);
         let mut report = report(true, true, true);
         report.scope = VerificationScope::SourceAdmission;
         report.refresh_passed();
