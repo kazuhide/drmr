@@ -151,6 +151,30 @@ pub(super) fn supported_tracks(prepared: &[Prepared]) -> bool {
             })
 }
 
+/// Restore only selections created from the same complete private MP4 snapshot.
+pub(super) fn complete_tracks(prepared: &[Prepared]) -> Option<Vec<super::LocalTrack>> {
+    let first = prepared.first()?.complete_track.as_ref()?;
+    prepared
+        .iter()
+        .enumerate()
+        .map(|(index, track)| {
+            let selected = track.complete_track.as_ref()?;
+            (selected.source == first.source
+                && selected.index == index
+                && selected.kind == track.report.tracks[0].kind
+                && track.metadata.origin == super::metadata::Origin::Container
+                && track.transport_index.is_none()
+                && track.playlist_reference.is_none()
+                && !track.dash_reference)
+                .then(|| super::LocalTrack {
+                    source: selected.source.clone(),
+                    index: selected.index,
+                    kind: selected.kind,
+                })
+        })
+        .collect()
+}
+
 pub(super) fn canonical_tracks(prepared: &[Prepared], format: inspection::InputFormat) -> bool {
     let joint_manifest = joint_manifest_tracks(prepared, format);
     if format != inspection::InputFormat::Mp4

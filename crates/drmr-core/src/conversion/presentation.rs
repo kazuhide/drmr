@@ -43,11 +43,18 @@ pub struct TrackConversionRequest<'a> {
     pub hls_output_key: Option<&'a HlsOutputKey>,
 }
 #[derive(Clone)]
+struct CompleteTrack {
+    source: PathBuf,
+    index: usize,
+    kind: TrackKind,
+}
+#[derive(Clone)]
 struct Prepared {
     metadata: metadata::Metadata,
     outer_protection: SourceProtection,
     compatibility: Vec<SourceCompatibilityNote>,
     source_dictionary: bool,
+    complete_track: Option<CompleteTrack>,
     source: PathBuf,
     media: PathBuf,
     index: usize,
@@ -823,6 +830,7 @@ fn prepare_for(
             _ => return Err(ConversionError("input-protection-not-supported")),
         },
         source_dictionary,
+        complete_track: None,
         source: source.into(),
         media: source.into(),
         index,
@@ -2036,6 +2044,13 @@ fn prepare_presentation_mode(
                         .map_or((&path, index), |views| (&views[index], 0));
                     let mut prepared =
                         prepare_for(selected, selector, track.kind, input.input_keys, purpose)?;
+                    if track_views.is_some() {
+                        prepared.complete_track = Some(CompleteTrack {
+                            source: path.clone(),
+                            index,
+                            kind: track.kind,
+                        });
+                    }
                     if (actual.tracks.len() == 1 || track_views.is_some())
                         && super::audio::movie(selected)?.fragmented
                     {
@@ -2837,6 +2852,12 @@ impl Converter {
         let descriptions: Vec<_> = prepared.iter().map(|p| p.metadata.clone()).collect();
         let mut tracks = Vec::new();
         self.verify_source_tracks(&prepared, &mut tracks, request.input_keys)?;
+        if request.format == OutputFormat::Mp4
+            && input_report.format == InputFormat::Mp4
+            && let Some(complete) = ts_mp4::complete_tracks(&prepared)
+        {
+            tracks = complete;
+        }
         let destination = transport.then(|| destination(request.output)).transpose()?;
         let stage = destination
             .as_ref()

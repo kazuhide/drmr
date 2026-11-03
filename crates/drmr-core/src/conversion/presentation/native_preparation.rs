@@ -110,6 +110,7 @@ fn transport_view(
                     Vec::new()
                 },
                 source_dictionary: false,
+                complete_track: None,
                 source: source.to_path_buf(),
                 media: source.to_path_buf(),
                 index,
@@ -148,22 +149,24 @@ impl Converter {
         }
         if original.format == InputFormat::Mp4 {
             let first = &prepared[0];
-            let report = inspection::inspect(&first.media)
-                .map_err(|_| ConversionError("invalid-input-media"))?;
-            if super::super::finite::has_audio(&first.media)?
-                && !audio::movie(&first.media)?.fragmented
-            {
+            let complete = super::ts_mp4::complete_tracks(prepared);
+            let media = complete
+                .as_ref()
+                .map_or(first.media.as_path(), |tracks| tracks[0].source.as_path());
+            let report =
+                inspection::inspect(media).map_err(|_| ConversionError("invalid-input-media"))?;
+            if super::super::finite::has_audio(media)? && !audio::movie(media)?.fragmented {
                 let finite = match purpose {
                     SourceValidationPurpose::Conversion => {
-                        progressive::validate_input(&first.media, &report, input.input_keys)?
+                        progressive::validate_input(media, &report, input.input_keys)?
                     }
                     SourceValidationPurpose::Verification => {
-                        progressive::verification_input(&first.media, &report, input.input_keys)?
+                        progressive::verification_input(media, &report, input.input_keys)?
                     }
                 };
                 if finite {
                     self.progressive_codecs(
-                        &first.media,
+                        media,
                         &report,
                         (report.protection != Protection::Clear)
                             .then_some(super::super::keys::ProbeKeys::All(input.input_keys)),
@@ -171,13 +174,9 @@ impl Converter {
                 }
                 return Ok(finite);
             }
-            if super::super::finite::fragmented_joint_profile(
-                &first.media,
-                &report,
-                &self.backend.stop,
-            )? {
+            if super::super::finite::fragmented_joint_profile(media, &report, &self.backend.stop)? {
                 self.progressive_codecs(
-                    &first.media,
+                    media,
                     &report,
                     (report.protection != Protection::Clear)
                         .then_some(super::super::keys::ProbeKeys::All(input.input_keys)),
