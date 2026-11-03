@@ -146,7 +146,7 @@ pub(super) struct Preparation<'a> {
     backend: Backend,
     observer: Option<std::sync::Arc<dyn crate::events::Sink>>,
     owned: &'a OwnedDownload,
-    work: files::Stage,
+    work: Mutex<Option<files::Stage>>,
     state: Mutex<State>,
     running: Mutex<()>,
     retained: Mutex<Option<ContextPermit>>,
@@ -222,7 +222,7 @@ impl<'a> Preparation<'a> {
             backend,
             observer: command.backend.activity.clone(),
             owned,
-            work,
+            work: Mutex::new(Some(work)),
             state: Mutex::new(State {
                 fetched: manifests.clone(),
                 pending: plans.into_iter().map(Some).collect(),
@@ -320,6 +320,10 @@ impl<'a> Preparation<'a> {
                 state.remaining.clear();
                 state.ready.clear();
                 state.fetched.clear();
+                // This worker owns the running gate, and native helpers have
+                // returned and closed their files. Release only this private
+                // speculative stage before returning its memory reservation.
+                drop(self.work.lock().map_err(|_| IO)?.take());
                 drop(self.retained.lock().map_err(|_| IO)?.take());
             }
         }
@@ -331,7 +335,14 @@ impl<'a> Preparation<'a> {
         plan: Plan,
         originals: Expected,
     ) -> Result<Rendition, ConversionError> {
-        let directory = self.work.path().join(format!("rendition-{ordinal:04}"));
+        let directory = self
+            .work
+            .lock()
+            .map_err(|_| IO)?
+            .as_ref()
+            .ok_or(IO)?
+            .path()
+            .join(format!("rendition-{ordinal:04}"));
         files::create_dir(&directory)?;
         let resources = plan
             .resources
@@ -422,7 +433,7 @@ impl<'a> Preparation<'a> {
         }
         retained.shrink(retained_bytes).map_err(|_| IO)?;
         Ok(Some(AcquiredNative {
-            work: self.work,
+            work: self.work.into_inner().map_err(|_| IO)?.ok_or(IO)?,
             root: self.owned.path().canonicalize().map_err(|_| CHANGED)?,
             renditions: state.renditions,
             retained_bytes,
@@ -583,6 +594,112 @@ mod tests {
                 )
                 .unwrap(),
         );
+    }
+
+    fn failing_transport_inputs(owned: &OwnedDownload) -> (Vec<Plan>, Vec<Resource>, Expected) {
+        let manifest = b"#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\nfirst.ts\n#EXT-X-ENDLIST\n";
+        let later = b"#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\nlater.ts\n#EXT-X-ENDLIST\n";
+        let invalid = [0x47; 188];
+        for (name, bytes) in [
+            ("track/first.m3u8", manifest.as_slice()),
+            ("track/later.m3u8", later.as_slice()),
+            ("track/first.ts", invalid.as_slice()),
+        ] {
+            super::super::write_registered(owned, std::path::Path::new(name), bytes, |_| {})
+                .unwrap();
+        }
+        let manifests = Expected::from([
+            (
+                "track/first.m3u8".into(),
+                super::super::bytes_digest(manifest),
+            ),
+            ("track/later.m3u8".into(), super::super::bytes_digest(later)),
+        ]);
+        let plans = ["first", "later"].map(|name| Plan {
+            playlist: format!("track/{name}.m3u8").into(),
+            resources: vec![format!("track/{name}.ts").into()],
+        });
+        let resources = ["first", "later"].map(|name| Resource {
+            url: format!("https://fixture.example.invalid/{name}.ts"),
+            path: format!("track/{name}.ts"),
+        });
+        (plans.into(), resources.into(), manifests)
+    }
+
+    #[test]
+    fn failed_preparation_removes_all_speculative_copies_before_later_fetches_continue() {
+        let root = crate::native::private_tempdir().unwrap();
+        let owned = OwnedDownload::reserve_source(&root.path().join("source")).unwrap();
+        owned.create_dir(std::path::Path::new("track")).unwrap();
+        let (plans, resources, manifests) = failing_transport_inputs(&owned);
+        let command = Converter::new(
+            Arc::new(
+                ToolRunner::new(Arc::new(Secrets::default()), Arc::new(NoSink))
+                    .with_limiter(Arc::new(Limiter::new(2, 4_u64 << 30))),
+            ),
+            "must-not-start-packager",
+            "must-not-start-decoder",
+        );
+        let preparation = Preparation::new(
+            &command,
+            &owned,
+            plans,
+            &resources,
+            &manifests,
+            2,
+            &crate::concurrency::Stop::new(),
+        )
+        .unwrap()
+        .unwrap();
+        let scratch = {
+            let work = preparation.work.lock().unwrap();
+            let work = work.as_ref().unwrap();
+            work.create_file(&work.path().join("prior-success.ts"))
+                .unwrap()
+                .write_all(b"prior speculative copy")
+                .unwrap();
+            files::create_dir(&work.path().join("partial")).unwrap();
+            files::create_new(&work.path().join("partial/copy.ts"))
+                .unwrap()
+                .write_all(b"partial speculative copy")
+                .unwrap();
+            work.private_root().to_path_buf()
+        };
+        let fetched = |bytes: &[u8]| crate::source::Fetched {
+            effective: "https://fixture.example.invalid/media.ts".into(),
+            sha256: hex::encode(super::super::bytes_digest(bytes).0),
+            size: bytes.len() as u64,
+        };
+        preparation
+            .completed("track/first.ts", &fetched(&[0x47; 188]))
+            .unwrap();
+        assert!(
+            !scratch.exists(),
+            "failed optional work retained speculative disk usage"
+        );
+        assert!(preparation.work.lock().unwrap().is_none());
+        assert!(preparation.retained.lock().unwrap().is_none());
+        assert_eq!(
+            std::fs::read(owned.path().join("track/first.ts")).unwrap(),
+            [0x47; 188]
+        );
+        let remainder = b"later original resource";
+        super::super::write_registered(
+            &owned,
+            std::path::Path::new("track/later.ts"),
+            remainder,
+            |_| {},
+        )
+        .unwrap();
+        preparation
+            .completed("track/later.ts", &fetched(remainder))
+            .unwrap();
+        owned.check_registered().unwrap();
+        assert_eq!(
+            std::fs::read(owned.path().join("track/later.ts")).unwrap(),
+            remainder
+        );
+        assert!(preparation.finish().unwrap().is_none());
     }
 
     #[test]
