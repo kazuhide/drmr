@@ -763,11 +763,33 @@ impl Backend {
         self.verify_transport_decoded(source, result, Some(language))
     }
 
+    pub(in crate::conversion) fn verify_manifest_languages_decoded(
+        &self,
+        source: View<'_>,
+        result: View<'_>,
+        languages: (Option<&str>, Option<&str>),
+    ) -> Result<VerificationReport, ConversionError> {
+        if source.transport || result.transport {
+            return Err(ConversionError("presentation-metadata-mismatch"));
+        }
+        self.verify_transport_decoded_views(source, result, None, languages)
+    }
+
     fn verify_transport_decoded(
         &self,
         source: View<'_>,
         result: View<'_>,
         language: Option<&str>,
+    ) -> Result<VerificationReport, ConversionError> {
+        self.verify_transport_decoded_views(source, result, language, (None, None))
+    }
+
+    fn verify_transport_decoded_views(
+        &self,
+        source: View<'_>,
+        result: View<'_>,
+        language: Option<&str>,
+        languages: (Option<&str>, Option<&str>),
     ) -> Result<VerificationReport, ConversionError> {
         let mut a = self.profile_stream_keys_options(
             source.input,
@@ -788,6 +810,15 @@ impl Backend {
                 return Err(ConversionError("presentation-metadata-mismatch"));
             }
             a["language"] = b["language"].clone();
+        }
+        for (profile, declared) in [(&mut a, languages.0), (&mut b, languages.1)] {
+            if declared.is_some() {
+                let effective =
+                    super::verify::effective_language(profile["language"].as_str(), declared)
+                        .ok_or(ConversionError("presentation-metadata-mismatch"))?
+                        .to_owned();
+                profile["language"] = effective.into();
+            }
         }
         let config_a = self.transport_config(source, &a)?;
         let config_b = self.transport_config(result, &b)?;

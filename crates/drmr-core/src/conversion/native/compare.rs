@@ -6,7 +6,25 @@ use super::super::{
 use super::{Track, samples::Ratio};
 use std::path::Path;
 
-fn entry_equal(a: &Track, b: &Track) -> Result<bool, ConversionError> {
+#[derive(Clone, Copy)]
+struct ComparisonMetadata<'a> {
+    allow_tail_repair: bool,
+    languages: (Option<&'a str>, Option<&'a str>),
+}
+impl ComparisonMetadata<'_> {
+    fn physical(allow_tail_repair: bool) -> Self {
+        Self {
+            allow_tail_repair,
+            languages: (None, None),
+        }
+    }
+}
+
+fn entry_equal(
+    a: &Track,
+    b: &Track,
+    languages: (Option<&str>, Option<&str>),
+) -> Result<bool, ConversionError> {
     let x = &a.descriptor.sample_entry_metadata;
     let y = &b.descriptor.sample_entry_metadata;
     let aac = a.descriptor.decoder_config_kind == *b"esds"
@@ -54,7 +72,11 @@ fn entry_equal(a: &Track, b: &Track) -> Result<bool, ConversionError> {
         && x.height == y.height
         && (aac || (x.channels == y.channels && x.sample_rate == y.sample_rate))
         && x.sample_size == y.sample_size
-        && x.language.as_deref().unwrap_or("und") == y.language.as_deref().unwrap_or("und")
+        && matches!(
+            (super::super::verify::effective_language(x.language.as_deref(), languages.0),
+             super::super::verify::effective_language(y.language.as_deref(), languages.1)),
+            (Some(first), Some(second)) if first == second
+        )
         && x.display_width == y.display_width
         && x.display_height == y.display_height
         && x.volume == y.volume
@@ -224,10 +246,10 @@ fn compare_tracks(
     second: &super::media::Media,
     b: &Track,
     result_window: Option<super::super::finite::Window>,
-    allow_tail_repair: bool,
+    metadata: ComparisonMetadata<'_>,
 ) -> Result<VerificationReport, ConversionError> {
     if b.samples.vp9_protection == Some(super::super::native_media::Vp9Protection::ShakaTailCenc)
-        && !allow_tail_repair
+        && !metadata.allow_tail_repair
     {
         return Err(super::super::native_media::VP9_LAYOUT);
     }
@@ -250,7 +272,7 @@ fn compare_tracks(
         a.descriptor.sample_entry_metadata.display_matrix
             == b.descriptor.sample_entry_metadata.display_matrix
     };
-    let metadata = entry_equal(a, b)?
+    let metadata = entry_equal(a, b, metadata.languages)?
         && first.movie.rate == second.movie.rate
         && first.movie.volume == second.movie.volume
         && matrices_equal;
@@ -305,7 +327,7 @@ impl Backend {
             &second,
             b,
             result_window,
-            self.vp9_source_repair_allowed(),
+            ComparisonMetadata::physical(self.vp9_source_repair_allowed()),
         )
     }
     pub(in crate::conversion) fn native_admit_segmented(
@@ -366,7 +388,7 @@ impl Backend {
                 b,
                 second,
                 fragmented_window(b, second)?,
-                self.vp9_source_repair_allowed(),
+                ComparisonMetadata::physical(self.vp9_source_repair_allowed()),
             )?;
             metadata &= compared.checks.stream_metadata.is_pass();
             payload &= compared.checks.packet_payloads_equal
@@ -409,7 +431,10 @@ impl Backend {
             &second,
             b,
             result_window,
-            self.vp9_source_repair_allowed(),
+            ComparisonMetadata {
+                allow_tail_repair: self.vp9_source_repair_allowed(),
+                languages: (source.manifest_language, result.manifest_language),
+            },
         )?;
         result_report.checks.packet_timing_equal &=
             super::super::progressive::presentation_windows_equal(
@@ -458,7 +483,7 @@ impl Backend {
                 )?;
                 let mut check =
                     // These views represent the same guarded source, before any repair/output.
-                    compare_tracks(&media, track, source_window, &view, selected, result_window, true)?;
+                    compare_tracks(&media, track, source_window, &view, selected, result_window, ComparisonMetadata::physical(true))?;
                 check.checks.packet_timing_equal &=
                     super::super::progressive::playback_controls_equal(
                         input,
@@ -528,6 +553,7 @@ impl Backend {
                     index: source.index,
                     key: source.probe_keys(),
                     clock: source_clock,
+                    manifest_language: None,
                 },
                 super::super::verify::StreamView {
                     input: result.input,
@@ -535,6 +561,7 @@ impl Backend {
                     index: result.index,
                     key: result.probe_keys(),
                     clock: result_clock,
+                    manifest_language: None,
                 },
             ),
             (true, true) => {

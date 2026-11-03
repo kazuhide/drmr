@@ -38,6 +38,11 @@ pub(super) fn complete_track_views(
         && movie.tracks.len() == 2
         && movie.tracks.iter().any(|track| {
             track.edits.len() == 2
+                // A finite joint CBCS input is normalized through independently
+                // verified track views, rather than relying on cross-track tool state.
+                || (track.codec == *b"mp4a"
+                    && track.protection.scheme == super::super::native_media::Scheme::Cbcs
+                    && !track.edits.is_empty())
                 || (track.codec == *b"mp4a"
                     && track.timescale == 90_000
                     && track.sample_entry_metadata.sample_rate == Some(44_100))
@@ -49,26 +54,7 @@ pub(super) fn complete_track_views(
     }
 }
 
-fn language(value: &str) -> Result<String, ConversionError> {
-    let value = value.to_ascii_lowercase();
-    Ok(match value.as_str() {
-        "en" => "eng",
-        "ja" => "jpn",
-        "fr" => "fra",
-        "de" => "deu",
-        "es" => "spa",
-        "it" => "ita",
-        "pt" => "por",
-        "zh" => "zho",
-        "ko" => "kor",
-        "ru" => "rus",
-        "ar" => "ara",
-        "nl" => "nld",
-        value if value.len() == 3 && value.bytes().all(|b| b.is_ascii_lowercase()) => value,
-        _ => return Err(ConversionError("mp4-audio-language-not-supported")),
-    }
-    .to_owned())
-}
+use super::metadata::mp4_language as language;
 
 pub(super) fn declared_language(source: &Prepared) -> Result<String, ConversionError> {
     language(
@@ -154,6 +140,14 @@ pub(super) fn supported_tracks(prepared: &[Prepared]) -> bool {
 
 pub(super) fn canonical_tracks(prepared: &[Prepared], format: inspection::InputFormat) -> bool {
     let joint_manifest = joint_manifest_tracks(prepared, format);
+    if format != inspection::InputFormat::Mp4
+        && !joint_manifest
+        && prepared
+            .iter()
+            .any(|track| track.metadata.audio.is_some() || track.metadata.audio_group.is_some())
+    {
+        return false;
+    }
     !prepared.is_empty()
         && (prepared.len() == 1
             || (format == inspection::InputFormat::Mp4 && prepared.len() == 2)
@@ -263,6 +257,38 @@ pub(super) fn manifest_comparison(
         })
 }
 
+pub(super) fn manifest_languages(
+    prepared: &[Prepared],
+) -> Result<Vec<Option<String>>, ConversionError> {
+    let format = if prepared
+        .iter()
+        .all(|track| track.metadata.origin == super::metadata::Origin::Dash)
+    {
+        inspection::InputFormat::Dash
+    } else if prepared
+        .iter()
+        .all(|track| track.metadata.origin == super::metadata::Origin::Hls)
+    {
+        inspection::InputFormat::Hls
+    } else {
+        return Ok(vec![None; prepared.len()]);
+    };
+    if !joint_manifest_tracks(prepared, format) || !canonical_tracks(prepared, format) {
+        return Ok(vec![None; prepared.len()]);
+    }
+    prepared
+        .iter()
+        .map(|track| {
+            track
+                .metadata
+                .audio
+                .as_ref()
+                .map(|_| declared_language(track))
+                .transpose()
+        })
+        .collect()
+}
+
 impl Converter {
     pub(super) fn standalone_metadata_supported(
         &self,
@@ -276,9 +302,8 @@ impl Converter {
                     source.index,
                     Some(super::super::keys::ProbeKeys::All(keys)),
                 )?;
-                if language(profile["language"].as_str().unwrap_or("und"))?
-                    != declared_language(source)?
-                {
+                let physical = language(profile["language"].as_str().unwrap_or("und"))?;
+                if physical != "und" && physical != declared_language(source)? {
                     return Ok(false);
                 }
             }

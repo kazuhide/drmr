@@ -1545,12 +1545,36 @@ impl Converter {
         result_keys: &InputKeys,
         output_format: OutputFormat,
     ) -> Result<VerificationReport, ConversionError> {
-        let native = self.native_prepared_pair(a, b, source_keys, result_keys)?;
+        self.verify_prepared_pair_languages(
+            a,
+            b,
+            source_keys,
+            result_keys,
+            output_format,
+            (None, None),
+        )
+    }
+    fn verify_prepared_pair_languages(
+        &self,
+        a: &Prepared,
+        b: &Prepared,
+        source_keys: &InputKeys,
+        result_keys: &InputKeys,
+        output_format: OutputFormat,
+        languages: (Option<&str>, Option<&str>),
+    ) -> Result<VerificationReport, ConversionError> {
+        let native = self.native_prepared_pair(a, b, source_keys, result_keys, languages)?;
         if self.backend.validation_depth == super::ValidationDepth::Native {
             return Ok(native);
         }
-        let mut report =
-            self.verify_prepared_pair_decoded(a, b, source_keys, result_keys, output_format)?;
+        let mut report = self.verify_prepared_pair_decoded(
+            a,
+            b,
+            source_keys,
+            result_keys,
+            output_format,
+            languages,
+        )?;
         report.require_native(&native)?;
         Ok(report)
     }
@@ -1561,6 +1585,7 @@ impl Converter {
         source_keys: &InputKeys,
         result_keys: &InputKeys,
         output_format: OutputFormat,
+        languages: (Option<&str>, Option<&str>),
     ) -> Result<VerificationReport, ConversionError> {
         if a.audio_presentation.is_some() || b.audio_presentation.is_some() {
             let (Some(first), Some(second)) = (a.audio_presentation, b.audio_presentation) else {
@@ -1574,7 +1599,10 @@ impl Converter {
             )?;
             let source = raw_audio_view(a, source_keys);
             let result = raw_audio_view(b, result_keys);
-            let mut proof = if ts_mp4::transport_comparison(output_format, a, b) {
+            let mut proof = if languages.0.is_some() || languages.1.is_some() {
+                self.backend
+                    .verify_manifest_languages_decoded(source, result, languages)?
+            } else if ts_mp4::transport_comparison(output_format, a, b) {
                 self.backend
                     .verify_transport_mp4(source, result, &ts_mp4::declared_language(a)?)?
             } else {
@@ -1641,10 +1669,12 @@ impl Converter {
         }
         let a_view = StreamView::new(&a.source, a.index, key_for(a, source_keys))
             .with_metadata(&a.media)
-            .with_clock(a.clock);
+            .with_clock(a.clock)
+            .with_manifest_language(languages.0);
         let b_view = StreamView::new(&b.source, b.index, key_for(b, result_keys))
             .with_metadata(&b.media)
-            .with_clock(b.clock);
+            .with_clock(b.clock)
+            .with_manifest_language(languages.1);
         self.backend.verify_views(
             a_view.with_all_keys(source_keys),
             b_view.with_all_keys(result_keys),
@@ -1710,14 +1740,20 @@ impl Converter {
                 }
             }
         }
+        let source_languages = ts_mp4::manifest_languages(&source)?;
+        let result_languages = ts_mp4::manifest_languages(&result)?;
         let verified_tracks = self.run_tracks(source.len(), |ordinal| {
             let task = tasks.as_ref().and_then(|tasks| tasks.start(ordinal));
-            let report = self.verify_prepared_pair(
+            let report = self.verify_prepared_pair_languages(
                 &source[ordinal],
                 &result[ordinal],
                 source_keys,
                 result_keys,
                 output_format,
+                (
+                    source_languages[ordinal].as_deref(),
+                    result_languages[ordinal].as_deref(),
+                ),
             )?;
             if let Some(progress) = &progress {
                 progress.completed(ordinal);

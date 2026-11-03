@@ -19,6 +19,7 @@ pub(super) struct StreamView<'a> {
     pub(in crate::conversion) index: usize,
     pub(in crate::conversion) key: Option<super::keys::ProbeKeys<'a>>,
     pub(in crate::conversion) clock: Option<super::native::ManifestAacClock>,
+    pub(in crate::conversion) manifest_language: Option<&'a str>,
 }
 impl<'a> StreamView<'a> {
     pub fn new(input: &'a Path, index: usize, key: Option<&'a ContentKey>) -> Self {
@@ -28,6 +29,7 @@ impl<'a> StreamView<'a> {
             index,
             key: key.map(super::keys::ProbeKeys::One),
             clock: None,
+            manifest_language: None,
         }
     }
     pub fn with_all_keys(mut self, keys: &'a super::InputKeys) -> Self {
@@ -38,11 +40,35 @@ impl<'a> StreamView<'a> {
         self.metadata = metadata;
         self
     }
+    pub fn with_manifest_language(mut self, language: Option<&'a str>) -> Self {
+        self.manifest_language = language;
+        self
+    }
     pub fn with_clock(mut self, clock: Option<super::native::ManifestAacClock>) -> Self {
         self.clock = clock;
         self
     }
 }
+/// A validated manifest may name an otherwise unspecified container language.
+/// A known physical language is never replaced by a conflicting declaration.
+pub(in crate::conversion) fn effective_language<'a>(
+    physical: Option<&'a str>,
+    declared: Option<&'a str>,
+) -> Option<&'a str> {
+    let physical = physical.unwrap_or("und");
+    match declared {
+        Some(value)
+            if value.len() == 3
+                && value.bytes().all(|byte| byte.is_ascii_lowercase())
+                && (physical == "und" || physical == value) =>
+        {
+            Some(value)
+        }
+        Some(_) => None,
+        None => Some(physical),
+    }
+}
+
 fn metadata_key(view: StreamView<'_>) -> Option<super::keys::ProbeKeys<'_>> {
     if crate::inspection::inspect(view.metadata)
         .is_ok_and(|r| r.protection == crate::inspection::Protection::Clear)

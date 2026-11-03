@@ -201,6 +201,7 @@ impl Converter {
         b: &Prepared,
         source_keys: &InputKeys,
         result_keys: &InputKeys,
+        languages: (Option<&str>, Option<&str>),
     ) -> Result<VerificationReport, ConversionError> {
         let mut report = if a.transport_index.is_some() || b.transport_index.is_some() {
             self.backend.native_verify_transport_with_clock(
@@ -234,10 +235,12 @@ impl Converter {
                 StreamView::new(&a.source, a.index, key_for(a, source_keys))
                     .with_metadata(&a.media)
                     .with_clock(a.clock)
+                    .with_manifest_language(languages.0)
                     .with_all_keys(source_keys),
                 StreamView::new(&b.source, b.index, key_for(b, result_keys))
                     .with_metadata(&b.media)
                     .with_clock(b.clock)
+                    .with_manifest_language(languages.1)
                     .with_all_keys(result_keys),
             )?
         };
