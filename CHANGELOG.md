@@ -21,6 +21,12 @@ Completed changes are recorded by category before the next release.
 
 ### Changed
 
+- Check complete clear MPEG-TS HLS renditions while other resources download
+  for qualified native multiple-output conversions, then reuse those checks for
+  input qualification. Keep complete-source fingerprints, final output checks,
+  cancellation and resource limits.
+- Batch private media copies and TS joining in 64 KiB buffers on macOS while
+  retaining stream limits and the existing copy path on other platforms.
 - Reuse checked source data during native conversion from clear MPEG-TS HLS
   to multiple fMP4 HLS/DASH outputs with `stitch` processing. Prepare each final
   output once for qualification and complete comparison. Keep encryption and
