@@ -326,3 +326,62 @@ fn common_commands_save_execute_and_freshly_verify_two_real_outputs() {
     assert!(destination.join("dash/manifest.mpd").is_file());
     assert!(destination.join("hls/master.m3u8").is_file());
 }
+
+#[test]
+fn direct_configured_verification_uses_canonical_output_defaults_and_explicit_addressing() {
+    let root = drmr_core::native::private_tempdir().unwrap();
+    let input = root.path().join("source.mp4");
+    prepare_fragmented_video(&input);
+    let original = std::fs::read(&input).unwrap();
+    for (name, addressing) in [("default", None), ("timeline", Some("template-timeline"))] {
+        let case = root.path().join(name);
+        std::fs::create_dir(&case).unwrap();
+        let mut config = json!({"schema_version":4,"outputs":[
+            {"id":"dash","output_format":"dash","encryption":"clear","drms":[]}
+        ]});
+        if let Some(addressing) = addressing {
+            config["outputs"][0]["dash_addressing"] = addressing.into();
+        }
+        let config = recipe(&case, &config);
+        let output = case.join("result");
+        let converted = invoke(&[
+            "convert",
+            input.to_str().unwrap(),
+            "--output-config",
+            config.to_str().unwrap(),
+            "--output-dir",
+            output.to_str().unwrap(),
+            "--json",
+        ]);
+        assert!(
+            converted.status.success(),
+            "{} {}",
+            String::from_utf8_lossy(&converted.stdout),
+            String::from_utf8_lossy(&converted.stderr)
+        );
+        let manifest = std::fs::read_to_string(output.join("dash/manifest.mpd")).unwrap();
+        assert_eq!(manifest.contains("<SegmentTimeline"), addressing.is_some());
+        if addressing.is_none() {
+            assert!(manifest.contains("duration="));
+        }
+        let verified = invoke(&[
+            "verify",
+            output.to_str().unwrap(),
+            "--source",
+            input.to_str().unwrap(),
+            "--output-config",
+            config.to_str().unwrap(),
+            "--json",
+        ]);
+        assert!(
+            verified.status.success(),
+            "{} {}",
+            String::from_utf8_lossy(&verified.stdout),
+            String::from_utf8_lossy(&verified.stderr)
+        );
+        let proof: Value = serde_json::from_slice(&verified.stdout).unwrap();
+        assert_eq!(proof["passed"], true);
+        assert_eq!(proof["outputs"].as_array().unwrap().len(), 1);
+    }
+    assert_eq!(std::fs::read(&input).unwrap(), original);
+}
