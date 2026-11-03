@@ -335,7 +335,7 @@ fn direct_configured_verification_uses_canonical_output_defaults_and_explicit_ad
     let original = std::fs::read(&input).unwrap();
     for (name, addressing) in [("default", None), ("timeline", Some("template-timeline"))] {
         let case = root.path().join(name);
-        std::fs::create_dir(&case).unwrap();
+        drmr_core::native::create_private_dir_new(&case).unwrap();
         let mut config = json!({"schema_version":4,"outputs":[
             {"id":"dash","output_format":"dash","encryption":"clear","drms":[]}
         ]});
