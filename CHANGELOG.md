@@ -5,18 +5,29 @@ for installation, stable interfaces and versioning.
 
 ## [Unreleased]
 
-Development for 1.3. Planned items below are not included in the 1.2.0 release.
+Development for 1.3. Changes below are not included in the 1.2.0 release.
 Completed changes are recorded by category before the next release.
+
+### Added
+
+- Write one fragmented MP4 from qualified separate video and AAC audio tracks
+  in DASH or fMP4 HLS, with clear, CENC or CBCS protection subject to the existing
+  codec profiles. Preserve encoded samples, clocks and audio playback windows;
+  refuse selection metadata that cannot be represented faithfully in MP4.
+  Use an explicit manifest language when the media language is unspecified,
+  while rejecting conflicts with known languages.
+- Extend native release round-trip checks to cover joint DASH/fMP4 HLS and MP4
+  in both directions, including final comparison against the original MP4.
 
 ### Fixed
 
+- Apply the same output defaults during direct conversion and independent
+  configured verification, including the default DASH SegmentTemplate addressing.
 - Use the current `hls-fmp4`, `output_format` and `encryption` names consistently
   in the output tables and English/Japanese guides.
 
 ### Planned for 1.3
 
-- Combine qualified separate video and AAC audio tracks from DASH or fMP4 HLS
-  into one MP4, with independent source comparison and round-trip checks.
 - Share encryption and segment packaging between compatible HLS/DASH outputs
   while retaining separate final media, manifest and DRM verification.
 
