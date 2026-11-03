@@ -370,18 +370,16 @@ impl<'a> Preparation<'a> {
         }
         let mut copied = BTreeMap::new();
         for (path, original) in prepared.resources.iter().zip(&plan.resources) {
-            let expected = originals[original];
-            if digest(path, &self.backend.stop, expected.1)? != expected {
+            if *path
+                != self
+                    .owned
+                    .path()
+                    .join(original)
+                    .canonicalize()
+                    .map_err(|_| CHANGED)?
+            {
                 return Err(CHANGED);
             }
-            let held = files::regular_input(path).map_err(|_| CHANGED)?;
-            copied.insert(
-                path.clone(),
-                (
-                    crate::native::FileIdentity::read(&held).map_err(|_| CHANGED)?,
-                    expected,
-                ),
-            );
         }
         for path in [
             directory.join("reference.m3u8"),

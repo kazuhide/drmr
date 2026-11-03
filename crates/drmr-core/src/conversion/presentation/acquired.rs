@@ -1,4 +1,4 @@
-//! Native admission of complete, privately retained transport renditions.
+//! Native admission of complete transport renditions bound to their fetched bytes.
 use super::{
     ConversionError, Converter, Prepared, SourceQualification, SourceValidationPurpose,
     VerificationSource, apply_transport_metadata_values, hls, hls_media_paths, native_preparation,
@@ -26,6 +26,10 @@ pub(in crate::conversion) fn prepare(
     let mut tracks = native_preparation::transport_segments(&localized, admission, backend)?;
     super::apply_hls_target(&mut tracks, localized.target_seconds);
     for track in &mut tracks {
+        // These views are qualification-only. Any later normalization takes a
+        // fresh private snapshot; no execution consumes this speculative view.
+        track.source = playlist.to_path_buf();
+        track.media = playlist.to_path_buf();
         if localized.empty_cue_pair {
             track
                 .compatibility

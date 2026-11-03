@@ -92,36 +92,6 @@ impl NativeScanner {
     where
         F: FnMut(u16, TrackKind, &[u8], i64, i64) -> Result<(), ConversionError>,
     {
-        self.copy_segment_bound(source, destination, stop, None, observer)
-    }
-
-    pub fn copy_segment_expected(
-        &mut self,
-        source: &Path,
-        destination: &Path,
-        stop: &Stop,
-        expected: ([u8; 32], u64),
-    ) -> Result<(), ConversionError> {
-        self.copy_segment_bound(
-            source,
-            destination,
-            stop,
-            Some(expected),
-            &mut |_, _, _, _, _| Ok(()),
-        )
-    }
-
-    fn copy_segment_bound<F>(
-        &mut self,
-        source: &Path,
-        destination: &Path,
-        stop: &Stop,
-        expected: Option<([u8; 32], u64)>,
-        observer: &mut F,
-    ) -> Result<(), ConversionError>
-    where
-        F: FnMut(u16, TrackKind, &[u8], i64, i64) -> Result<(), ConversionError>,
-    {
         if let Some(error) = self.failed {
             return Err(error);
         }
@@ -138,11 +108,32 @@ impl NativeScanner {
                 return Err(error);
             }
         };
-        if expected.is_some_and(|expected| !receipt.matches_bytes(expected)) {
-            self.failed = Some(BAD);
-            return Err(BAD);
-        }
         self.scan_receipt(receipt, stop, observer)
+    }
+    /// Scan an original resource without copying it; both passes check its creation hash.
+    pub fn segment_expected(
+        &mut self,
+        source: &Path,
+        stop: &Stop,
+        expected: ([u8; 32], u64),
+    ) -> Result<(), ConversionError> {
+        if let Some(error) = self.failed {
+            return Err(error);
+        }
+        let receipt = match receipt::Receipt::read(
+            &self.admission,
+            &self.receipt_context,
+            source,
+            expected,
+            stop,
+        ) {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                self.failed = Some(error);
+                return Err(error);
+            }
+        };
+        self.scan_receipt(receipt, stop, &mut |_, _, _, _, _| Ok(()))
     }
     fn scan_receipt<F>(
         &mut self,
