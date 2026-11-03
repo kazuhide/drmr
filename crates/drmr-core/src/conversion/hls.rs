@@ -1491,13 +1491,14 @@ mod resource_tests {
             (hash.finalize(), bytes.len() as u64)
         };
         let manifest = super::super::files::read_manifest(&source).unwrap();
+        let source_root = source.parent().unwrap().canonicalize().unwrap();
         let originals = std::str::from_utf8(&manifest)
             .unwrap()
             .lines()
             .map(str::trim)
             .filter(|line| !line.is_empty() && !line.starts_with('#'))
             .map(|line| {
-                let path = local_resource(source.parent().unwrap(), line).unwrap();
+                let path = local_resource(&source_root, line).unwrap();
                 let expected = digest(&fs::read(&path).unwrap());
                 (path, expected)
             })

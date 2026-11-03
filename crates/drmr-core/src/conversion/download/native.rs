@@ -524,7 +524,9 @@ mod tests {
             cache.check(&command.backend).unwrap();
             if replace {
                 std::fs::rename(&path, path.with_extension("previous")).unwrap();
-                crate::native::create_private_new(&path)
+                cache
+                    .work
+                    .create_file(&path)
                     .unwrap()
                     .write_all(bytes)
                     .unwrap();
