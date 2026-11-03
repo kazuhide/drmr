@@ -257,14 +257,7 @@ fn fragmented_joint_reimport_requires_each_role_key_finite_windows_and_exact_tra
     assert_eq!(fs::read(altered).unwrap(), changed);
 }
 
-fn presentation_roundtrips(
-    video: &str,
-    rate: Option<u32>,
-    targets: &[TargetProtection],
-    audio_first: bool,
-) {
-    let owner = common::private_tempdir().unwrap();
-    let progressive = owner.path().join("progressive.mp4");
+fn roundtrip_fixture(progressive: &Path, video: &str, rate: Option<u32>, audio_first: bool) {
     if let Some(rate) = rate {
         let mut generate = std::process::Command::new("ffmpeg");
         generate
@@ -296,14 +289,130 @@ fn presentation_roundtrips(
                     "-metadata:s:a:0",
                     "language=eng"
                 ])
-                .arg(&progressive)
+                .arg(progressive)
                 .status()
                 .unwrap()
                 .success()
         );
     } else {
-        joint(&progressive, false);
+        joint(progressive, false);
     }
+}
+
+fn assert_cbcs_reimport(
+    command: &Converter,
+    output: &Path,
+    reimported: &Path,
+    format: OutputFormat,
+    result_keys: &InputKeys,
+    video: &str,
+    rate: Option<u32>,
+) {
+    let hls = HlsInputKeys::default();
+    let empty = InputKeys::default();
+    let report = command
+        .convert(ConversionRequest {
+            input: output,
+            output: reimported,
+            format,
+            target: TargetProtection::Clear,
+            input_keys: result_keys,
+            hls_input_keys: &hls,
+            output_key: None,
+            hls_key_uri: None,
+            hls_output_key: None,
+        })
+        .unwrap_or_else(|error| panic!("CBCS MP4 reimport {video}/{rate:?}/{format:?}: {error:?}"));
+    assert!(report.verification.passed);
+    let returned = reimported.join(if format == OutputFormat::Dash {
+        "manifest.mpd"
+    } else {
+        "master.m3u8"
+    });
+    assert!(
+        command
+            .verify(VerificationRequest {
+                source: VerificationSource {
+                    input: output,
+                    input_keys: result_keys,
+                    hls_keys: &hls
+                },
+                output: VerificationSource {
+                    input: &returned,
+                    input_keys: &empty,
+                    hls_keys: &hls
+                },
+            })
+            .unwrap()
+            .passed
+    );
+}
+
+fn assert_mp4_return_proofs(
+    command: &Converter,
+    source: &Path,
+    entry: &Path,
+    output: &Path,
+    keys: &InputKeys,
+    result_keys: &InputKeys,
+) {
+    let hls = HlsInputKeys::default();
+    let empty = InputKeys::default();
+    assert!(
+        command
+            .verify(VerificationRequest {
+                source: VerificationSource {
+                    input: entry,
+                    input_keys: keys,
+                    hls_keys: &hls
+                },
+                output: VerificationSource {
+                    input: output,
+                    input_keys: result_keys,
+                    hls_keys: &hls
+                },
+            })
+            .unwrap()
+            .passed
+    );
+    assert!(
+        command
+            .verify(VerificationRequest {
+                source: VerificationSource {
+                    input: source,
+                    input_keys: &empty,
+                    hls_keys: &hls
+                },
+                output: VerificationSource {
+                    input: output,
+                    input_keys: result_keys,
+                    hls_keys: &hls
+                },
+            })
+            .unwrap()
+            .passed
+    );
+}
+
+fn assert_mp4_admitted(command: &Converter, source: VerificationSource<'_>, context: &str) {
+    let qualification = command
+        .validate_source(source, SourceValidationPurpose::Conversion)
+        .unwrap();
+    assert!(
+        qualification.eligible_formats.contains(&OutputFormat::Mp4),
+        "{context}"
+    );
+}
+
+fn presentation_roundtrips(
+    video: &str,
+    rate: Option<u32>,
+    targets: &[TargetProtection],
+    audio_first: bool,
+) {
+    let owner = common::private_tempdir().unwrap();
+    let progressive = owner.path().join("progressive.mp4");
+    roundtrip_fixture(&progressive, video, rate, audio_first);
     let source = owner.path().join("source.mp4");
     let (command, events) = command();
     convert(
@@ -357,19 +466,14 @@ fn presentation_roundtrips(
         } else {
             &input_keys
         };
-        let qualification = command
-            .validate_source(
-                VerificationSource {
-                    input: &entry,
-                    input_keys: keys,
-                    hls_keys: &hls,
-                },
-                SourceValidationPurpose::Conversion,
-            )
-            .unwrap();
-        assert!(
-            qualification.eligible_formats.contains(&OutputFormat::Mp4),
-            "{format:?}/{protection:?}"
+        assert_mp4_admitted(
+            &command,
+            VerificationSource {
+                input: &entry,
+                input_keys: keys,
+                hls_keys: &hls,
+            },
+            &format!("{format:?}/{protection:?}"),
         );
         for (index, target) in targets.iter().copied().enumerate() {
             let output = owner.path().join(format!("result-{ordinal}-{index}.mp4"));
@@ -383,81 +487,18 @@ fn presentation_roundtrips(
                 &input_keys
             };
             if target == TargetProtection::Cbcs {
-                let reimported = owner.path().join(format!("reimport-{ordinal}-{index}"));
-                let report = command
-                    .convert(ConversionRequest {
-                        input: &output,
-                        output: &reimported,
-                        format,
-                        target: TargetProtection::Clear,
-                        input_keys: result_keys,
-                        hls_input_keys: &hls,
-                        output_key: None,
-                        hls_key_uri: None,
-                        hls_output_key: None,
-                    })
-                    .unwrap_or_else(|error| {
-                        panic!("CBCS MP4 reimport {video}/{rate:?}/{format:?}: {error:?}")
-                    });
-                assert!(report.verification.passed);
-                let returned = reimported.join(if format == OutputFormat::Dash {
-                    "manifest.mpd"
-                } else {
-                    "master.m3u8"
-                });
-                assert!(
-                    command
-                        .verify(VerificationRequest {
-                            source: VerificationSource {
-                                input: &output,
-                                input_keys: result_keys,
-                                hls_keys: &hls
-                            },
-                            output: VerificationSource {
-                                input: &returned,
-                                input_keys: &empty,
-                                hls_keys: &hls
-                            },
-                        })
-                        .unwrap()
-                        .passed
+                assert_cbcs_reimport(
+                    &command,
+                    &output,
+                    &owner.path().join(format!("reimport-{ordinal}-{index}")),
+                    format,
+                    result_keys,
+                    video,
+                    rate,
                 );
             }
 
-            assert!(
-                command
-                    .verify(VerificationRequest {
-                        source: VerificationSource {
-                            input: &entry,
-                            input_keys: keys,
-                            hls_keys: &hls
-                        },
-                        output: VerificationSource {
-                            input: &output,
-                            input_keys: result_keys,
-                            hls_keys: &hls
-                        },
-                    })
-                    .unwrap()
-                    .passed
-            );
-            assert!(
-                command
-                    .verify(VerificationRequest {
-                        source: VerificationSource {
-                            input: &source,
-                            input_keys: &empty,
-                            hls_keys: &hls
-                        },
-                        output: VerificationSource {
-                            input: &output,
-                            input_keys: result_keys,
-                            hls_keys: &hls
-                        },
-                    })
-                    .unwrap()
-                    .passed
-            );
+            assert_mp4_return_proofs(&command, &source, &entry, &output, keys, result_keys);
         }
     }
     assert!(!events.records().iter().any(|record| {
@@ -524,6 +565,118 @@ fn vp9_presentations_return_to_clear_and_cenc_mp4_without_decoders() {
     );
 }
 
+fn assert_audio_only_selection_refused(command: &Converter, entry: &Path, original: &str) {
+    let empty = InputKeys::default();
+    let hls = HlsInputKeys::default();
+    let doc = roxmltree::Document::parse(original).unwrap();
+    let video = doc
+        .descendants()
+        .find(|node| {
+            node.tag_name().name() == "AdaptationSet"
+                && node.attribute("contentType") == Some("video")
+        })
+        .unwrap();
+    let mut single_audio = original.to_owned();
+    single_audio.replace_range(video.range(), "");
+    fs::write(entry, single_audio).unwrap();
+    let single = command
+        .validate_source(
+            VerificationSource {
+                input: entry,
+                input_keys: &empty,
+                hls_keys: &hls,
+            },
+            SourceValidationPurpose::Conversion,
+        )
+        .unwrap();
+    assert!(
+        !single.eligible_formats.contains(&OutputFormat::Mp4),
+        "A labeled audio-only manifest has no invertible container declaration"
+    );
+    fs::write(entry, original).unwrap();
+}
+
+fn manifest_metadata_edits(format: OutputFormat, original: &str) -> Vec<(&str, &str)> {
+    let edits: &[(&str, &str)] = if format == OutputFormat::Hls {
+        &[
+            ("NAME=\"stream_1\"", "NAME=\"Commentary\""),
+            ("default-audio-group", "custom-audio-group"),
+            ("DEFAULT=NO", "DEFAULT=YES"),
+            ("AUTOSELECT=YES", "AUTOSELECT=NO"),
+            ("CHANNELS=\"2\"", "CHANNELS=\"1\""),
+            ("RESOLUTION=320x180", "RESOLUTION=321x180"),
+        ]
+    } else {
+        &[
+            ("<Label>stream_1</Label>", "<Label>Commentary</Label>"),
+            ("selectionPriority=\"1\"", "selectionPriority=\"2\""),
+        ]
+    };
+    let mut edits = edits.to_vec();
+    let language_attribute = if format == OutputFormat::Hls {
+        "LANGUAGE=\""
+    } else {
+        "lang=\""
+    };
+    let at = original
+        .find(language_attribute)
+        .expect("declared language");
+    let end = at
+        + language_attribute.len()
+        + original[at + language_attribute.len()..].find('"').unwrap();
+    let language = &original[at..=end];
+    let wrong_language = if format == OutputFormat::Hls {
+        "LANGUAGE=\"jpn\""
+    } else {
+        "lang=\"jpn\""
+    };
+    edits.push((language, wrong_language));
+    edits
+}
+
+fn assert_manifest_metadata_refused(
+    command: &Converter,
+    source_view: VerificationSource<'_>,
+    output: &Path,
+    original: &Path,
+    from: &str,
+) {
+    let qualified = command.validate_source(source_view, SourceValidationPurpose::Conversion);
+    assert!(
+        qualified.is_err()
+            || !qualified
+                .unwrap()
+                .eligible_formats
+                .contains(&OutputFormat::Mp4),
+        "{from}: invalid MP4 admission"
+    );
+    assert!(
+        convert(
+            command,
+            source_view.input,
+            output,
+            source_view.input_keys,
+            TargetProtection::Clear
+        )
+        .is_err(),
+        "{from}"
+    );
+    assert!(!output.exists());
+    assert!(
+        command
+            .verify(VerificationRequest {
+                source: source_view,
+                output: VerificationSource {
+                    input: original,
+                    input_keys: source_view.input_keys,
+                    hls_keys: source_view.hls_keys
+                },
+            })
+            .is_err(),
+        "{from}: invalid standalone metadata comparison"
+    );
+}
+
 #[test]
 fn standalone_mp4_never_discards_custom_or_contradictory_manifest_metadata() {
     let owner = common::private_tempdir().unwrap();
@@ -579,68 +732,10 @@ fn standalone_mp4_never_discards_custom_or_contradictory_manifest_metadata() {
         });
         let original = fs::read_to_string(&entry).unwrap();
         if format == OutputFormat::Dash {
-            let doc = roxmltree::Document::parse(&original).unwrap();
-            let video = doc
-                .descendants()
-                .find(|node| {
-                    node.tag_name().name() == "AdaptationSet"
-                        && node.attribute("contentType") == Some("video")
-                })
-                .unwrap();
-            let mut single_audio = original.clone();
-            single_audio.replace_range(video.range(), "");
-            fs::write(&entry, single_audio).unwrap();
-            let single = command
-                .validate_source(
-                    VerificationSource {
-                        input: &entry,
-                        input_keys: &empty,
-                        hls_keys: &hls,
-                    },
-                    SourceValidationPurpose::Conversion,
-                )
-                .unwrap();
-            assert!(
-                !single.eligible_formats.contains(&OutputFormat::Mp4),
-                "A labeled audio-only manifest has no invertible container declaration"
-            );
-            fs::write(&entry, &original).unwrap();
+            assert_audio_only_selection_refused(&command, &entry, &original);
         }
 
-        let edits: &[(&str, &str)] = if format == OutputFormat::Hls {
-            &[
-                ("NAME=\"stream_1\"", "NAME=\"Commentary\""),
-                ("default-audio-group", "custom-audio-group"),
-                ("DEFAULT=NO", "DEFAULT=YES"),
-                ("AUTOSELECT=YES", "AUTOSELECT=NO"),
-                ("CHANNELS=\"2\"", "CHANNELS=\"1\""),
-                ("RESOLUTION=320x180", "RESOLUTION=321x180"),
-            ]
-        } else {
-            &[
-                ("<Label>stream_1</Label>", "<Label>Commentary</Label>"),
-                ("selectionPriority=\"1\"", "selectionPriority=\"2\""),
-            ]
-        };
-        let mut edits = edits.to_vec();
-        let language_attribute = if format == OutputFormat::Hls {
-            "LANGUAGE=\""
-        } else {
-            "lang=\""
-        };
-        let at = original
-            .find(language_attribute)
-            .expect("declared language");
-        let end = at
-            + language_attribute.len()
-            + original[at + language_attribute.len()..].find('"').unwrap();
-        let language = &original[at..=end];
-        let wrong_language = if format == OutputFormat::Hls {
-            "LANGUAGE=\"jpn\""
-        } else {
-            "lang=\"jpn\""
-        };
-        edits.push((language, wrong_language));
+        let edits = manifest_metadata_edits(format, &original);
         for (index, (from, to)) in edits.iter().enumerate() {
             assert!(original.contains(from), "missing declared field {from}");
             fs::write(&entry, original.replace(from, to)).unwrap();
@@ -649,34 +744,12 @@ fn standalone_mp4_never_discards_custom_or_contradictory_manifest_metadata() {
                 input_keys: &empty,
                 hls_keys: &hls,
             };
-            let qualified =
-                command.validate_source(source_view, SourceValidationPurpose::Conversion);
-            assert!(
-                qualified.is_err()
-                    || !qualified
-                        .unwrap()
-                        .eligible_formats
-                        .contains(&OutputFormat::Mp4),
-                "{from}: invalid MP4 admission"
-            );
-            let output = owner.path().join(format!("refused-{format:?}-{index}.mp4"));
-            assert!(
-                convert(&command, &entry, &output, &empty, TargetProtection::Clear).is_err(),
-                "{from}"
-            );
-            assert!(!output.exists());
-            assert!(
-                command
-                    .verify(VerificationRequest {
-                        source: source_view,
-                        output: VerificationSource {
-                            input: &source,
-                            input_keys: &empty,
-                            hls_keys: &hls
-                        },
-                    })
-                    .is_err(),
-                "{from}: invalid standalone metadata comparison"
+            assert_manifest_metadata_refused(
+                &command,
+                source_view,
+                &owner.path().join(format!("refused-{format:?}-{index}.mp4")),
+                &source,
+                from,
             );
             fs::write(&entry, &original).unwrap();
         }
@@ -689,6 +762,175 @@ fn standalone_mp4_never_discards_custom_or_contradictory_manifest_metadata() {
             );
         }
     }
+}
+
+fn explicitly_english_manifest(format: OutputFormat, original: &str) -> String {
+    if format == OutputFormat::Hls {
+        if original.contains("LANGUAGE=\"und\"") {
+            original.replace("LANGUAGE=\"und\"", "LANGUAGE=\"en\"")
+        } else {
+            original.replace("TYPE=AUDIO,", "TYPE=AUDIO,LANGUAGE=\"en\",")
+        }
+    } else {
+        let doc = roxmltree::Document::parse(original).unwrap();
+        let audio = doc
+            .descendants()
+            .find(|node| {
+                node.tag_name().name() == "AdaptationSet"
+                    && node.attribute("contentType") == Some("audio")
+            })
+            .unwrap();
+        let mut value = original.to_owned();
+        if let Some(language) = audio.attribute_node("lang") {
+            value.replace_range(language.range_value(), "en");
+        } else {
+            let at = audio.range().start + "<AdaptationSet".len();
+            value.insert_str(at, " lang=\"en\"");
+        }
+        value
+    }
+}
+
+fn assert_physical_language_and_tampering(
+    command: &Converter,
+    source: VerificationSource<'_>,
+    output: VerificationSource<'_>,
+    directory: &Path,
+    case: &str,
+) {
+    let bytes = fs::read(output.input).unwrap();
+    let header = audio_nodes(&bytes)
+        .into_iter()
+        .find(|node| node.kind() == *b"mdhd")
+        .unwrap();
+    let payload = header.header.payload(&bytes);
+    let offset = if payload[0] == 0 { 20 } else { 32 };
+    let language = u16::from_be_bytes(payload[offset..offset + 2].try_into().unwrap());
+    assert_eq!(
+        language,
+        b"eng"
+            .iter()
+            .fold(0u16, |value, byte| (value << 5) | u16::from(byte - 0x60))
+    );
+    for wrong in [b"und", b"fra"] {
+        let mut changed = bytes.clone();
+        let at = header.header.offset + header.header.header_size + offset;
+        let code = wrong
+            .iter()
+            .fold(0u16, |value, byte| (value << 5) | u16::from(byte - 0x60));
+        changed[at..at + 2].copy_from_slice(&code.to_be_bytes());
+        let tampered = directory.join(format!(
+            "bad-{case}-{}.mp4",
+            std::str::from_utf8(wrong).unwrap()
+        ));
+        fs::write(&tampered, changed).unwrap();
+        let proof = command.verify(VerificationRequest {
+            source,
+            output: VerificationSource {
+                input: &tampered,
+                input_keys: output.input_keys,
+                hls_keys: output.hls_keys,
+            },
+        });
+        assert!(proof.is_err() || !proof.unwrap().passed);
+    }
+}
+
+fn assert_bare_mp4_language_is_physical(
+    command: &Converter,
+    source: &Path,
+    output: VerificationSource<'_>,
+) {
+    let empty = InputKeys::default();
+    let physical_comparison = command.verify(VerificationRequest {
+        source: VerificationSource {
+            input: source,
+            input_keys: &empty,
+            hls_keys: output.hls_keys,
+        },
+        output: VerificationSource {
+            input: output.input,
+            input_keys: output.input_keys,
+            hls_keys: output.hls_keys,
+        },
+    });
+    assert!(
+        physical_comparison.is_err() || !physical_comparison.unwrap().passed,
+        "A bare MP4 must not inherit a manifest language override"
+    );
+}
+
+fn assert_effective_language_decoded(
+    source: VerificationSource<'_>,
+    output: VerificationSource<'_>,
+) {
+    let decoded = Converter::new(
+        Arc::new(ToolRunner::new(
+            Arc::new(Secrets::new()),
+            Arc::new(Collector::default()),
+        )),
+        "packager",
+        "ffmpeg",
+    )
+    .with_ffprobe("ffprobe")
+    .with_decode(true)
+    .with_max_workers(Some(1))
+    .unwrap();
+    assert!(
+        decoded
+            .verify(VerificationRequest {
+                source,
+                output: VerificationSource {
+                    input: output.input,
+                    input_keys: output.input_keys,
+                    hls_keys: output.hls_keys
+                }
+            })
+            .unwrap()
+            .passed
+    );
+}
+
+fn assert_effective_language_manifest_return(
+    command: &Converter,
+    source: VerificationSource<'_>,
+    output: VerificationSource<'_>,
+    returned: &Path,
+    format: OutputFormat,
+    target: TargetProtection,
+) {
+    let empty = InputKeys::default();
+    command
+        .convert(ConversionRequest {
+            input: output.input,
+            output: returned,
+            format,
+            target: TargetProtection::Clear,
+            input_keys: output.input_keys,
+            hls_input_keys: output.hls_keys,
+            output_key: None,
+            hls_key_uri: None,
+            hls_output_key: None,
+        })
+        .unwrap_or_else(|error| panic!("return {format:?}/{target:?}: {error:?}"));
+    let returned_entry = returned.join(if format == OutputFormat::Dash {
+        "manifest.mpd"
+    } else {
+        "master.m3u8"
+    });
+    assert!(
+        command
+            .verify(VerificationRequest {
+                source,
+                output: VerificationSource {
+                    input: &returned_entry,
+                    input_keys: &empty,
+                    hls_keys: output.hls_keys
+                }
+            })
+            .unwrap()
+            .passed
+    );
 }
 
 #[test]
@@ -730,30 +972,7 @@ fn undefined_container_language_uses_the_validated_manifest_language_in_mp4() {
             "master.m3u8"
         });
         let original = fs::read_to_string(&entry).unwrap();
-        let changed = if format == OutputFormat::Hls {
-            if original.contains("LANGUAGE=\"und\"") {
-                original.replace("LANGUAGE=\"und\"", "LANGUAGE=\"en\"")
-            } else {
-                original.replace("TYPE=AUDIO,", "TYPE=AUDIO,LANGUAGE=\"en\",")
-            }
-        } else {
-            let doc = roxmltree::Document::parse(&original).unwrap();
-            let audio = doc
-                .descendants()
-                .find(|node| {
-                    node.tag_name().name() == "AdaptationSet"
-                        && node.attribute("contentType") == Some("audio")
-                })
-                .unwrap();
-            let mut value = original.clone();
-            if let Some(language) = audio.attribute_node("lang") {
-                value.replace_range(language.range_value(), "en");
-            } else {
-                let at = audio.range().start + "<AdaptationSet".len();
-                value.insert_str(at, " lang=\"en\"");
-            }
-            value
-        };
+        let changed = explicitly_english_manifest(format, &original);
         assert_ne!(original, changed);
         fs::write(&entry, changed).unwrap();
         let source_view = VerificationSource {
@@ -761,10 +980,7 @@ fn undefined_container_language_uses_the_validated_manifest_language_in_mp4() {
             input_keys: &empty,
             hls_keys: &hls,
         };
-        let qualified = command
-            .validate_source(source_view, SourceValidationPurpose::Conversion)
-            .unwrap();
-        assert!(qualified.eligible_formats.contains(&OutputFormat::Mp4));
+        assert_mp4_admitted(&command, source_view, &format!("{format:?}"));
         for target in [
             TargetProtection::Clear,
             TargetProtection::Cenc,
@@ -784,129 +1000,38 @@ fn undefined_container_language_uses_the_validated_manifest_language_in_mp4() {
             } else {
                 role_keys()
             };
+            let output_view = VerificationSource {
+                input: &output,
+                input_keys: &keys,
+                hls_keys: &hls,
+            };
             assert!(
                 command
                     .verify(VerificationRequest {
                         source: source_view,
-                        output: VerificationSource {
-                            input: &output,
-                            input_keys: &keys,
-                            hls_keys: &hls
-                        }
+                        output: output_view
                     })
                     .unwrap()
                     .passed
             );
-            let bytes = fs::read(&output).unwrap();
-            let header = audio_nodes(&bytes)
-                .into_iter()
-                .find(|node| node.kind() == *b"mdhd")
-                .unwrap();
-            let payload = header.header.payload(&bytes);
-            let offset = if payload[0] == 0 { 20 } else { 32 };
-            let language = u16::from_be_bytes(payload[offset..offset + 2].try_into().unwrap());
-            assert_eq!(
-                language,
-                b"eng"
-                    .iter()
-                    .fold(0u16, |value, byte| (value << 5) | u16::from(byte - 0x60))
+            assert_physical_language_and_tampering(
+                &command,
+                source_view,
+                output_view,
+                owner.path(),
+                &format!("{format:?}-{target:?}"),
             );
-            let physical_comparison = command.verify(VerificationRequest {
-                source: VerificationSource {
-                    input: &source,
-                    input_keys: &empty,
-                    hls_keys: &hls,
-                },
-                output: VerificationSource {
-                    input: &output,
-                    input_keys: &keys,
-                    hls_keys: &hls,
-                },
-            });
-            assert!(
-                physical_comparison.is_err() || !physical_comparison.unwrap().passed,
-                "A bare MP4 must not inherit a manifest language override"
+            assert_bare_mp4_language_is_physical(&command, &source, output_view);
+            assert_effective_language_manifest_return(
+                &command,
+                source_view,
+                output_view,
+                &owner.path().join(format!("returned-{format:?}-{target:?}")),
+                format,
+                target,
             );
-            let returned = owner.path().join(format!("returned-{format:?}-{target:?}"));
-            command
-                .convert(ConversionRequest {
-                    input: &output,
-                    output: &returned,
-                    format,
-                    target: TargetProtection::Clear,
-                    input_keys: &keys,
-                    hls_input_keys: &hls,
-                    output_key: None,
-                    hls_key_uri: None,
-                    hls_output_key: None,
-                })
-                .unwrap_or_else(|error| panic!("return {format:?}/{target:?}: {error:?}"));
-            let returned_entry = returned.join(if format == OutputFormat::Dash {
-                "manifest.mpd"
-            } else {
-                "master.m3u8"
-            });
-            assert!(
-                command
-                    .verify(VerificationRequest {
-                        source: source_view,
-                        output: VerificationSource {
-                            input: &returned_entry,
-                            input_keys: &empty,
-                            hls_keys: &hls
-                        }
-                    })
-                    .unwrap()
-                    .passed
-            );
-            for wrong in [b"und", b"fra"] {
-                let mut changed = bytes.clone();
-                let at = header.header.offset + header.header.header_size + offset;
-                let code = wrong
-                    .iter()
-                    .fold(0u16, |value, byte| (value << 5) | u16::from(byte - 0x60));
-                changed[at..at + 2].copy_from_slice(&code.to_be_bytes());
-                let tampered = owner.path().join(format!(
-                    "bad-{format:?}-{target:?}-{}.mp4",
-                    std::str::from_utf8(wrong).unwrap()
-                ));
-                fs::write(&tampered, changed).unwrap();
-                let proof = command.verify(VerificationRequest {
-                    source: source_view,
-                    output: VerificationSource {
-                        input: &tampered,
-                        input_keys: &keys,
-                        hls_keys: &hls,
-                    },
-                });
-                assert!(proof.is_err() || !proof.unwrap().passed);
-            }
             if target == TargetProtection::Clear {
-                let decoded = Converter::new(
-                    Arc::new(ToolRunner::new(
-                        Arc::new(Secrets::new()),
-                        Arc::new(Collector::default()),
-                    )),
-                    "packager",
-                    "ffmpeg",
-                )
-                .with_ffprobe("ffprobe")
-                .with_decode(true)
-                .with_max_workers(Some(1))
-                .unwrap();
-                assert!(
-                    decoded
-                        .verify(VerificationRequest {
-                            source: source_view,
-                            output: VerificationSource {
-                                input: &output,
-                                input_keys: &keys,
-                                hls_keys: &hls
-                            }
-                        })
-                        .unwrap()
-                        .passed
-                );
+                assert_effective_language_decoded(source_view, output_view);
             }
         }
     }

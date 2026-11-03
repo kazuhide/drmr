@@ -56,6 +56,19 @@ pub(super) fn complete_track_views(
 
 use super::metadata::mp4_language as language;
 
+fn validate_mp4_output_keys(request: &ConversionRequest<'_>) -> Result<(), ConversionError> {
+    if matches!(
+        request.target,
+        TargetProtection::Cenc | TargetProtection::Cbcs
+    ) != request.output_key.is_some()
+        || request.hls_output_key.is_some()
+        || request.hls_key_uri.is_some()
+    {
+        return Err(ConversionError("output-key-role-mismatch"));
+    }
+    Ok(())
+}
+
 pub(super) fn declared_language(source: &Prepared) -> Result<String, ConversionError> {
     language(
         source
@@ -383,15 +396,7 @@ impl Converter {
         if !transport && !self.standalone_metadata_supported(&prepared, request.input_keys)? {
             return Err(ConversionError("presentation-selection-not-representable"));
         }
-        if matches!(
-            request.target,
-            TargetProtection::Cenc | TargetProtection::Cbcs
-        ) != request.output_key.is_some()
-            || request.hls_output_key.is_some()
-            || request.hls_key_uri.is_some()
-        {
-            return Err(ConversionError("output-key-role-mismatch"));
-        }
+        validate_mp4_output_keys(request)?;
         for source in &prepared {
             if let Some(audio) = &source.metadata.audio {
                 language(&audio.language)?;

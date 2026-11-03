@@ -803,23 +803,7 @@ impl Backend {
             result.probe_keys(),
             result.unedited,
         )?;
-        if let Some(language) = language {
-            if a["language"].as_str().unwrap_or("und") != "und"
-                || b["language"].as_str().unwrap_or("und") != language
-            {
-                return Err(ConversionError("presentation-metadata-mismatch"));
-            }
-            a["language"] = b["language"].clone();
-        }
-        for (profile, declared) in [(&mut a, languages.0), (&mut b, languages.1)] {
-            if declared.is_some() {
-                let effective =
-                    super::verify::effective_language(profile["language"].as_str(), declared)
-                        .ok_or(ConversionError("presentation-metadata-mismatch"))?
-                        .to_owned();
-                profile["language"] = effective.into();
-            }
-        }
+        prepare_comparison_languages(&mut a, &mut b, language, languages)?;
         let config_a = self.transport_config(source, &a)?;
         let config_b = self.transport_config(result, &b)?;
         let units_a = self.access_units(source, &a, config_a.clone())?;
@@ -903,6 +887,35 @@ impl Backend {
             super::DecodeEvidence::ContentCompared { equal: decoded },
         ))
     }
+}
+
+fn prepare_comparison_languages(
+    source: &mut serde_json::Value,
+    result: &mut serde_json::Value,
+    transport_language: Option<&str>,
+    manifest_languages: (Option<&str>, Option<&str>),
+) -> Result<(), ConversionError> {
+    if let Some(language) = transport_language {
+        if source["language"].as_str().unwrap_or("und") != "und"
+            || result["language"].as_str().unwrap_or("und") != language
+        {
+            return Err(ConversionError("presentation-metadata-mismatch"));
+        }
+        source["language"] = result["language"].clone();
+    }
+    for (profile, declared) in [
+        (source, manifest_languages.0),
+        (result, manifest_languages.1),
+    ] {
+        if declared.is_some() {
+            let effective =
+                super::verify::effective_language(profile["language"].as_str(), declared)
+                    .ok_or(ConversionError("presentation-metadata-mismatch"))?
+                    .to_owned();
+            profile["language"] = effective.into();
+        }
+    }
+    Ok(())
 }
 
 pub(in crate::conversion) fn check_duration(
