@@ -305,9 +305,10 @@ memory capacity. Contended reservations fall back to the usual acquisition
 path. Single outputs, additional decoding, `segments`, encrypted HLS and other
 input containers use their existing acquisition and input-checking paths.
 
-Only closed, completely downloaded resources are inspected. Both native readers
+Downloads continue to refill the bounded queue while an earlier rendition is
+being checked. Only closed, completely downloaded resources are inspected. Both native readers
 check the bytes they consume against the hashes and sizes recorded during
-acquisition. They read the retained TS files directly; the speculative workspace
+acquisition. They read the retained TS files directly; the private temporary workspace
 holds small playlist projections and inspection data. After the complete source
 is downloaded, drmr still checks
 its files and their identities, verifies the final master playlist's track

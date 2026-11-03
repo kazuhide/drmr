@@ -772,6 +772,59 @@ includes raw timings, resource-observation limits, tool counts, source and
 binary identities, and the media, manifest, DRM and standalone-verification
 results.
 
+## URL acquisition and conversion (2026-11-03)
+
+**Unreleased development for 1.3.** The measured builds retain CLI version 1.2.0.
+The initial baseline already includes the native preparation reuse above.
+
+These measurements include URL acquisition through the final saved result.
+A loopback server replayed the same retained Big Buck Bunny HLS TS source:
+six H.264 video renditions and one AAC rendition. Its configured shared transfer
+ceiling was 50 MiB/s, with a 10 ms delay per request. Each command created CBCS
+fMP4 HLS with FairPlay and CBCS DASH with Widevine/PlayReady, using automatic
+workers and `stitch` processing without decoding. A fresh independent `verify`
+passed after every command; its time is recorded separately.
+
+Two experiments were measured in separate batches on one ten-core arm64 Mac
+with 32 GiB of memory. Each variant ran three times with execution order rotated.
+The ranges below include every run for the compared variants.
+
+| Experiment | Before: median (range) | After: median (range) | Observed median reduction |
+|---|---:|---:|---:|
+| macOS copy batching | 55.02 s (55.01–62.51) | 52.12 s (50.23–52.25) | 5.27% |
+| Overlapped source checks, compared with copy batching | 64.01 s (60.46–64.91) | 57.50 s (56.62–59.55) | 10.17% |
+
+**Host load was uncontrolled and unequal.** In the final experiment, baseline
+one-minute loads were 23.35, 20.04 and 41.33; candidate loads were 14.93, 13.89
+and 29.77. Every candidate wall time was lower than every baseline in that batch,
+but these observations do not isolate the change from host load or establish a
+guaranteed speedup. The two percentages must not be added or compounded.
+
+The first change batches macOS private-file copies and joining in 64 KiB
+buffers; other platforms keep their existing standard-library copy path.
+The second starts native source checks when a rendition's required resources have
+finished downloading. It reads retained TS bytes directly and binds both parser
+passes to the creation-time SHA-256, avoiding another private TS copy. Existing
+source-change guards and complete final media, manifest and DRM checks remain.
+Encryption still runs independently for each output: Packager calls remain
+15, and FFmpeg/ffprobe calls remain zero.
+
+Observed CPU medians, including process-table observers, changed from
+123.59 to 106.42 s in the copy batch, and
+122.37 to 118.67 s in the final batch.
+An extra-copy warm-up trial was not adopted; an earlier read-only trial had
+overlapping wall-time ranges and was superseded. Both remain in the report.
+
+A separate single real remote-URL run of the final build completed in
+55.25 s; its later independent verification took
+17.00 s. This is a reference observation, not a controlled network comparison.
+No memory, disk-space or physical-I/O reduction is claimed from partial samples.
+No decoding or DRM-device/license-server playback was qualified.
+
+The [complete report](benchmarks/url-pipeline-2026-11-03.json) retains all
+21 controlled runs, paired order, host loads, CPU and partial resource observations,
+exact source/executable identities, quality checks and the separate live-URL references.
+
 ## Compare your own retained input
 
 Use the same local original to separate processing from network transfer:
