@@ -247,21 +247,36 @@ impl Converter {
         keys: &BundleOperatorKeys,
         tools: &ManifestValidationTools,
     ) -> Result<BundleConversionReport, ConversionError> {
+        self.convert_bundle_acquired(
+            BundlePlanRequest {
+                input: VerificationSource {
+                    input,
+                    input_keys: &keys.input,
+                    hls_keys: &keys.hls_input,
+                },
+                output_root,
+                outputs,
+            },
+            keys,
+            tools,
+            None,
+        )
+    }
+
+    pub(in crate::conversion) fn convert_bundle_acquired(
+        &self,
+        request: BundlePlanRequest<'_>,
+        keys: &BundleOperatorKeys,
+        tools: &ManifestValidationTools,
+        acquired: Option<&crate::conversion::download::native::AcquiredNative>,
+    ) -> Result<BundleConversionReport, ConversionError> {
         let command = self.bundle_cohort();
         let phase = command.pipeline_phase(crate::conversion::pipeline::Phase::Source);
         let PreparedPlan {
             plan,
             frozen,
             qualified,
-        } = command.prepare_bundle_plan(BundlePlanRequest {
-            input: VerificationSource {
-                input,
-                input_keys: &keys.input,
-                hls_keys: &keys.hls_input,
-            },
-            output_root,
-            outputs,
-        })?;
+        } = command.prepare_bundle_plan_acquired(request, false, acquired)?;
         command
             .with_processing_clone(ProcessingMode::Auto)
             .execute_bundle_plan_inner(&plan, keys, tools, Some((frozen, qualified)), Some(phase))
@@ -286,6 +301,35 @@ impl Converter {
         request: BundlePlanRequest<'_>,
         verification: bool,
     ) -> Result<PreparedPlan, ConversionError> {
+        self.prepare_bundle_plan_acquired(request, verification, None)
+    }
+
+    fn qualify_bundle_source_acquired(
+        &self,
+        source: VerificationSource<'_>,
+        inventory: &SourceInventory,
+        acquired: Option<&crate::conversion::download::native::AcquiredNative>,
+    ) -> Result<SourceQualification, ConversionError> {
+        let ready = if let Some(acquired) = acquired {
+            acquired.qualify(self, source, inventory)?
+        } else {
+            None
+        };
+        match ready {
+            Some(qualified) => Ok(qualified),
+            None => self.validate_source_preparing(
+                source,
+                SourceValidationPurpose::Conversion,
+                crate::conversion::media_progress::Subject::Source,
+            ),
+        }
+    }
+    fn prepare_bundle_plan_acquired(
+        &self,
+        request: BundlePlanRequest<'_>,
+        verification: bool,
+        acquired: Option<&crate::conversion::download::native::AcquiredNative>,
+    ) -> Result<PreparedPlan, ConversionError> {
         self.backend.check_cancelled()?;
         let outputs = selected_outputs(self, request.outputs)?;
         let (output_root, destination) = output_location(request.output_root, verification)?;
@@ -303,11 +347,8 @@ impl Converter {
         if outputs.iter().any(|output| !output.drms.is_empty()) {
             command.validate_drm_metadata_before_decode(source.input)?;
         }
-        let qualified = command.validate_source_preparing(
-            source,
-            SourceValidationPurpose::Conversion,
-            crate::conversion::media_progress::Subject::Source,
-        )?;
+        let qualified =
+            command.qualify_bundle_source_acquired(source, frozen.inventory(), acquired)?;
         self.register_bundle_tracks(qualified.track_protection.len());
         let processing = outputs
             .iter()

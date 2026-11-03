@@ -130,6 +130,9 @@ pub(super) struct Receipt {
     length: u64,
 }
 impl Receipt {
+    pub(super) fn matches_bytes(&self, expected: ([u8; 32], u64)) -> bool {
+        self.digest == expected.0 && self.length == expected.1
+    }
     pub fn length(&self) -> u64 {
         self.length
     }

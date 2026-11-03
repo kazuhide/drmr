@@ -26,6 +26,53 @@ mod copied_segments {
     }
 
     #[test]
+    fn fetched_creation_digest_binds_the_stream_before_native_evidence_is_accepted() {
+        let (_owner, root) = root();
+        let original = resource(&root, "original.ts", 90_000, &[frame(1)], 0);
+        let replaced = resource(&root, "replaced.ts", 90_000, &[frame(2)], 0);
+        let bytes = std::fs::read(&original).unwrap();
+        let mut hash = crate::sha256::Sha256::new();
+        hash.update(&bytes);
+        let expected = (hash.finalize(), bytes.len() as u64);
+        let destination = root.join("copy.ts");
+        let mut scanner = NativeScanner::new();
+        assert_eq!(
+            scanner.copy_segment_expected(&replaced, &destination, &Stop::new(), expected),
+            Err(BAD)
+        );
+        assert!(!destination.exists());
+        assert_poisoned(scanner, &original, &root.join("retry.ts"), BAD);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restoring_private_bytes_after_native_visitation_cannot_hide_consumed_changes() {
+        let (_owner, root) = root();
+        let source = resource(&root, "source.ts", 90_000, &[frame(1)], 0);
+        let alternate = resource(&root, "alternate.ts", 90_000, &[frame(2)], 0);
+        let original = std::fs::read(&source).unwrap();
+        let destination = root.join("copy.ts");
+        let mut scanner = NativeScanner::new();
+        let receipt = admitted(&scanner, &source, &destination);
+        std::fs::write(&destination, std::fs::read(alternate).unwrap()).unwrap();
+        let mut restored = false;
+        let error = scanner
+            .scan_receipt(receipt, &Stop::new(), &mut |_, _, _, _, _| {
+                std::fs::write(&destination, &original).unwrap();
+                restored = true;
+                Ok(())
+            })
+            .unwrap_err();
+        assert!(
+            restored,
+            "the adversarial restoration must happen before receipt verification"
+        );
+        assert_eq!(error, ConversionError("ts-admitted-copy-invalid"));
+        assert!(!destination.exists());
+        assert_eq!(std::fs::read(&source).unwrap(), original);
+    }
+
+    #[test]
     fn late_transport_failures_precede_every_observer_and_remove_only_the_owned_copy() {
         let (_owner, root) = root();
         let source = resource(&root, "source.ts", 90_000, &[frame(1)], 0);

@@ -92,6 +92,36 @@ impl NativeScanner {
     where
         F: FnMut(u16, TrackKind, &[u8], i64, i64) -> Result<(), ConversionError>,
     {
+        self.copy_segment_bound(source, destination, stop, None, observer)
+    }
+
+    pub fn copy_segment_expected(
+        &mut self,
+        source: &Path,
+        destination: &Path,
+        stop: &Stop,
+        expected: ([u8; 32], u64),
+    ) -> Result<(), ConversionError> {
+        self.copy_segment_bound(
+            source,
+            destination,
+            stop,
+            Some(expected),
+            &mut |_, _, _, _, _| Ok(()),
+        )
+    }
+
+    fn copy_segment_bound<F>(
+        &mut self,
+        source: &Path,
+        destination: &Path,
+        stop: &Stop,
+        expected: Option<([u8; 32], u64)>,
+        observer: &mut F,
+    ) -> Result<(), ConversionError>
+    where
+        F: FnMut(u16, TrackKind, &[u8], i64, i64) -> Result<(), ConversionError>,
+    {
         if let Some(error) = self.failed {
             return Err(error);
         }
@@ -108,6 +138,10 @@ impl NativeScanner {
                 return Err(error);
             }
         };
+        if expected.is_some_and(|expected| !receipt.matches_bytes(expected)) {
+            self.failed = Some(BAD);
+            return Err(BAD);
+        }
         self.scan_receipt(receipt, stop, observer)
     }
     fn scan_receipt<F>(

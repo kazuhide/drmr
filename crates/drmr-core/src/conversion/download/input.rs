@@ -13,6 +13,7 @@ pub(super) struct Acquired {
     pub(super) entrypoint: &'static str,
     pub(super) contents: Entrypoint,
     pub(super) files: Expected,
+    pub(super) native: Option<super::native::AcquiredNative>,
 }
 pub(super) enum Entrypoint {
     Projection(Vec<u8>),
