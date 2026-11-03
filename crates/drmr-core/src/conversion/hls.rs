@@ -1248,7 +1248,7 @@ fn append_bounded(
     output: &mut impl Write,
     remaining: u64,
 ) -> Result<(), ConversionError> {
-    std::io::copy(&mut input.take(remaining), output)
+    super::stream_copy(&mut input.take(remaining), output)
         .map_err(|_| ConversionError("media-copy-failed"))?;
     let mut extra = [0];
     if input
