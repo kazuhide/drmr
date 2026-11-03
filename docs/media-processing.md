@@ -109,6 +109,15 @@ Optional `--decode` still adds complete decoding and may prepare whole-track tem
 
 Rust independently reads the complete original and final tracks. Conversion requires matching stream metadata, every selected encoded sample, presentation/decode time and duration, and supported playback windows. `--decode` additionally requires complete decoded video/audio equality. Metadata checks include codec configuration, sample rate, channel count/layout, video dimensions and pixel format, aspect ratio, color characteristics, display rotation, and language. Encryption initialization data is expected to change and is checked separately.
 
+Development for 1.3 can reuse the byte-bound checked source data within one
+native clear-TS multi-output `stitch` conversion. Each final output is freshly
+prepared once for both qualification and complete original-source comparison;
+source and output changes remain checked. This retains the checks above while
+avoiding duplicate parsing. Separate `verify` still reads the source and result
+afresh, and additional decoding keeps its existing route. See the
+[scope and lifetime](multiple-outputs.md#reusing-original-source-checks).
+This addition is absent from the 1.2.0 archives.
+
 Silent audio has the same sample bytes at different sample rates, so decoded-byte identity alone cannot verify its presentation. Native checks read stream metadata from the actual initialization data and compare complete source and output sample evidence. Original playlist declarations remain independent timing references.
 
 Presentation times determine when content is displayed; decode times determine when a decoder must process it. Comparing absolute times across all tracks also detects changes to relative audio/video timing. Manifest timeline declarations are checked separately from media bytes. DASH compares times exactly in their declared clock units. HLS segment durations allow the greater of one media-clock tick or about one millisecond for decimal playlist rounding; this does not relax the exact packet timing comparison.

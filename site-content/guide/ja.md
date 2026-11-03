@@ -652,7 +652,7 @@ drmr convert source/input.m3u8 --output-config outputs.json \
   --keys-file keys.json --output-dir result
 ```
 
-生成されるマニフェストは `result/dash/manifest.mpd` と `result/hls/master.m3u8` です。メディアのディレクトリ構造は原本に従います。HLS と DASH は別々に生成し、物理的なセグメントファイルの共有は約束しません。全出力の検査を終えてから結果を配置し、一部だけの結果は公開しません。
+生成されるマニフェストは `result/dash/manifest.mpd` と `result/hls/master.m3u8` です。メディアのディレクトリ構造は原本に従います。HLS と DASH は別々に生成し、物理的なセグメントファイルの共有は約束しません。1.3 向け開発では、clear TS の複数出力をデコードなしの `stitch` で処理する際、原本の全サンプル・時刻・メタデータの検査情報を同じ変換中だけ再利用します。出力ごとの暗号化は別々に行い、最終ファイルは毎回検査して原本と照合します。別の `verify` 実行では原本も読み直します。[適用条件（英語）](https://github.com/kazuhide/drmr/blob/main/docs/multiple-outputs.md#reusing-original-source-checks)を参照してください。この再利用は公開済み 1.2.0 には含まれません。全出力の検査を終えてから結果を配置し、一部だけの結果は公開しません。
 
 暗号化入力では入力方式に合う `input.keys` または `input.hls_keys` を持つ鍵ファイルを使います。入力条件は第3章、完全な鍵ファイルの例は第8章にあります。別プロセスで結果を改めて確認する場合は、第6章の保存計画と `verify --plan-file` を使います。
 

@@ -612,7 +612,7 @@ drmr convert source/input.m3u8 --output-config outputs.json \
   --keys-file keys.json --output-dir result
 ```
 
-Entrypoints are `result/dash/manifest.mpd` and `result/hls/master.m3u8`. Media directories follow the source layout. HLS and DASH are generated separately; shared physical segments are not promised. All outputs must pass before the result root is published; a subset is not published on failure.
+Entrypoints are `result/dash/manifest.mpd` and `result/hls/master.m3u8`. Media directories follow the source layout. HLS and DASH are generated separately; shared physical segments are not promised. Development for 1.3 can reuse fully checked clear-TS source data within one native `stitch` bundle and freshly check each final result once; separate `verify` still reads the original again. See [the scope](https://github.com/kazuhide/drmr/blob/main/docs/multiple-outputs.md#reusing-original-source-checks). This reuse is absent from the 1.2.0 archives. All outputs must pass before the result root is published; a subset is not published on failure.
 
 Encrypted input requires its `input.keys` or `input.hls_keys` mapping. See chapter 3 for admission conditions and chapter 8 for complete key files. To compare the result in a later process, use chapter 6's saved plan and `verify --plan-file`.
 

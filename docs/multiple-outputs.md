@@ -246,8 +246,11 @@ compares them with the original before publishing the result. No separate
 `analyze`, `plan` or `verify` is required to obtain those checks. For clear HLS TS
 with two or more `stitch` fMP4 HLS/DASH outputs, it also shares joining, track
 separation and clear-media preparation. Each output receives its own working
-copy for encryption. Input checking is not a persistent cache: a later command
-reads and checks the current files again.
+copy for encryption. Development for 1.3 can reuse complete checked-source data
+within this operation and prepare each final result once for qualification and
+comparison; see [reusing original-source checks](#reusing-original-source-checks).
+This addition is not in the 1.2.0 archives. Input checking is not a persistent
+cache: a later command reads and checks the current files again.
 
 The generated entrypoints are:
 
@@ -261,6 +264,33 @@ Each directory also contains its initialization files, media segments and child
 playlists. An `hls-ts` output has its own TS resources; an `mp4` output named
 `file` is `result/file/media.mp4`. DASH and HLS are packaged independently;
 physical sharing of their media files is not guaranteed.
+
+## Reusing original-source checks
+
+**Development for 1.3; not included in the 1.2.0 archives.** Native-depth
+multiple-output conversion of clear HLS TS can retain the complete source
+comparison data from its checked preparation. Every output must be fMP4 HLS or
+DASH and resolve to `stitch`; the usual `auto` selection can choose that route.
+All selected source tracks and their roles must have complete native evidence
+from the same owned preparation. Otherwise the existing fresh-check route is
+used. The data is bound to the checked original bytes and lasts for this
+conversion only. Original file identities and contents remain checked before
+publication, so changed source material cannot reuse stale evidence.
+
+Each final output is freshly prepared once. Its same checked private view
+satisfies format qualification and the complete comparison with the original:
+every encoded sample, codec configuration, clock, playback window and supported
+metadata must still match. Final manifest linting and requested DRM declarations
+remain separate checks of each actual result. Output mutations are still
+refused. Encryption and packaging continue independently for each output, so
+outputs retain their individual keys, protection and segment settings.
+
+This avoids repeated source parsing and duplicate preparation of a result; it
+does not share encrypted segment generation. Additional `--decode`, `segments`,
+single-output conversion and other input profiles keep their existing checking
+routes. A separate `verify` process always reads and checks the source and result
+afresh; neither an earlier report nor this command's in-memory data replaces
+that verification. See [Unreleased changes](../CHANGELOG.md#unreleased).
 
 For an already downloaded or local source, replace the URL with its entrypoint
 and omit `--download-dir`:
