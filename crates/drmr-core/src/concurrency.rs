@@ -15,6 +15,9 @@ use std::sync::{
 use std::thread::Scope;
 use std::time::{Duration, Instant};
 
+mod completion;
+pub(crate) use completion::run_completion_order;
+
 /// The cap of the default pool size (`concurrency.default_workers`); an explicit value is
 /// bounded separately, at 64.
 pub const DEFAULT_WORKERS_CAP: usize = 32;

@@ -14,7 +14,7 @@ use owned::OwnedDownload;
 
 use super::{ConversionError, ConversionReport, ConversionRequest, Converter, files};
 use crate::{
-    concurrency::{Pool, Stop, Unit, run_ordered},
+    concurrency::{Pool, Stop, Unit, run_completion_order, run_ordered},
     resources::{Budget, Claim, ContextPermit, Hardware, Workload},
     source::{self, FetchPolicy, Fetcher, playlist},
 };
@@ -1130,7 +1130,11 @@ impl Graph<'_> {
                     Ok(received)
                 }) as Unit<'_, source::Fetched, ConversionError>
             });
-            run_ordered(|unit| pool.submit(unit), units, Some(abort))
+            if preparation.is_some() {
+                run_completion_order(|unit| pool.submit(unit), units, Some(abort))
+            } else {
+                run_ordered(|unit| pool.submit(unit), units, Some(abort))
+            }
         })?;
         for (resource, fetched) in self.resources.iter().zip(fetched) {
             let hash: [u8; 32] = hex::decode(&fetched.sha256)
