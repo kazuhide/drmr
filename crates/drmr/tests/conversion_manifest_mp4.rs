@@ -124,43 +124,61 @@ fn native_joint_manifest_mp4_analyzes_plans_converts_and_verifies_with_distinct_
                 ],
             )["verification"],
         );
-        let output = format!("{format}-cbcs.mp4");
-        let plan = format!("{format}.plan.json");
-        let saved = cli(
-            root,
-            &[
-                "plan",
-                &input,
-                "--encryption",
-                "cbcs",
-                "--output-format",
-                "mp4",
-                "--output-file",
-                &output,
-                "--keys-file",
-                "both.json",
-                "--save",
-                &plan,
-            ],
-        );
-        assert_eq!(saved["intent"]["format"], "mp4");
-        let plan_bytes = std::fs::read(root.join(&plan)).unwrap();
-        let converted = cli(
-            root,
-            &["convert", "--plan-file", &plan, "--keys-file", "both.json"],
-        );
-        proof(&converted["verification"]);
-        assert_eq!(converted["output"]["tracks"].as_array().unwrap().len(), 2);
-        let verified = cli(
-            root,
-            &["verify", "--plan-file", &plan, "--keys-file", "both.json"],
-        );
-        assert_eq!(verified["kind"], "plan-verification");
-        assert_eq!(verified["plan_id"], saved["plan_id"]);
-        assert_eq!(verified["source_unchanged"], true);
-        assert_eq!(verified["output_matches_plan"], true);
-        proof(&verified["verification"]);
-        proof(&cli(
+        verify_saved_mp4(root, &input, format, &original);
+    }
+    assert_eq!(std::fs::read(original).unwrap(), before);
+}
+
+fn verify_saved_mp4(root: &Path, input: &str, format: &str, original: &Path) {
+    let output = format!("{format}-cbcs.mp4");
+    let plan = format!("{format}.plan.json");
+    let saved = cli(
+        root,
+        &[
+            "plan",
+            input,
+            "--encryption",
+            "cbcs",
+            "--output-format",
+            "mp4",
+            "--output-file",
+            &output,
+            "--keys-file",
+            "both.json",
+            "--save",
+            &plan,
+        ],
+    );
+    assert_eq!(saved["intent"]["format"], "mp4");
+    let plan_bytes = std::fs::read(root.join(&plan)).unwrap();
+    let converted = cli(
+        root,
+        &["convert", "--plan-file", &plan, "--keys-file", "both.json"],
+    );
+    proof(&converted["verification"]);
+    assert_eq!(converted["output"]["tracks"].as_array().unwrap().len(), 2);
+    let verified = cli(
+        root,
+        &["verify", "--plan-file", &plan, "--keys-file", "both.json"],
+    );
+    assert_eq!(verified["kind"], "plan-verification");
+    assert_eq!(verified["plan_id"], saved["plan_id"]);
+    assert_eq!(verified["source_unchanged"], true);
+    assert_eq!(verified["output_matches_plan"], true);
+    proof(&verified["verification"]);
+    proof(&cli(
+        root,
+        &[
+            "verify",
+            &output,
+            "--source",
+            original.to_str().unwrap(),
+            "--keys-file",
+            "result.json",
+        ],
+    ));
+    if format == "dash" {
+        let decoded = cli(
             root,
             &[
                 "verify",
@@ -169,29 +187,15 @@ fn native_joint_manifest_mp4_analyzes_plans_converts_and_verifies_with_distinct_
                 original.to_str().unwrap(),
                 "--keys-file",
                 "result.json",
+                "--decode",
             ],
-        ));
-        if format == "dash" {
-            let decoded = cli(
-                root,
-                &[
-                    "verify",
-                    &output,
-                    "--source",
-                    original.to_str().unwrap(),
-                    "--keys-file",
-                    "result.json",
-                    "--decode",
-                ],
-            );
-            assert_eq!(decoded["passed"], true);
-            assert_eq!(decoded["required_depth"], "decoded");
-            assert_eq!(
-                decoded["decode_evidence"],
-                json!({"status":"content-compared", "equal":true})
-            );
-        }
-        assert_eq!(std::fs::read(root.join(&plan)).unwrap(), plan_bytes);
+        );
+        assert_eq!(decoded["passed"], true);
+        assert_eq!(decoded["required_depth"], "decoded");
+        assert_eq!(
+            decoded["decode_evidence"],
+            json!({"status":"content-compared", "equal":true})
+        );
     }
-    assert_eq!(std::fs::read(original).unwrap(), before);
+    assert_eq!(std::fs::read(root.join(&plan)).unwrap(), plan_bytes);
 }
