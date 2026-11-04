@@ -653,7 +653,8 @@ fn root_help_shows_getting_started_examples_and_command_help_is_available() {
         "drmr convert",
         "drmr verify",
         "--download-dir",
-        "drmr analyze URL --download-dir SOURCE_DIR",
+        "drmr analyze https://example.com/vod/master.m3u8 --download-dir SOURCE_DIR",
+        "drmr plan SOURCE_DIR/master.m3u8",
     ] {
         assert!(text.contains(example), "missing {example}: {text}");
     }

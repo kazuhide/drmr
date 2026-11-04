@@ -1,6 +1,6 @@
 ---
 title: User guide
-updated: 2026-11-03
+updated: 2026-11-04
 version: 1.2.0
 ---
 
@@ -467,7 +467,7 @@ Without `--save`, `plan` reports requested formats, key roles and candidate proc
 For a single output, use `--save` with a new result destination to check the complete source and save one resolved format:
 
 ```sh
-drmr plan source/input.m3u8 --encryption cbcs --output-format \
+drmr plan source/master.m3u8 --encryption cbcs --output-format \
   dash \
   --output-dir converted-dash --save conversion.plan.json --json
 drmr convert --plan-file conversion.plan.json --keys-file \
@@ -488,7 +488,7 @@ Saving a plan creates no converted media. Encrypted source checks can decrypt wi
 
 ## Source directories and DASH references
 
-Downloads keep source-relative media and child-playlist paths, such as `video/1080p/`. The `input.m3u8` or `input.mpd` entrypoint is a localized manifest. `raw/` retains the original manifests and private `raw/index.json` (source URLs, sizes and hashes). Media is stored once; `raw/` adds no media copy. Keep it with the saved source. Keys are not downloaded.
+Downloads keep the entrypoint filename from the final URL after redirects, as well as source-relative media and child-playlist paths such as `video/1080p/`. Query strings are excluded from filenames. A URL without a filename uses `input.m3u8`, `input.mpd` or `input.mp4`, selected from the response content. Manifest references are rewritten for local use. `raw/` retains the original manifests and private `raw/index.json` (source URLs, sizes and hashes). Media is stored once; `raw/` adds no media copy. Keep it with the saved source. Keys are not downloaded.
 
 Output media retains source directories; manifests use `master.m3u8` or `manifest.mpd`. Separate media directories have no track prefix: `r000600.ts` becomes `init.mp4` plus `r000600.m4s`, or keeps `.ts` for HLS TS. Physical tracks sharing a media directory use a source-playlist/kind prefix. Supported sequences keep their start and padding; stitch can change their length and boundaries. HLS and DASH `list` retain arbitrary stems when counts match; otherwise they use `seg_1`. DASH templates use `seg_1.m4s` unless names match the supported pattern: one decimal counter increasing by one, with fixed text before and after it; choose `--dash-addressing list` for arbitrary names. MP4 inputs lack segment names and start at `seg_1` in the source directory.
 
@@ -506,8 +506,8 @@ Use `--dash-addressing` with direct conversion or a saved plan:
 A nominal duration describes an approximate grid; actual AAC frame boundaries can differ. Use an explicit timeline when those exact boundaries must be declared. Every form retains the required sample, clock and playback-window checks. Encryption and DRM signaling are selected separately. An unrepresentable timing profile fails; the tool does not silently substitute another addressing form. See [DASH references](https://github.com/kazuhide/drmr/blob/main/docs/dash-addressing.md).
 
 ```sh
-drmr plan source/input.m3u8 --encryption clear --output-format \
-  dash --dash-addressing list \
+drmr plan source/master.m3u8 --encryption clear \
+  --output-format dash --dash-addressing list \
   --output-dir result --save conversion.plan.json
 drmr convert --plan-file conversion.plan.json
 drmr verify --plan-file conversion.plan.json
@@ -522,7 +522,7 @@ Use chapter 7's files if you want to inspect each stage. Direct conversion alrea
 ```sh
 drmr analyze "https://example.com/vod/master.m3u8" \
   --download-dir source &&
-drmr plan source/input.m3u8 --output-config outputs.json \
+drmr plan source/master.m3u8 --output-config outputs.json \
   --output-dir result --save conversion.plan.json &&
 drmr convert --plan-file conversion.plan.json --keys-file \
   keys.json &&
@@ -530,7 +530,7 @@ drmr verify --plan-file conversion.plan.json --keys-file \
   keys.json
 ```
 
-Clear input needs no keys during analysis or planning. For encrypted input, pass the input-key file to both. DASH/MP4 use `source/input.mpd` or `source/input.mp4` instead.
+Clear input needs no keys during analysis or planning. For encrypted input, pass the input-key file to both. For DASH/MP4, use the retained entrypoint reported by `analyze`, such as `source/manifest.mpd` or `source/video.mp4`.
 
 `plan --output-config` requires `--save` and refuses `--encryption`/`--output-format`. The plan fixes original filenames and hashes, the result root, formats, protection, DRM selections, processing, addressing and external-check policies. Keys and license addresses remain separate. Execution rechecks source conditions. Later `verify --plan-file` reads the actual original and result again. Existing outputs are never replaced.
 
@@ -608,7 +608,7 @@ Save the complete file below as an owner-only `keys.json`, following chapter 5. 
 For a retained local source, one command checks the input, converts it, compares the result with the original, lints manifests and checks DRM declarations:
 
 ```sh
-drmr convert source/input.m3u8 --output-config outputs.json \
+drmr convert source/master.m3u8 --output-config outputs.json \
   --keys-file keys.json --output-dir result
 ```
 
@@ -640,13 +640,13 @@ The retained source directory and result root must be distinct new paths under e
 
 MP4, static DASH and completed HLS are accepted within their profiles. The response content determines the format; extensions, queries and allowed redirects do not select it.
 
-| URL input | Retained local entrypoint | Acquisition profile |
+| URL input | Retained local entrypoint (example) | Acquisition profile |
 | --- | --- | --- |
-| MP4 | `source/input.mp4` | One complete MP4 within the supported local media profiles |
-| DASH | `source/input.mpd` | One static `Period`, finite templates or lists, or a supported single-file index |
-| HLS | `source/input.m3u8` | Completed TS/fMP4 playlists within the supported input profiles |
+| MP4 | `source/video.mp4` | One complete MP4 within the supported local media profiles |
+| DASH | `source/manifest.mpd` | One static `Period`, finite templates or lists, or a supported single-file index |
+| HLS | `source/master.m3u8` | Completed TS/fMP4 playlists within the supported input profiles |
 
-For offline reuse of DASH or MP4, choose the local entrypoint from the table. DASH saves every referenced initialization and media file. Its localized `input.mpd` retains protection declarations, PSSH DRM initialization data and the timeline. HLS localizes media references and relative key identifiers. Original manifests are kept separately and may contain signed URLs. Acquisition leaves encrypted media and initialization bytes unchanged.
+The table shows example filenames; use the actual retained entrypoint reported by `analyze` for offline reuse. DASH saves every referenced initialization and media file. Its localized manifest retains protection declarations, PSSH DRM initialization data and the timeline. HLS localizes media references and relative key identifiers. Original manifests are kept separately and may contain signed URLs. Acquisition leaves encrypted media and initialization bytes unchanged.
 
 The same local codec, track, encryption and timing restrictions still apply. Live input, HLS byte ranges, multiple DASH periods, hierarchical or external DASH indexes, and negative timeline repeats remain outside this acquisition profile. DASH objects used through supported byte ranges are retained in full. These are implementation limits, rather than technical impossibilities of the formats.
 
@@ -659,11 +659,11 @@ Direct URL conversion uses the retained original for the remaining processing an
 ## Reuse a retained source
 
 ```sh
-drmr convert source/input.m3u8 --output-config outputs.json \
+drmr convert source/master.m3u8 --output-config outputs.json \
   --keys-file keys.json --output-dir retry-result
 ```
 
-A completed source can be used offline, including after a later conversion failure. DASH uses `source/input.mpd`; MP4 uses `source/input.mp4`. Incomplete downloads are refused.
+A completed source can be used offline, including after a later conversion failure. Use the retained entrypoint, such as `source/manifest.mpd` for DASH or `source/video.mp4` for MP4. Earlier downloads named `input.*` and existing saved plans remain usable at their recorded paths. Incomplete downloads are refused.
 
 Source bytes and local references are checked through final publication. Changed or missing source files prevent publication. To retry, use the local entrypoint instead of passing an existing download directory to another URL acquisition.
 
@@ -733,7 +733,7 @@ These recipes request encryption without explicit DRM signaling. For Widevine, P
 For configured outputs, a saved plan is optional for fresh verification:
 
 ```sh
-drmr verify result --source source/input.m3u8 \
+drmr verify result --source source/master.m3u8 \
   --output-config outputs.json --keys-file keys.json
 ```
 

@@ -354,7 +354,7 @@ separately. Do not hand-edit it as an alternative to `outputs.json`.
 For a fresh comparison without a saved plan, run:
 
 ```sh
-drmr verify result --source source/input.m3u8 \
+drmr verify result --source source/master.m3u8 \
   --output-config outputs.json --keys-file keys.json
 ```
 

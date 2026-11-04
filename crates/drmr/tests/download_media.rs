@@ -346,7 +346,7 @@ fn preserves_raw(download: &Path, responses: &BTreeMap<String, Vec<u8>>) {
             .any(|(_, bytes)| timing(bytes) == expected),
         "localized playlist timing literals changed"
     );
-    assert_packets(&download.join("input.m3u8"));
+    assert_packets(&download.join("master.m3u8"));
 }
 
 fn download_and_reconvert(fragmented: bool) {
@@ -415,7 +415,7 @@ fn download_and_reconvert(fragmented: bool) {
     } else {
         assert!(report.get("measurements").is_none());
     }
-    assert_eq!(report["download"]["entrypoint_relative"], "input.m3u8");
+    assert_eq!(report["download"]["entrypoint_relative"], "master.m3u8");
     assert_eq!(report["download"]["retained"], true);
     preserves_raw(&download, &responses);
     verify(&output, &source, &keys);
@@ -423,11 +423,11 @@ fn download_and_reconvert(fragmented: bool) {
     let counts = server.stop();
     assert_eq!(counts.refused, 0);
     assert!(counts.served >= responses.len());
-    assert_packets(&download.join("input.m3u8"));
+    assert_packets(&download.join("master.m3u8"));
     let saved = snapshot(&download);
     let offline = root.join("offline");
     let report = json_success(
-        &convert(&download.join("input.m3u8"), &offline, &keys)
+        &convert(&download.join("master.m3u8"), &offline, &keys)
             .output()
             .unwrap(),
     );
@@ -522,6 +522,7 @@ fn url_analysis_saved_plan_execution_and_verification_use_the_retained_original_
     assert_eq!(analysis["kind"], "input-analysis");
     assert_eq!(analysis["schema_version"], 2);
     assert_eq!(analysis["input_admitted"], true);
+    assert_eq!(analysis["download"]["entrypoint_relative"], "master.m3u8");
     assert_eq!(analysis["download"]["retained"], true);
     assert_eq!(analysis["measurements"]["schema_version"], 1);
     preserves_raw(&download, &responses);
@@ -532,7 +533,7 @@ fn url_analysis_saved_plan_execution_and_verification_use_the_retained_original_
 
     let plan = root.join("conversion.plan.json");
     let output = root.join("converted");
-    let planned = save_cbcs_dash_plan(&download.join("input.m3u8"), &output, &plan);
+    let planned = save_cbcs_dash_plan(&download.join("master.m3u8"), &output, &plan);
     let saved = std::fs::read(&plan).unwrap();
     let on_disk: serde_json::Value = serde_json::from_slice(&saved).unwrap();
     assert_eq!(planned, on_disk);

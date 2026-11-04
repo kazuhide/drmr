@@ -137,7 +137,7 @@ fn direct(root: &Path, input: &str, policy: Option<&Path>, default: &str) {
         );
     }
     if policy.is_some() {
-        assert!(root.join("retained/input.m3u8").is_file());
+        assert!(root.join("retained/master.m3u8").is_file());
     }
 }
 

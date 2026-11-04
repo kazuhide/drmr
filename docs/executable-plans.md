@@ -18,9 +18,11 @@ drmr analyze "https://example.com/vod/master.m3u8" --download-dir ./source --jso
 
 `source` must be a new directory under an existing parent. The command downloads
 the complete presentation, retains its original manifests and media, and creates
-`source/input.m3u8` with local references. For a DASH URL, the local entrypoint is
-`source/input.mpd`; for an MP4 URL it is `source/input.mp4`. Pass that local path
-to the subsequent `plan` command. Format detection uses the response content,
+`source/master.m3u8` with local references. The entrypoint keeps the final URL's
+safe filename, including after redirects. URLs without a filename use
+`input.m3u8`, `input.mpd`, or `input.mp4` according to the response content.
+`--json` reports the actual local path; pass that path to the subsequent `plan`
+command. Format detection uses the response content,
 including for URLs without a filename extension. It checks all admitted tracks, source
 decryption when needed, every admitted compressed sample, codec configuration,
 playback windows and timing in Rust. Add `--decode` for complete source decoding.
@@ -67,7 +69,7 @@ origins, authentication, and transfer limits; the same options apply to `analyze
 ## 2. Save one fixed conversion
 
 ```sh
-drmr plan ./source/input.m3u8 --encryption cbcs --output-format dash --output-dir ./result --save ./conversion.plan.json --json
+drmr plan ./source/master.m3u8 --encryption cbcs --output-format dash --output-dir ./result --save ./conversion.plan.json --json
 ```
 
 The saved plan has `kind: "execution-plan"` and `schema_version: 9`. It records

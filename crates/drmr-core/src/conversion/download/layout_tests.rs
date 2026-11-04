@@ -1,5 +1,6 @@
 //! Acquisition-only path regressions use controlled HTTP fixtures, not media tools.
 mod directory_urls;
+mod entrypoints;
 mod origins;
 use super::*;
 use crate::source::platform::{Platform, Stream};
@@ -149,11 +150,11 @@ fn acquire_redirected(
     };
     let (entrypoint, contents) = graph.entrypoint(root)?;
     graph.fetch_media(2, &Stop::new())?;
-    graph.check_acquired_limits(entrypoint, &contents)?;
+    graph.check_acquired_limits(&contents)?;
     let Entrypoint::Projection(projection) = contents else {
         return Err(INVALID);
     };
-    graph.save(entrypoint, &projection)?;
+    graph.save(&entrypoint, &projection)?;
     let index = serde_json::to_vec(&graph.records).unwrap();
     graph.save("raw/index.json", &index)?;
     let files = std::mem::take(&mut graph.expected);
@@ -170,7 +171,7 @@ fn acquire_redirected(
     seal.check(&Stop::new())?;
     seal.owned.retain();
     Ok(DownloadedSource {
-        entrypoint: seal.owned.path().join(entrypoint),
+        entrypoint: seal.owned.path().join(&seal.entrypoint),
         seal: Arc::new(seal),
         native: None,
     })
@@ -290,7 +291,7 @@ fn indexed_server() -> (
     let address = listener.local_addr().unwrap();
     let manifest = br#"<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static" mediaPresentationDuration="PT12S"><Period><AdaptationSet contentType="video"><Representation id="v" bandwidth="1000" mimeType="video/mp4" codecs="avc1.64001f"><BaseURL>video/720p/indexed.mp4</BaseURL><SegmentBase timescale="1" indexRange="8-63" indexRangeExact="true"><Initialization range="0-7"/></SegmentBase></Representation></AdaptationSet></Period></MPD>"#;
     let responses = BTreeMap::from([
-        ("/vod/input.mpd", manifest.to_vec()),
+        ("/vod/presentation.xml?token=entry", manifest.to_vec()),
         ("/vod/video/720p/indexed.mp4", indexed_object()),
     ]);
     let stopped = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -332,7 +333,11 @@ fn indexed_server() -> (
             connection.write_all(body).unwrap();
         }
     });
-    (format!("http://{address}/vod/input.mpd"), stopped, server)
+    (
+        format!("http://{address}/vod/presentation.xml?token=entry"),
+        stopped,
+        server,
+    )
 }
 
 #[test]
@@ -347,6 +352,7 @@ fn public_acquisition_enforces_the_segment_limit_after_an_indexed_object_arrives
         "must-not-run",
         "must-not-run",
     )
+    .with_new_output_defaults()
     .with_max_workers(Some(1))
     .unwrap();
     for limit in [1, 2] {
@@ -368,7 +374,9 @@ fn public_acquisition_enforces_the_segment_limit_after_an_indexed_object_arrives
             );
             assert!(!destination.exists());
         } else {
-            result.unwrap().check(&Stop::new()).unwrap();
+            let source = result.unwrap();
+            assert_eq!(source.entrypoint_relative(), Path::new("presentation.xml"));
+            source.check(&Stop::new()).unwrap();
         }
     }
 }

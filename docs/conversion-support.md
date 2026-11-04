@@ -122,7 +122,11 @@ support. The acquisition profiles below apply to complete-source analysis and
 conversion, not temporary metadata reading. See [metadata analysis](usage.md#read-metadata-and-plan-a-conversion)
 for the distinct reads and limits.
 
-| URL input | Acquisition profile | Retained local entrypoint |
+Source layout keeps the final URL's safe filename for the local entrypoint,
+including after redirects. The fallback names below apply when the final URL
+has no filename. Use the local path reported by `--json` for offline commands.
+
+| URL input | Acquisition profile | Fallback entrypoint without a filename |
 | --- | --- | --- |
 | MP4 | One complete MP4 file within the local media profiles | `input.mp4` |
 | DASH | Static MPD with one `Period`; finite `SegmentTemplate` with nominal duration or timeline, `SegmentList`, or one indexed file per representation with `SegmentBase` | `input.mpd` |
@@ -167,7 +171,7 @@ publishing output. These results do not establish DRM license or device playback
 
 The six MP4/DASH cases require authentication and a query string for their local
 HTTP source. Each case runs `analyze URL --download-dir`, stops the server, saves
-a plan from `input.mp4` or `input.mpd`, executes `convert --plan-file`, and runs
+a plan from the retained local entrypoint, executes `convert --plan-file`, and runs
 `verify --plan-file`. Encoded packets, timing and complete decoded content match the
 source. Saved-source fingerprints and output intent also match; original media
 and raw manifests remain unchanged. The cases check that credentials and keys

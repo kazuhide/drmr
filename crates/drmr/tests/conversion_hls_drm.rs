@@ -291,7 +291,7 @@ fn hls_multi_drm_url_analysis_saved_conversion_and_fresh_verification_stay_offli
     let reference = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bbb/clip.mp4");
     let output = bundle(root.path(), &reference);
     let (download, private) = acquire_encrypted_source(root.path(), &output);
-    let input = download.join("input.m3u8");
+    let input = download.join("master.m3u8");
     let before = snapshot(&download);
     let keys = root.path().join("single-keys.json");
     write(

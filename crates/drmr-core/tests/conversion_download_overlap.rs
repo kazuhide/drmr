@@ -5,6 +5,7 @@ use drmr_core::{
         Converter, HlsInputKeys, InputKeys,
         conformance::ManifestValidationTools,
         key_file::BundleOperatorKeys,
+        layout::LayoutMode,
         plan::bundle::{BundleOutputIntent, ManifestValidation},
     },
     events::{Collector, NoSink, Record, Sink},
@@ -81,7 +82,9 @@ impl Sink for Witness {
         self.records.emit(record);
         if record.get("event").and_then(|v| v.as_str()) == Some("native-rendition-prepared") {
             assert!(
-                !self.destination.join("input.m3u8").exists(),
+                ["input.m3u8", "master.m3u8"]
+                    .iter()
+                    .all(|name| !self.destination.join(name).exists()),
                 "entrypoint published before acquisition completed"
             );
             self.prepared.set();
@@ -248,12 +251,18 @@ fn policy(url: &str) -> FetchPolicy {
 
 #[test]
 fn native_admission_finishes_before_last_http_body_and_is_reused_by_bundle_conversion() {
+    for layout in [LayoutMode::Normalized, LayoutMode::Source] {
+        native_admission_roundtrip(layout);
+    }
+}
+
+fn native_admission_roundtrip(layout: LayoutMode) {
     let root = drmr_core::native::private_tempdir().unwrap();
     let source = root.path().join("source");
     let output = root.path().join("output");
     let witness = witness(&source);
     let server = Server::new(witness.clone(), true);
-    let command = converter(witness.clone(), 2, 4 * 1024 * 1024 * 1024);
+    let command = converter(witness.clone(), 2, 4 * 1024 * 1024 * 1024).with_layout(layout);
     let outputs = outputs();
     let downloaded = command
         .download_bundle_source(
@@ -264,6 +273,14 @@ fn native_admission_finishes_before_last_http_body_and_is_reused_by_bundle_conve
             &outputs,
         )
         .unwrap();
+    assert_eq!(
+        downloaded.entrypoint_relative(),
+        Path::new(if layout == LayoutMode::Source {
+            "master.m3u8"
+        } else {
+            "input.m3u8"
+        })
+    );
     assert!(
         server.overlap.load(Ordering::Acquire),
         "native preparation waited for the last HTTP resource"

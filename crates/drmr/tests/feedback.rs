@@ -372,7 +372,7 @@ fn remote_completion_names_retained_originals_without_url_or_credentials() {
         text.contains(&format!("Retained originals: {}", download.display())),
         "{text}"
     );
-    assert!(download.join("input.mp4").is_file() && output.is_file());
+    assert!(download.join("source.mp4").is_file() && output.is_file());
     assert!(
         text.contains("file downloaded") && text.contains("received"),
         "{text}"

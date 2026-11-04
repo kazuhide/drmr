@@ -1,6 +1,6 @@
 ---
 title: ユーザーガイド
-updated: 2026-11-03
+updated: 2026-11-04
 version: 1.2.0
 ---
 
@@ -505,7 +505,7 @@ drmr plan source/master.m3u8 --encryption clear \
 単一出力の実行用計画は新規の出力先と `--save` を指定して保存します。原本全体を確認し、解決後の出力形式を一つ記録します。
 
 ```sh
-drmr plan source/input.m3u8 --encryption cbcs --output-format \
+drmr plan source/master.m3u8 --encryption cbcs --output-format \
   dash \
   --output-dir converted-dash --save conversion.plan.json --json
 drmr convert --plan-file conversion.plan.json --keys-file \
@@ -526,7 +526,7 @@ Unix 系では、出力と計画の親ディレクトリは、自分が所有し
 
 ## ディレクトリの保持と DASH の参照形式
 
-取得時は `video/1080p/` などのメディアと子プレイリストのパスを保持します。`input.m3u8`・`input.mpd` は、保存先を参照するよう書き換えたマニフェストです。`raw/` には取得時のマニフェスト原文と、URL・サイズ・ハッシュを記録した非公開の `raw/index.json` を残します。メディアは一度だけ保存し、`raw/` に複製しません。URL を含むため非公開で原本と一緒に保管してください。鍵はダウンロードしません。
+取得時は入力ファイルの名前と、`video/1080p/` などのメディア・子プレイリストのパスを保持します。ファイル名はリダイレクト後の最終 URL から決め、クエリー文字列は含めません。URL にファイル名がない場合は、内容に応じて `input.m3u8`・`input.mpd`・`input.mp4` を使います。マニフェスト内の参照は保存先に合わせて書き換えます。`raw/` には取得時のマニフェスト原文と、URL・サイズ・ハッシュを記録した非公開の `raw/index.json` を残します。メディアは一度だけ保存し、`raw/` に複製しません。URL を含むため非公開で原本と一緒に保管してください。鍵はダウンロードしません。
 
 出力も同じディレクトリに置き、マニフェストは `master.m3u8`・`manifest.mpd` です。メディアのディレクトリが別々なら接頭辞は付けず、`r000600.ts` は fMP4 では `init.mp4` と `r000600.m4s`、HLS TS では `.ts` のまま出力します。同じディレクトリへ別ファイルとして出すトラック（映像・音声）は、元のプレイリスト名と種類に基づく接頭辞で区別します。対応する連番の開始位置とゼロ埋めは保持し、結合後の分割数に合わせて必要な数の名前を付けます。元の区切り位置は保証しません。HLS と DASH の `list` は、分割数が同じ場合だけ任意名の拡張子以外の部分を保持し、分割数が変わる場合は `seg_1` から命名します。DASH のテンプレートでは対応する連番の規則（名前の1か所の数字が1ずつ増える形）に合わない名前を `seg_1.m4s` に替えます。任意名を残すには `--dash-addressing list` を指定します。MP4 入力には元のセグメント名がないため、元のディレクトリ内に `seg_1` から作ります。
 
@@ -544,8 +544,8 @@ DASH 出力には、直接変換または計画保存時の `--dash-addressing` 
 公称時間は区間を近似する値で、実際の AAC フレームの境界とは少し異なることがあります。索引は一つのファイル内の各区間の位置と時刻を示す情報です。正確な区切りをマニフェストにも記録する場合は、時系列を明示する形式を選んでください。どの形式でもサンプル、時刻、再生範囲の必須検査を行います。暗号方式と DRM の情報は別に指定します。区間の時刻を指定形式で表現できない場合は失敗とし、別の形式へ自動で切り替えません。[DASH の参照形式と条件（英語）](https://github.com/kazuhide/drmr/blob/main/docs/dash-addressing.md)。
 
 ```sh
-drmr plan source/input.m3u8 --encryption clear --output-format \
-  dash --dash-addressing list \
+drmr plan source/master.m3u8 --encryption clear \
+  --output-format dash --dash-addressing list \
   --output-dir result --save conversion.plan.json
 drmr convert --plan-file conversion.plan.json
 drmr verify --plan-file conversion.plan.json
@@ -560,7 +560,7 @@ drmr verify --plan-file conversion.plan.json
 ```sh
 drmr analyze "https://example.com/vod/master.m3u8" \
   --download-dir source &&
-drmr plan source/input.m3u8 --output-config outputs.json \
+drmr plan source/master.m3u8 --output-config outputs.json \
   --output-dir result --save conversion.plan.json &&
 drmr convert --plan-file conversion.plan.json --keys-file \
   keys.json &&
@@ -568,7 +568,7 @@ drmr verify --plan-file conversion.plan.json --keys-file \
   keys.json
 ```
 
-この例の入力は clear なので `analyze` と `plan` に鍵は不要です。暗号化入力では入力鍵を含むファイルを両方に渡します。DASH と MP4 を取得した場合は、計画する入力を `source/input.mpd` または `source/input.mp4` に替えます。
+この例の入力は clear なので `analyze` と `plan` に鍵は不要です。暗号化入力では入力鍵を含むファイルを両方に渡します。DASH と MP4 を取得した場合も、`analyze` の結果に記載された保存先を入力に指定します。たとえば `source/manifest.mpd` や `source/video.mp4` です。
 
 `plan --output-config` は `--save` が必須で、`--encryption`・`--output-format` とは併用しません。保存計画は原本のファイル集合とハッシュ、出力先、形式・暗号方式・DRM 選択・処理方式・参照形式・外部検査方針を固定します。鍵やライセンス URL は保存しません。実行時に原本と条件を再確認し、後日の `verify --plan-file` は実際の原本と出力を読み直します。既存の出力へは上書きしません。
 
@@ -648,7 +648,7 @@ drmr verify --plan-file conversion.plan.json --keys-file \
 取得済みの原本を使う場合は、次の一回で入力検査・変換・原本との比較・内蔵マニフェスト検査・DRM 宣言の照合まで実行します。
 
 ```sh
-drmr convert source/input.m3u8 --output-config outputs.json \
+drmr convert source/master.m3u8 --output-config outputs.json \
   --keys-file keys.json --output-dir result
 ```
 
@@ -680,13 +680,13 @@ drmr convert "https://example.com/vod/master.m3u8" \
 
 MP4、静的な DASH、配信が完結した HLS を URL から取得できます。形式は取得した内容で判別するため、拡張子は必須ではありません。クエリや許可されたリダイレクトの有無で形式が決まることはありません。
 
-| URL の入力形式 | 保存後に使うローカルファイル | 取得できる構成 |
+| URL の入力形式 | 保存後のパスの例 | 取得できる構成 |
 | --- | --- | --- |
-| MP4 | `source/input.mp4` | ローカル入力の対応条件を満たす一つの完全な MP4 |
-| DASH | `source/input.mpd` | 静的な一つの `Period` と、有限のテンプレート、リスト、対応する単一ファイルの索引 |
-| HLS | `source/input.m3u8` | 対応条件を満たす、配信が完結した TS/fMP4 プレイリスト |
+| MP4 | `source/video.mp4` | ローカル入力の対応条件を満たす一つの完全な MP4 |
+| DASH | `source/manifest.mpd` | 静的な一つの `Period` と、有限のテンプレート、リスト、対応する単一ファイルの索引 |
+| HLS | `source/master.m3u8` | 対応条件を満たす、配信が完結した TS/fMP4 プレイリスト |
 
-DASH または MP4 を保存後に再利用する場合は、入力パスを表に合わせます。DASH は参照する初期化ファイルとセグメントをすべて保存し、`input.mpd` の参照をローカルに書き換えます。元の MPD は別に残し、暗号化情報、DRM 初期化データの PSSH、時系列情報を保持します。
+表のファイル名は例です。保存した原本を再利用する場合は、`analyze` の結果に記載された実際のパスを指定します。DASH は参照する初期化ファイルとセグメントをすべて保存し、MPD 内の参照をローカルに書き換えます。元の MPD は別に残し、暗号化情報、DRM 初期化データの PSSH、時系列情報を保持します。
 
 取得後の解析にはローカル入力と同じコーデック・トラック・暗号・時刻の条件を適用します。ライブ、HLS のバイト範囲による参照、複数の DASH Period、階層を持つ索引や外部の索引、繰り返し回数が負の時系列指定は対象外です。DASH で対応するバイト範囲を使う場合も、参照元のファイル全体を保存します。これらは実装上の制限で、形式として変換が不可能という意味ではありません。
 
@@ -694,7 +694,7 @@ HLS は clear に加え、AES-128 の TS/fMP4、SAMPLE-AES の TS、CENC/CBCS �
 
 AES-128 と TS SAMPLE-AES の `input.hls_keys[].uri` は、リダイレクト後のプレイリスト URL から解決した絶対 URI と一致させます。`https://example.com/vod/media.m3u8` 内の `keys/key.bin` は `https://example.com/vod/keys/key.bin`、絶対 URI の `skd:` はそのまま使います。CENC/CBCS は `input.keys` に KID と鍵を指定します。鍵 URI やライセンスには接続しません。暗号化入力では通常の `analyze` と `plan --save` による原本の確認にも入力鍵の `--keys-file config/keys.json` が必要です。Clear 入力とメタデータだけの確認では不要です。
 
-HLS は元のプレイリストとリソースを保存し、メディア参照と鍵識別 URI をローカル用に解決した `source/input.m3u8` を作ります。時刻・シーケンス番号・音声の関連付けは作り直しません。どの形式でも取得中は暗号化済みデータを復号しません。原本マニフェストは元のバイト列で別に残り、署名付き URL を含み得るため非公開で保管してください。
+HLS は元のプレイリストとリソースを保存し、メディア参照と鍵識別 URI をローカル用に解決します。取得元と同じファイル名で保存します。時刻・シーケンス番号・音声の関連付けは作り直しません。どの形式でも取得中は暗号化済みデータを復号しません。原本マニフェストは元のバイト列で別に残り、署名付き URL を含み得るため非公開で保管してください。
 
 取得するファイルの参照関係、保持するパス、作成したファイルの管理記録、検証中に併存するファイル一覧には、合計 128 MiB のメタデータ上限があります。長いパスや深いディレクトリ構造では、ファイル数の上限より先にこの上限に達することがあります。ファイルを作る前に必要量を確認し、取得済み原本を使っている間もメモリ予算に含めます。リソース本体は逐次ファイルに書き出し、ワーカーのバッファや取得中だけ使う作業領域は別に見積もります。
 
@@ -703,11 +703,11 @@ URL の直接変換は取得した原本をその後の変換と照合に使い�
 ## 保存した原本を再利用する
 
 ```sh
-drmr convert source/input.m3u8 --output-config outputs.json \
+drmr convert source/master.m3u8 --output-config outputs.json \
   --keys-file keys.json --output-dir retry-result
 ```
 
-取得が完了すれば、配信元へ接続せずに保存した原本を使えます。DASH は `source/input.mpd`、MP4 は `source/input.mp4` を指定します。取得済みの原本は後の変換に失敗しても残ります。未完了の取得は受け付けません。
+取得が完了すれば、配信元へ接続せずに保存した原本を使えます。入力には保存した入力ファイルを指定します。たとえば DASH は `source/manifest.mpd`、MP4 は `source/video.mp4` です。以前の取得データの `input.*` や保存済みの計画も、記録済みのパスで引き続き使えます。取得済みの原本は後の変換に失敗しても残ります。未完了の取得は受け付けません。
 
 出力の配置直前まで、原本の内容とローカル参照を確認します。途中で原本が改変・削除された場合は出力を配置しません。URL の再実行に既存の取得先を渡す代わりに、保存したローカルファイルを入力にしてください。
 
@@ -783,7 +783,7 @@ drmr convert "https://example.com/vod/master.m3u8" \
 出力設定を使った変換結果は、保存計画がなくても原本と独立に比較できます。
 
 ```sh
-drmr verify result --source source/input.m3u8 \
+drmr verify result --source source/master.m3u8 \
   --output-config outputs.json --keys-file keys.json
 ```
 
@@ -1436,7 +1436,7 @@ drmr analyze original.mp4 --metadata-only --progress off
 | `media-output-limit` / `media-probe-output-limit` | 捕捉上限やレコード上限を超えていないか確認する。部分結果を成功扱いしない |
 | `cleanup-unconfirmed` / `media-cleanup-unconfirmed` | 子プロセスやロックの状態を確認する。停止や処理が成功したとは扱わず、子プロセスの管理を続けて原因を解消する |
 
-変換を繰り返す場合は、新しい出力名を選びます。URL からの取得が完了していれば、保存した `input.mp4`・`input.mpd`・`input.m3u8` を再利用できます。既存の `--download-dir` を再取得先には指定しません。作業領域を手動で削除する前に、その領域を使う子プロセスが終了したことを確認してください。
+変換を繰り返す場合は、新しい出力名を選びます。URL からの取得が完了していれば、保存した入力ファイルを再利用できます。既存の `--download-dir` を再取得先には指定しません。作業領域を手動で削除する前に、その領域を使う子プロセスが終了したことを確認してください。
 
 問題を報告する際は、コマンド名、固定のエラーコード、バージョン、入力と出力の対応条件、秘密情報を除いた最小限の再現手順を中心に共有してください。レポート内の鍵などがマスクされていても、原本 URL、パス、メディア名、出力シグナリングに秘密情報が残っている場合があります。
 

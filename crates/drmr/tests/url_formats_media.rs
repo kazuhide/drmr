@@ -327,9 +327,9 @@ fn offline_workflow(format: &str, scheme: &str, prefix: &[u8]) {
     assert_eq!(analysis["input_admitted"], true);
     assert_eq!(analysis["actual_format"], format);
     let entrypoint = if format == "mp4" {
-        "input.mp4"
+        "media.mp4"
     } else {
-        "input.mpd"
+        "manifest.mpd"
     };
     assert_eq!(analysis["download"]["entrypoint_relative"], entrypoint);
     assert_eq!(analysis["download"]["retained"], true);
@@ -450,9 +450,9 @@ fn mp4_and_dash_urls_share_direct_single_and_multiple_output_conversion() {
         );
         verified(&single["verification"]);
         let entrypoint = if format == "mp4" {
-            "input.mp4"
+            "media.mp4"
         } else {
-            "input.mpd"
+            "manifest.mpd"
         };
         assert_eq!(single["download"]["entrypoint_relative"], entrypoint);
         let retained_single = snapshot(&single_download);

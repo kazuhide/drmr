@@ -341,7 +341,10 @@ fn saved_url_plan_retains_its_original_and_executes_and_verifies_offline() {
     );
     passed(&planned);
     assert_eq!(result(&planned)["schema_version"], 9);
-    assert_eq!(std::fs::read(download.join("input.mp4")).unwrap(), original);
+    assert_eq!(
+        std::fs::read(download.join("source.mp4")).unwrap(),
+        original
+    );
     let plan_bytes = std::fs::read(&saved).unwrap();
     let counts = server.stop();
     assert!(counts.served > 0);
@@ -362,7 +365,10 @@ fn saved_url_plan_retains_its_original_and_executes_and_verifies_offline() {
     assert_eq!(verified["source_unchanged"], true);
     assert_eq!(verified["output_matches_plan"], true);
     assert_eq!(verified["verification"]["passed"], true);
-    assert_eq!(std::fs::read(download.join("input.mp4")).unwrap(), original);
+    assert_eq!(
+        std::fs::read(download.join("source.mp4")).unwrap(),
+        original
+    );
     assert_eq!(std::fs::read(&saved).unwrap(), plan_bytes);
 }
 

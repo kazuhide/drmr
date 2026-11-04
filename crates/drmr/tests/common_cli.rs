@@ -385,7 +385,7 @@ fn common_bridge_url_analysis(dash: bool) {
         result.payload["actual_format"],
         if dash { "dash" } else { "mp4" }
     );
-    let entrypoint = if dash { "input.mpd" } else { "input.mp4" };
+    let entrypoint = name;
     let directory = retained.canonicalize().unwrap();
     assert_eq!(result.payload["download"]["retained"], true);
     assert_eq!(result.payload["download"]["directory"], json!(directory));
