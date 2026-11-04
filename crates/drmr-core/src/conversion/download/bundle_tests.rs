@@ -35,7 +35,7 @@ fn sealed_source(parent: &Path) -> (Converter, PathBuf, PathBuf, Vec<u8>) {
         _retained: None,
         owned,
         files: expected,
-        entrypoint: "input.m3u8",
+        entrypoint: "input.m3u8".into(),
     }));
     (converter, entrypoint, segment, media)
 }

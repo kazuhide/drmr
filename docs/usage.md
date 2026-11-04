@@ -40,12 +40,12 @@ refuse `--decode` because they do not perform complete media checks.
 
 For URL preflight, a saved executable plan, offline conversion, and independent
 verification, follow [analyze, save a plan, convert, and verify](executable-plans.md).
-Use `analyze URL --download-dir ./source`,
-`plan ./source/input.m3u8 --encryption cbcs --output-format dash --output-dir ./result --save ./conversion.plan.json`,
+Use `analyze https://example.com/vod/master.m3u8 --download-dir ./source`,
+`plan ./source/master.m3u8 --encryption cbcs --output-format dash --output-dir ./result --save ./conversion.plan.json`,
 then `convert --plan-file ./conversion.plan.json` and
 `verify --plan-file ./conversion.plan.json`, with keys supplied separately when needed.
-For DASH and MP4 URLs, plan from `./source/input.mpd` and `./source/input.mp4`
-respectively. The [URL input table](#convert-a-url) lists the acquisition limits.
+For other URLs, plan from the actual local entrypoint reported by `--json`.
+The [URL input table](#convert-a-url) lists the acquisition limits.
 
 ## Select a processing mode
 
@@ -286,9 +286,12 @@ replaced or silently reused. Local input needs neither `--download-dir` nor
 `--fetch-config`.
 
 The command identifies the format from the response content, saves the original
-resources and creates a local entrypoint before conversion and verification:
+resources and creates a local entrypoint before conversion and verification.
+The entrypoint keeps the final URL's safe filename, including after redirects;
+the example above retains `source/master.m3u8`. URLs without a filename use the
+fallback for the detected format:
 
-| URL input | Retained entrypoint | Acquisition conditions |
+| URL input | Fallback entrypoint without a filename | Acquisition conditions |
 | --- | --- | --- |
 | MP4 | `source/input.mp4` | One complete MP4 within the local media profiles |
 | DASH | `source/input.mpd` | One static `Period`, finite template or list references, or a supported single-file index |
@@ -297,8 +300,8 @@ resources and creates a local entrypoint before conversion and verification:
 The same URL input and `--download-dir` options work with normal `analyze` when you want
 to check the source before [saving a plan](executable-plans.md). URLs need no
 filename extension; queries and allowed redirects do not select the format.
-Use the corresponding local entrypoint for `plan` and offline reuse. The separate
-`analyze --metadata-only URL` mode retains no such entrypoint.
+Use the actual local entrypoint reported by `--json` for `plan` and offline reuse.
+The separate `analyze --metadata-only URL` mode retains no such entrypoint.
 
 For DASH, drmr saves every referenced initialization and media file and creates a
 local MPD. Only resource addressing is localized; protection declarations,
@@ -313,8 +316,8 @@ is saved, the server is no longer needed. Retry with its local entrypoint, or
 compare the result independently:
 
 ```sh
-drmr convert source/input.m3u8 --encryption cbcs --output-format hls-fmp4 --output-dir ./retry --keys-file keys.json
-drmr verify converted/master.m3u8 --source source/input.m3u8 --keys-file keys.json
+drmr convert source/master.m3u8 --encryption cbcs --output-format hls-fmp4 --output-dir ./retry --keys-file keys.json
+drmr verify converted/master.m3u8 --source source/master.m3u8 --keys-file keys.json
 ```
 
 An incomplete download is not admitted as input. Cancellation stops acquisition

@@ -117,7 +117,7 @@ drmr convert "https://example.com/vod/master.m3u8" \
 ```
 
 The entrypoint is `result/hls/master.m3u8`; the retained source is
-`source/input.m3u8`. Replace the illustrative URL before running. For local
+`source/master.m3u8`. Replace the illustrative URL before running. For local
 input, pass its path and omit `--download-dir`. Encrypted input adds its own
 source-key mappings; clear-to-clear conversion omits `keys.json` and
 `--keys-file` entirely.

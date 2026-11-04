@@ -72,9 +72,9 @@ impl DownloadedSource {
     pub fn entrypoint(&self) -> &Path {
         &self.entrypoint
     }
-    /// The content-selected entrypoint name, relative to the retained directory.
+    /// The layout-selected entrypoint name, relative to the retained directory.
     pub fn entrypoint_relative(&self) -> &Path {
-        Path::new(self.seal.entrypoint)
+        Path::new(&self.seal.entrypoint)
     }
     /// Revalidate creation identities and every retained original without modifying them.
     pub fn check(&self, stop: &Stop) -> Result<(), ConversionError> {
@@ -85,7 +85,7 @@ impl DownloadedSource {
 pub(super) struct Seal {
     owned: OwnedDownload,
     files: BTreeMap<PathBuf, ([u8; 32], u64)>,
-    entrypoint: &'static str,
+    entrypoint: String,
     retained_bytes: u64,
     _retained: Option<ContextPermit>,
 }
@@ -400,13 +400,13 @@ impl Converter {
                     drop(pending.writer.take());
                     publish_entrypoint(
                         &seal.owned,
-                        Path::new(seal.entrypoint),
+                        Path::new(&seal.entrypoint),
                         &pending.path,
                         pending.created,
                         |_| {},
                     )?;
                     seal.files
-                        .insert(PathBuf::from(seal.entrypoint), pending.digest);
+                        .insert(PathBuf::from(&seal.entrypoint), pending.digest);
                     seal.check(&self.backend.stop)?;
                     Ok(())
                 })();
@@ -416,7 +416,7 @@ impl Converter {
                 }
                 seal.owned.retain();
                 Ok(DownloadedSource {
-                    entrypoint: seal.owned.path().join(seal.entrypoint),
+                    entrypoint: seal.owned.path().join(&seal.entrypoint),
                     seal: Arc::new(seal),
                     native: acquired.native,
                 })
@@ -567,15 +567,15 @@ impl Converter {
                 .then(|| acquisition_cpu(&self.backend, &self.backend.stop))
                 .transpose()?;
             let (entrypoint, contents) = if options.hls_only {
-                graph.playlist(url, true)?;
+                let name = graph.playlist(url, true)?;
                 (
-                    "input.m3u8",
+                    name,
                     Entrypoint::Projection(std::mem::take(&mut graph.root_projection)),
                 )
             } else {
                 graph.entrypoint(url)?
             };
-            owned.prepay_file(Path::new(entrypoint))?;
+            owned.prepay_file(Path::new(&entrypoint))?;
             drop(discovery);
             if let Some(progress) = progress {
                 progress.discovered(graph.resources.len());
@@ -598,7 +598,7 @@ impl Converter {
                 .map(native::Preparation::finish)
                 .transpose()?
                 .flatten();
-            graph.check_acquired_limits(entrypoint, &contents)?;
+            graph.check_acquired_limits(&contents)?;
             let index = serde_json::to_vec(&graph.records).map_err(|_| IO)?;
             graph.save("raw/index.json", &index)?;
             Ok(Acquired {
@@ -656,7 +656,7 @@ impl Converter {
             return Ok(());
         };
         if inventory.root != seal.owned.path().canonicalize().map_err(|_| CHANGED)?
-            || inventory.entrypoint != Path::new(seal.entrypoint)
+            || inventory.entrypoint != Path::new(&seal.entrypoint)
             || inventory.files.iter().any(|file| {
                 seal.files.get(&file.path).is_none_or(|(hash, size)| {
                     *size != file.bytes || hex::encode(hash) != file.sha256
@@ -723,10 +723,8 @@ fn publish_entrypoint(
     created: crate::native::FileIdentity,
     before_register: impl FnOnce(&Path),
 ) -> Result<(), ConversionError> {
-    if !matches!(
-        name.to_str(),
-        Some("input.m3u8" | "input.mpd" | "input.mp4")
-    ) {
+    let text = path_text(name)?;
+    if name.components().count() != 1 || text.eq_ignore_ascii_case("raw") {
         return Err(INVALID);
     }
     owned.prepay_file(name)?;
@@ -863,6 +861,14 @@ impl Graph<'_> {
         path_text(&path)
     }
 
+    fn root_name(&mut self, url: &str, fallback: &str) -> Result<String, ConversionError> {
+        let mut mapper = UrlPathMapper::new(url, self.layout_mode)?;
+        let path = mapper.entrypoint_admitted(url, fallback, &mut |extra| self.charge(extra))?;
+        self.owned.prepay_file(&path)?;
+        self.mapper = Some(mapper);
+        path_text(&path)
+    }
+
     fn charge(&mut self, count: usize) -> Result<(), ConversionError> {
         self.owned.charge_graph(count)?;
         self.weight = self
@@ -902,9 +908,6 @@ impl Graph<'_> {
                 }
             })?;
         valid_url(&effective)?;
-        if root {
-            self.mapper = Some(UrlPathMapper::new(&effective, self.layout_mode)?);
-        }
         self.text_charge(
             body.len()
                 .saturating_add(url.len())
@@ -935,7 +938,7 @@ impl Graph<'_> {
         self.playlist_count += 1;
         let id = self.records.len();
         let local = if root {
-            "input.m3u8".into()
+            self.root_name(&effective, "input.m3u8")?
         } else {
             self.local_name(url, &format!("p{id:06}.m3u8"))?
         };
@@ -1377,7 +1380,7 @@ mod tests {
             retained_bytes: owned.retained_bytes().unwrap(),
             _retained: None,
             owned,
-            entrypoint: "input.m3u8",
+            entrypoint: "input.m3u8".into(),
             files: BTreeMap::from([(path.to_path_buf(), bytes_digest(b"retained media"))]),
         };
         seal.check(&Stop::new()).unwrap();
@@ -1391,7 +1394,7 @@ mod tests {
             retained_bytes: owned.retained_bytes().unwrap(),
             _retained: None,
             owned,
-            entrypoint: "input.m3u8",
+            entrypoint: "input.m3u8".into(),
             files: BTreeMap::new(),
         };
         std::fs::create_dir(seal.owned.path().join("unregistered")).unwrap();
@@ -1405,12 +1408,15 @@ mod tests {
 
     #[test]
     fn saved_and_published_files_keep_their_writer_identity_until_registration() {
-        for name in [
-            "raw/playlist.m3u8",
-            "projection.m3u8",
-            "input.m3u8",
-            "input.mpd",
-            "input.mp4",
+        for (name, publish) in [
+            ("raw/playlist.m3u8", false),
+            ("projection.m3u8", false),
+            ("input.m3u8", true),
+            ("input.mpd", true),
+            ("input.mp4", true),
+            ("stream.m3u8", true),
+            ("presentation.xml", true),
+            ("clip.mp4", true),
         ] {
             let parent = crate::native::private_tempdir().unwrap();
             let mut owned = OwnedDownload::reserve(
@@ -1420,7 +1426,7 @@ mod tests {
             .unwrap();
             owned.create_dir(Path::new("raw")).unwrap();
             let original = parent.path().join("original");
-            let result = if name.starts_with("input.") {
+            let result = if publish {
                 let pending = parent.path().join("pending");
                 let writer = write_private(&pending, b"original").unwrap();
                 let created = crate::native::FileIdentity::read(&writer).unwrap();
@@ -1560,7 +1566,7 @@ mod tests {
                 retained_bytes: owned.retained_bytes().unwrap(),
                 _retained: None,
                 owned,
-                entrypoint: "input.m3u8",
+                entrypoint: "input.m3u8".into(),
                 files: BTreeMap::from([(
                     PathBuf::from("original"),
                     bytes_digest(b"immutable source"),

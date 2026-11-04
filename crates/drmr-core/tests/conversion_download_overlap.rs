@@ -81,7 +81,7 @@ impl Sink for Witness {
         self.records.emit(record);
         if record.get("event").and_then(|v| v.as_str()) == Some("native-rendition-prepared") {
             assert!(
-                !self.destination.join("input.m3u8").exists(),
+                !self.destination.join("master.m3u8").exists(),
                 "entrypoint published before acquisition completed"
             );
             self.prepared.set();

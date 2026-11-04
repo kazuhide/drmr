@@ -197,6 +197,39 @@ fn mp4_url_without_a_media_suffix_is_retained_byte_for_byte() {
 }
 
 #[test]
+fn source_layout_mp4_keeps_the_effective_filename_and_streamed_bytes() {
+    let bytes = b"\0\0\0\x18ftypisom\0\0\0\0isomiso2\0\0\0\x10mdatcontent!";
+    for (target, name) in [
+        ("/vod/clip.mp4?token=entry", "clip.mp4"),
+        ("/vod/content?token=entry", "content"),
+        ("/vod/%E9%9F%B3%E5%A3%B0.mp4", "音声.mp4"),
+        ("/vod/", "input.mp4"),
+    ] {
+        let server = Server::redirecting(
+            BTreeMap::from([(target, bytes.to_vec())]),
+            BTreeMap::from([("/source.m3u8", target)]),
+        );
+        let parent = drmr_core::native::private_tempdir().unwrap();
+        let directory = parent.path().join("download");
+        let source = converter(Stop::new())
+            .with_new_output_defaults()
+            .acquire_source(&server.url(), &directory, &policy())
+            .unwrap();
+        assert_eq!(source.entrypoint_relative(), std::path::Path::new(name));
+        assert_eq!(
+            source.entrypoint(),
+            directory.canonicalize().unwrap().join(name)
+        );
+        assert_eq!(std::fs::read(source.entrypoint()).unwrap(), bytes);
+        if name != "input.mp4" {
+            assert!(!directory.join("input.mp4").exists());
+        }
+        source.check(&Stop::new()).unwrap();
+        assert_eq!(*server.calls.lock().unwrap(), ["/source.m3u8", target]);
+    }
+}
+
+#[test]
 fn dash_url_localizes_all_resources_and_preserves_the_raw_manifest() {
     let xml = b"<MPD xmlns='urn:mpeg:dash:schema:mpd:2011' type='static' mediaPresentationDuration='PT4S'><Period><AdaptationSet><Representation id='v' bandwidth='10'><SegmentTemplate initialization='init.mp4' media='s$Number$.m4s' timescale='1'><SegmentTimeline><S d='2' r='1'/></SegmentTimeline></SegmentTemplate></Representation></AdaptationSet></Period></MPD>";
     let server = Server::new(BTreeMap::from([

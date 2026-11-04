@@ -58,6 +58,33 @@ impl UrlPathMapper {
         self.map_admitted(url, fallback_relative, &mut |_| Ok(()))
     }
 
+    /// Reserve the root separately so no resource can reuse its publication path.
+    pub(in crate::conversion) fn entrypoint_admitted(
+        &mut self,
+        url: &str,
+        fallback: &str,
+        admit: &mut dyn FnMut(usize) -> Result<(), ConversionError>,
+    ) -> Result<PathBuf, ConversionError> {
+        let parts = split(url)?;
+        crate::source::origin(url).map_err(|_| INVALID)?;
+        let path = if self.mode == LayoutMode::Normalized
+            || parts.path.is_empty()
+            || parts.path.ends_with('/')
+        {
+            PathBuf::from(fallback)
+        } else {
+            let components = url_components(&parts.path)?;
+            if components.len() != self.base.len() + 1 || !components.starts_with(&self.base) {
+                return Err(UNSUPPORTED);
+            }
+            PathBuf::from(components.last().ok_or(INVALID)?)
+        };
+        if relative_components(&path)?.len() != 1 || path_text(&path)?.eq_ignore_ascii_case("raw") {
+            return Err(INVALID);
+        }
+        self.claim_admitted(None, path, admit)
+    }
+
     pub(in crate::conversion) fn map_admitted(
         &mut self,
         url: &str,
@@ -92,10 +119,19 @@ impl UrlPathMapper {
             }
             PathBuf::from(relative)
         };
+        self.claim_admitted(Some(url), path, admit)
+    }
+
+    fn claim_admitted(
+        &mut self,
+        url: Option<&str>,
+        path: PathBuf,
+        admit: &mut dyn FnMut(usize) -> Result<(), ConversionError>,
+    ) -> Result<PathBuf, ConversionError> {
         relative_components(&path)?;
         let candidates = self.claims.prepare(&path)?;
         let mut charge = url
-            .len()
+            .map_or(0, str::len)
             .checked_add(path.capacity().checked_mul(2).ok_or(INVALID)?)
             .and_then(|n| n.checked_add(512))
             .ok_or(INVALID)?;
@@ -116,7 +152,9 @@ impl UrlPathMapper {
         admit(charge)?;
         self.bytes = bytes;
         self.claims.commit(candidates);
-        self.assigned.insert(url.into(), path.clone());
+        if let Some(url) = url {
+            self.assigned.insert(url.into(), path.clone());
+        }
         Ok(path)
     }
 

@@ -419,6 +419,7 @@ fn encrypted_url_roundtrip(profile: Profile) {
         "downloaded-analyze",
     );
     assert_eq!(report["input_admitted"], true);
+    assert_eq!(report["download"]["entrypoint_relative"], "master.m3u8");
     assert_eq!(report["download"]["retained"], true);
     for admission in [&local, &report] {
         assert_eq!(admission["schema_version"], 2);
@@ -454,7 +455,7 @@ fn encrypted_url_roundtrip(profile: Profile) {
             );
         }
     }
-    let input = download.join("input.m3u8");
+    let input = download.join("master.m3u8");
     rejected_keys(root.path(), profile, &input, &origin);
     if profile == Profile::SampleTs {
         refuse_ts_counter_mode(&download, &input, &keys);

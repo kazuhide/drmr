@@ -279,9 +279,11 @@ targets; unrelated files in the source directory are not included in the graph.
 ## Acquiring URL input
 
 For a supported HLS, static DASH or MP4 URL, `analyze` and direct `convert` retain
-the complete source in the chosen download directory. Content detection selects
-`input.m3u8`, `input.mpd` or `input.mp4` as the local entrypoint. HLS localization
-preserves playlist declarations, duration text, sequence numbers and rendition
+the complete source in the chosen download directory. Source layout keeps the
+final URL's safe filename as the local entrypoint, including after redirects.
+If the final URL has no filename, content detection selects `input.m3u8`,
+`input.mpd` or `input.mp4`. HLS localization preserves playlist declarations,
+duration text, sequence numbers and rendition
 associations. DASH localization preserves protection declarations, PSSH, finite
 resource timing and supported byte ranges while pointing at the downloaded
 initialization and media resources. Original manifest bytes are retained

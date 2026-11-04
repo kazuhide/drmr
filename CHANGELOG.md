@@ -35,6 +35,9 @@ Completed changes are recorded by category before the next release.
 
 ### Fixed
 
+- Preserve the final URL's safe filename for downloaded source entrypoints,
+  including after redirects. URLs without a filename keep their format-specific
+  fallback; existing retained sources and saved plans remain usable.
 - Apply the same output defaults during direct conversion and independent
   configured verification, including the default DASH SegmentTemplate addressing.
 - Keep validated media dimensions available for resource reservations, so small

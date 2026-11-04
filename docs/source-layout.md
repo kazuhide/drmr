@@ -13,7 +13,10 @@ from actual media references rather than inferred from the resolution.
 
 ## Downloaded originals
 
-The retained local entrypoint remains `input.m3u8`, `input.mpd`, or `input.mp4`.
+The local entrypoint keeps the final URL's safe filename, including after
+redirects. A final URL without a filename uses `input.m3u8`, `input.mpd`, or
+`input.mp4` according to the response content. `--json` reports the actual local
+path. The Rust API's normalized layout retains those generated names.
 HLS child playlist paths and HLS/DASH media paths retain their relative names.
 The entrypoint and child playlists are localized manifests: their references
 point to the downloaded files so they work offline. The private `raw/` directory
@@ -25,7 +28,7 @@ Acquisition does not download keys from manifest key URIs.
 
 For downloads made by earlier versions, conversion uses the local paths already
 on disk. Acquire the URL again into a new download directory to retain the
-remote directories.
+remote filenames and directories.
 
 The final root URL's directory defines the source-relative root. Source layout
 requires an unambiguous local path for each resource. It refuses resources

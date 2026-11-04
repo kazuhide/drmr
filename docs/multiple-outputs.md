@@ -321,7 +321,7 @@ For an already downloaded or local source, replace the URL with its entrypoint
 and omit `--download-dir`:
 
 ```sh
-drmr convert source/input.m3u8 --output-config outputs.json \
+drmr convert source/master.m3u8 --output-config outputs.json \
   --keys-file keys.json --output-dir result
 ```
 
@@ -337,11 +337,11 @@ their recorded minimum verification depth and processing behavior.
 
 ```sh
 drmr analyze "https://example.com/vod/master.m3u8" --download-dir ./source --json
-drmr plan ./source/input.m3u8 --output-config ./outputs.json --output-dir ./result --save ./conversion.plan.json --json
+drmr plan ./source/master.m3u8 --output-config ./outputs.json --output-dir ./result --save ./conversion.plan.json --json
 ```
 
 The same acquisition command accepts a supported MP4 or static DASH URL; use
-`source/input.mp4` or `source/input.mpd` for the plan. Acquisition does not
+the actual local entrypoint reported by `--json` for the plan. Acquisition does not
 widen the chosen processing route's media profile. See
 [URL input](conversion-support.md#url-input).
 
@@ -370,7 +370,7 @@ This optional workflow reads the source again at each command boundary. Direct
 conversion also supports a later independent comparison without saving a plan:
 
 ```sh
-drmr verify result --source source/input.m3u8 \
+drmr verify result --source source/master.m3u8 \
   --output-config outputs.json --keys-file keys.json
 ```
 

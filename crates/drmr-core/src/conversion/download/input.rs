@@ -10,7 +10,7 @@ use std::{
 };
 
 pub(super) struct Acquired {
-    pub(super) entrypoint: &'static str,
+    pub(super) entrypoint: String,
     pub(super) contents: Entrypoint,
     pub(super) files: Expected,
     pub(super) native: Option<super::native::AcquiredNative>,
@@ -52,13 +52,11 @@ impl Entrypoint {
 impl Graph<'_> {
     pub(super) fn check_acquired_limits(
         &self,
-        entrypoint: &str,
         contents: &Entrypoint,
     ) -> Result<(), ConversionError> {
-        if entrypoint == "input.mpd" {
-            let Entrypoint::Projection(projection) = contents else {
-                return Err(INVALID);
-            };
+        if let Entrypoint::Projection(projection) = contents
+            && inspection::format_hint(projection) == Some(InputFormat::Dash)
+        {
             crate::conversion::dash::check_acquired_limits(
                 self.owned.path(),
                 projection,
@@ -73,7 +71,7 @@ impl Graph<'_> {
     pub(super) fn entrypoint(
         &mut self,
         url: &str,
-    ) -> Result<(&'static str, Entrypoint), ConversionError> {
+    ) -> Result<(String, Entrypoint), ConversionError> {
         self.admit_node()?;
         let stage = files::Stage::new(self.owned.path().parent())?;
         let path = stage.private_root().join("entrypoint");
@@ -103,7 +101,7 @@ impl Graph<'_> {
             }));
             drop(input);
             return Ok((
-                "input.mp4",
+                self.root_name(&received.effective, "input.mp4")?,
                 Entrypoint::Streamed(Box::new(PendingEntrypoint {
                     _stage: stage,
                     path,
@@ -133,9 +131,9 @@ impl Graph<'_> {
             return Err(CHANGED);
         }
         if format == InputFormat::Hls {
-            self.playlist_loaded(url, true, Some((body, received.effective)))?;
+            let name = self.playlist_loaded(url, true, Some((body, received.effective)))?;
             Ok((
-                "input.m3u8",
+                name,
                 Entrypoint::Projection(std::mem::take(&mut self.root_projection)),
             ))
         } else {
@@ -147,7 +145,7 @@ impl Graph<'_> {
         url: &str,
         received: &source::Fetched,
         body: &[u8],
-    ) -> Result<(&'static str, Entrypoint), ConversionError> {
+    ) -> Result<(String, Entrypoint), ConversionError> {
         self.playlist_count = 1;
         self.text_charge(body.len() + url.len() + received.effective.len())?;
         self.charge(body.len().saturating_mul(8) + 1024)?;
@@ -157,8 +155,8 @@ impl Graph<'_> {
             .unwrap_or(100_000)
             .saturating_sub(1)
             .min(99_999);
-        let mut mapper =
-            crate::conversion::layout::UrlPathMapper::new(&received.effective, self.layout_mode)?;
+        let name = self.root_name(&received.effective, "input.mpd")?;
+        let mut mapper = self.mapper.take().ok_or(INVALID)?;
         let plan = dash::plan(
             body,
             &received.effective,
@@ -183,6 +181,6 @@ impl Graph<'_> {
             self.owned.create_parents(Path::new(&resource.path))?;
             self.resources.push(resource);
         }
-        Ok(("input.mpd", Entrypoint::Projection(plan.projection)))
+        Ok((name, Entrypoint::Projection(plan.projection)))
     }
 }

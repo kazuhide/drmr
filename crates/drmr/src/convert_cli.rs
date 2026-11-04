@@ -307,7 +307,7 @@ fn error_hint(code: &str) -> Option<&'static str> {
             Some("Choose separate download and output paths; neither may contain the other.")
         }
         "download-directory-exists" => Some(
-            "Choose a new --download-dir, or convert the retained input.m3u8, input.mpd, or input.mp4 as local input.",
+            "Choose a new --download-dir, or convert the retained local entrypoint as local input.",
         ),
         "download-destination-unsafe" => Some(
             "Choose new download and output paths whose immediate parent directories already exist.",
