@@ -165,6 +165,12 @@ schemes. Invalid settings are refused before a URL download starts or output
 files are created. Saving a plan still requires only the keys needed to read its
 input; supply output keys when executing the saved plan.
 
+Verification keeps optional expectations for existing outputs. For fMP4 HLS
+without DRM declarations, the expected key address may be omitted. For
+SAMPLE-AES TS using the `identity` key format (no DRM provider declarations),
+an explicit playlist IV can be used without repeating it in the key file.
+New SAMPLE-AES outputs and FairPlay TS verification require the expected IV.
+
 The complete example below
 uses public dummy values, including a complete Widevine PSSH with the matching
 KID. Replace all of them with the values issued for your content. The two output

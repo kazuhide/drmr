@@ -64,6 +64,7 @@ impl OperatorKeys {
         target: TargetProtection,
     ) -> Result<(), ConversionError> {
         self.validate_verification_settings(format, target)?;
+        validate_output_iv(target, self.hls_output.as_ref())?;
         if let Some(format) = format {
             super::signaling::validate_sample_hls_uri(
                 format,
@@ -81,13 +82,18 @@ impl OperatorKeys {
         format: Option<OutputFormat>,
         target: TargetProtection,
     ) -> Result<(), ConversionError> {
-        if let Some(signaling) = &self.signaling
-            && let Some(format) = format
-        {
-            signaling.validate_profile(format, target)?;
+        if let Some(signaling) = &self.signaling {
+            match format {
+                Some(format) => signaling.validate_profile(format, target)?,
+                None => signaling.validate_target(target)?,
+            }
         }
         validate_output_key_role(target, self.output.as_ref(), self.hls_output.as_ref())?;
-        validate_output_iv(target, self.hls_output.as_ref())?;
+        // Identity SAMPLE-AES can use the existing playlist's explicit IV.
+        // FairPlay verification binds the separately supplied expected IV.
+        if target != TargetProtection::HlsSampleAes || self.signaling.is_some() {
+            validate_output_iv(target, self.hls_output.as_ref())?;
+        }
         if let Some(signaling) = &self.signaling {
             if let Some(key) = &self.output {
                 signaling.validate_output_key_for_target(key, Some(target))?;
@@ -755,6 +761,36 @@ mod canonical_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inferred_format_rejects_impossible_drm_targets_without_forcing_a_container() {
+        let keys = OperatorKeys {
+            output: Some(
+                OutputKey::from_hex(
+                    "00000000000000000000000000000001",
+                    "00112233445566778899aabbccddeeff",
+                )
+                .unwrap(),
+            ),
+            signaling: Some(super::super::OutputSignaling::multi_drm(None, None, true).unwrap()),
+            sample_hls_uri: Some(Zeroizing::new("skd://fixture".into())),
+            ..OperatorKeys::default()
+        };
+        assert_eq!(
+            keys.validate_output_settings(None, TargetProtection::Cbcs),
+            Ok(())
+        );
+        for format in [None, Some(OutputFormat::Hls)] {
+            assert_eq!(
+                keys.validate_output_settings(format, TargetProtection::Cenc),
+                Err(ConversionError("output-signaling-profile-not-supported"))
+            );
+        }
+        assert_eq!(
+            keys.validate_output_settings(Some(OutputFormat::Dash), TargetProtection::Cbcs),
+            Err(ConversionError("output-signaling-profile-not-supported"))
+        );
+    }
 
     #[test]
     fn source_loader_validates_both_schemas_without_selecting_an_output_domain() {

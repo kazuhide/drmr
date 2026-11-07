@@ -412,6 +412,48 @@ fn existing_identity_hls_can_omit_a_publishing_uri_but_still_requires_valid_key_
     );
 }
 
+#[test]
+fn existing_identity_sample_aes_uses_playlist_iv_while_publication_and_fairplay_require_one() {
+    use crate::conversion::{Aes128Key, HlsOutputKey, SegmentIv};
+    let mut output = intent("hls");
+    output.format = OutputFormat::HlsTs;
+    output.target = TargetProtection::HlsSampleAes;
+    let mut configured = OperatorKeys::default();
+    configured.hls_output = Some(
+        HlsOutputKey::new(
+            "https://keys.example.invalid/identity.key",
+            Aes128Key::from_hex("00112233445566778899aabbccddeeff").unwrap(),
+        )
+        .unwrap(),
+    );
+    let mut keys = BundleOperatorKeys::default();
+    keys.outputs.insert(output.id.clone(), configured);
+    let mut outputs = [output];
+    assert_eq!(validate_verification_keys(&outputs, &keys), Ok(()));
+    assert_eq!(
+        validate_output_keys(&outputs, &keys),
+        Err(ConversionError("hls-sample-output-iv-required"))
+    );
+    outputs[0].drms = vec![DrmSystem::FairPlay];
+    let configured = keys.outputs.get_mut("hls").unwrap();
+    configured.signaling = Some(OutputSignaling::multi_drm(None, None, true).unwrap());
+    assert_eq!(
+        validate_verification_keys(&outputs, &keys),
+        Err(ConversionError("hls-sample-output-iv-required"))
+    );
+    let configured = keys.outputs.get_mut("hls").unwrap();
+    configured.hls_output = Some(
+        HlsOutputKey::new_with_iv(
+            "skd://fixture",
+            Aes128Key::from_hex("00112233445566778899aabbccddeeff").unwrap(),
+            SegmentIv::from_hex("0123456789abcdeffedcba9876543210").unwrap(),
+        )
+        .unwrap(),
+    );
+    assert_eq!(validate_verification_keys(&outputs, &keys), Ok(()));
+    assert_eq!(validate_output_keys(&outputs, &keys), Ok(()));
+}
+
 fn assert_typed_output_preflight_rejected(
     output: BundleOutputIntent,
     configured: OperatorKeys,

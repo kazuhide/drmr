@@ -267,6 +267,21 @@ fn quick_inferred_format_without_output_key_is_refused_before_url_acquisition() 
 }
 
 #[test]
+fn quick_fairplay_ctr_is_refused_before_url_acquisition_even_without_a_format() {
+    let mut key = named_key();
+    key["hls_key_uri"] = PRIVATE_URI.into();
+    key["signaling"] = json!({"system":"multi-drm","fairplay":true});
+    for format in [None, Some("hls-fmp4")] {
+        assert_quick_refused_before_acquisition(
+            format,
+            "cenc",
+            Some(&key),
+            "output-signaling-profile-not-supported",
+        );
+    }
+}
+
+#[test]
 fn quick_aes128_output_with_unused_iv_is_refused_before_url_acquisition() {
     assert_quick_refused_before_acquisition(
         Some("hls-ts"),

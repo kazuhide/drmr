@@ -155,6 +155,26 @@ impl OutputSignaling {
             Self::profile(format, target)
         }
     }
+    /// Refuse DRM/target combinations that no container can represent before
+    /// source inspection determines an inferred output format.
+    pub(in crate::conversion) fn validate_target(
+        &self,
+        target: TargetProtection,
+    ) -> Result<(), ConversionError> {
+        if [
+            OutputFormat::Mp4,
+            OutputFormat::Dash,
+            OutputFormat::Hls,
+            OutputFormat::HlsTs,
+        ]
+        .into_iter()
+        .any(|format| self.validate_profile(format, target).is_ok())
+        {
+            Ok(())
+        } else {
+            Err(UNSUPPORTED)
+        }
+    }
     pub(super) fn profile(
         format: OutputFormat,
         target: TargetProtection,
