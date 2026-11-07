@@ -24,6 +24,8 @@ pub(super) struct Backend {
     pub measurement: Option<Arc<super::measurement::Measurements>>,
     pub activity: Option<Arc<dyn crate::events::Sink>>,
     pub preparation: Option<Arc<super::media_progress::PreparationContext>>,
+    /// Track state already covered by the enclosing bundle's retained reservation.
+    pub reserved_track_contexts: usize,
     pub vp9_admission: Option<Arc<vp9_reprotect::SourceAdmission>>,
     #[cfg(test)]
     pub scheduling_hardware: Option<crate::resources::Hardware>,
@@ -915,6 +917,7 @@ mod packet_tests {
                 measurement: None,
                 activity: None,
                 preparation: None,
+                reserved_track_contexts: 0,
                 scheduling_hardware: None,
             };
             assert_eq!(

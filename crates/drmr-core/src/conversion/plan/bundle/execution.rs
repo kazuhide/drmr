@@ -160,6 +160,10 @@ impl<'a> Execution<'a> {
         let mut scoped = command.with_processing_clone(command.processing_mode);
         scoped.backend.runner =
             std::sync::Arc::new(command.backend.runner.within_context(bytes, floor));
+        scoped.backend.reserved_track_contexts = scoped
+            .backend
+            .reserved_track_contexts
+            .max(workload.tracks.max(1));
         Ok((
             Prepared {
                 command: scoped,
@@ -280,13 +284,9 @@ fn budget(
     units: usize,
     contexts: &Contexts,
 ) -> Result<Budget, ConversionError> {
-    let mut budget = Budget::choose(hardware, workload, maximum)
+    let mut budget = Budget::within_allocation(hardware, workload, maximum, capacity)
         .map_err(|_| ConversionError("resource-budget"))?;
-    budget.cpu_tokens = budget.cpu_tokens.min(capacity.0);
-    budget.memory_tokens_bytes = budget
-        .memory_tokens_bytes
-        .min(capacity.1)
-        .saturating_sub(contexts.shared);
+    budget.memory_tokens_bytes = budget.memory_tokens_bytes.saturating_sub(contexts.shared);
     budget.estimated_child_bytes = contexts
         .worker
         .checked_add(contexts.leaf)

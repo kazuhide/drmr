@@ -170,6 +170,7 @@ impl Converter {
                 measurement: None,
                 activity: None,
                 preparation: None,
+                reserved_track_contexts: 0,
                 #[cfg(test)]
                 scheduling_hardware: None,
             },
