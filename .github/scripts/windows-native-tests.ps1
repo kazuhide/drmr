@@ -1,4 +1,12 @@
+param(
+    [Parameter(Mandatory)][ValidateRange(0, 1)][int]$Shard,
+    [Parameter(Mandatory)][ValidateSet('minimum', 'stable')][string]$RustProfile,
+    [Parameter(Mandatory)][ValidatePattern('^[0-9a-f]{40}$')][string]$SourceSha,
+    [Parameter(Mandatory)][long]$RunId,
+    [Parameter(Mandatory)][int]$RunAttempt
+)
 $ErrorActionPreference = 'Stop'
+if ($RunId -lt 1 -or $RunAttempt -lt 1) { throw 'Invalid native workflow run identity' }
 
 # Build with the hosted runner's toolchain, then run the same native binaries as
 # an ordinary user. Elevated tokens can assign Administrators as a new file's
@@ -48,6 +56,9 @@ $env:DRMR_WINDOWS_MEDIA_TOOLS | Set-Content (Join-Path $directory 'media-tools.t
 $cargo | Set-Content (Join-Path $directory 'cargo.txt')
 $rustc | Set-Content (Join-Path $directory 'rustc.txt')
 $executables | ConvertTo-Json | Set-Content (Join-Path $directory 'executables.json')
+@{ source_sha = $SourceSha; rust_profile = $RustProfile; shard_index = $Shard;
+    run_id = $RunId; run_attempt = $RunAttempt } |
+    ConvertTo-Json | Set-Content (Join-Path $directory 'shard-identity.json')
 $script = Join-Path $directory 'run.ps1'
 @'
 $ErrorActionPreference = 'Stop'
@@ -90,8 +101,17 @@ $executables = Get-Content (Join-Path $PSScriptRoot 'executables.json') | Conver
 # Inventory the actual compiled tests, execute critical regressions first and
 # exclude them from the remaining groups. The planner validates every filter.
 $plan = Join-Path $PSScriptRoot 'test-plan.json'
-& python .github/scripts/native-test-plan.py --windows --executables (Join-Path $PSScriptRoot 'executables.json') --output $plan
+$receipt = Join-Path $PSScriptRoot 'shard-receipt.json'
+$identity = Get-Content (Join-Path $PSScriptRoot 'shard-identity.json') -Raw | ConvertFrom-Json
+$planArguments = @('--windows', '--executables', (Join-Path $PSScriptRoot 'executables.json'),
+    '--output', $plan, '--receipt', $receipt, '--shard-index', [string]$identity.shard_index,
+    '--source-sha', $identity.source_sha, '--rust-profile', $identity.rust_profile,
+    '--run-id', [string]$identity.run_id, '--run-attempt', [string]$identity.run_attempt)
+& python .github/scripts/native-test-plan.py @planArguments
 if ($LASTEXITCODE -ne 0) { throw 'The complete native test plan could not be established' }
+& python .github/scripts/native-test-plan.py @planArguments --validate
+if ($LASTEXITCODE -ne 0) { throw 'The native shard identity or coverage changed before execution' }
+$expectedReports = @((Get-Content -LiteralPath $receipt -Raw | ConvertFrom-Json).expected_reports)
 $planned = @(Get-Content -LiteralPath $plan -Raw | ConvertFrom-Json)
 . (Join-Path (Get-Location).Path '.github/scripts/windows-native-parallel.ps1')
 $budget = Get-DrmrNativeTestBudget
@@ -111,8 +131,11 @@ if ($failed -and $results.Count -eq $priorityCount) { throw 'An early native reg
 if ($results.Count -ne $groups.Count) { throw 'A native test group result is missing' }
 foreach ($name in @('bbb-media-report.json', 'conversion-report.json')) {
     $reports = @($results | ForEach-Object { Join-Path $_.directory $name } | Where-Object { Test-Path -LiteralPath $_ })
-    if ($reports.Count -ne 1) { throw 'A native media report is missing or ambiguous' }
-    [IO.File]::WriteAllText((Join-Path $PSScriptRoot $name), [IO.File]::ReadAllText($reports[0]), [Text.UTF8Encoding]::new($false))
+    $expectedCount = [int]($expectedReports -contains $name)
+    if ($reports.Count -ne $expectedCount) { throw 'A native media report is missing, unexpected or ambiguous' }
+    if ($expectedCount -eq 1) {
+        [IO.File]::WriteAllText((Join-Path $PSScriptRoot $name), [IO.File]::ReadAllText($reports[0]), [Text.UTF8Encoding]::new($false))
+    }
 }
 if ($failed) { exit 1 }
 exit 0

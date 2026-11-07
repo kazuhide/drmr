@@ -21,6 +21,9 @@ Completed changes are recorded by category before the next release.
 
 ### Changed
 
+- Split Windows ordinary-user native tests across two independent runners per
+  Rust version. Keep per-runner CPU and memory limits, and require complete,
+  once-only coverage across each pair before merging.
 - Check complete clear MPEG-TS HLS renditions while other resources download
   for qualified native multiple-output conversions, then reuse those checks for
   input qualification. Keep complete-source fingerprints, final output checks,

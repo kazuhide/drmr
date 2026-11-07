@@ -240,8 +240,12 @@ and a metadata-only analysis of the retained clear DASH source. The metadata
 stage uses `analyze --metadata-only --json` without keys and does not replace
 any of the previous 17 stages.
 Windows checks retain the complete ordinary-user regression suite on both
-the minimum and stable Rust versions. Independent test binaries run within
-CPU and memory limits. CLI builds and extracted-archive qualification run
+the minimum and stable Rust versions. Each version uses two independent runners,
+with the same CPU and memory limits on each runner. Ownership and process-tree
+guards run first on both; the remaining tests run exactly once across the pair.
+The required check compares their complete test inventories, selected plans and
+media reports for the same source, Rust version and workflow attempt. Missing or
+inconsistent evidence fails the check. CLI builds and extracted-archive qualification run
 concurrently with those tests; merging and publication require every check
 in the workflow to succeed for the same source.
 

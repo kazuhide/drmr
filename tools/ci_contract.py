@@ -31,7 +31,8 @@ NATIVE_JOBS = {
                     for stage in ("Rust", "Rust core", "CLI release")
                     for os in ("ubuntu-24.04", "macos-15") for rust in ("minimum", "stable"))
               + ("Console / Chromium / common CLI workflow",),
-    "windows.yml": tuple("Windows / " + rust + " / private files and process trees" for rust in ("minimum", "stable"))
+    "windows.yml": tuple("Windows / " + rust + " / private files and process trees / shard " + str(shard)
+                         for rust in ("minimum", "stable") for shard in range(2))
                    + tuple("Windows CLI release / " + rust for rust in ("minimum", "stable")),
     "container.yml": ("Docker / native Linux AMD64 / real media and lifecycle",),
     "advisories.yml": ("CLI and Desktop target advisory graphs",),
