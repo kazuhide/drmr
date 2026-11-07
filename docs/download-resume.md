@@ -51,8 +51,8 @@ This does not extend the supported [URL input profile](conversion-support.md#url
   file is downloaded again from the beginning; this is not byte-range resume.
 
 Changed manifests, effective URLs, media bytes or recorded strong validators are
-refused rather than mixed into an older source. Choose a new download directory to acquire the
-changed source. A changed signed URL also needs a new destination because the
+refused rather than mixed into an older source. Choose a new download directory
+to acquire the changed source. A changed signed URL also needs a new destination because the
 cache is bound to the complete original URL, including its query string.
 
 Every request still uses the current allowed origins, authentication, redirect
@@ -75,6 +75,12 @@ complete retained source has passed its publication checks, drmr removes the
 recognized cache. Modified, replaced or unknown files prevent automatic cleanup
 and are preserved. Only one process may use a given cache at a time. Missing or
 unsafe cache metadata is refused, not repaired.
+
+Abrupt process termination can leave an incomplete download directory or private
+working directories. drmr does not adopt these leftovers. After confirming no
+acquisition is active, move the incomplete download directory aside before
+retrying the same destination; keep its sibling cache. Inspect abandoned working
+directories separately rather than deleting unknown files automatically.
 
 The cache holds original media, which may be clear or encrypted, and original
 manifests, which may include signed URLs. Keep it private just like the retained
