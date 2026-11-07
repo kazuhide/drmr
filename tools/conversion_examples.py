@@ -40,6 +40,7 @@ IV = "000102030405060708090a0b0c0d0e0f"
 KEY_MODES = ("cenc-cbcs", "hls-aes128", "hls-sample-aes")
 EXAMPLE_ROOT = "https://github.com/kazuhide/drmr/blob/main/docs/examples/keys/"
 OUTPUT_EXAMPLE_ROOT = "https://github.com/kazuhide/drmr/blob/main/docs/examples/outputs/"
+SCHEMA_ROOT = "https://kazuhide.github.io/drmr/schemas/"
 
 
 def routes():
@@ -134,6 +135,45 @@ def output_artifacts():
             for _, output, target in routes()}
 
 
+def template_pair(name):
+    """Reuse the recipe settings for a small set of editable multi-output files."""
+    if name not in ("clear", "encrypted", "mixed4"):
+        raise ValueError("conversion-example-template")
+    choices = [("hls", "clear"), ("dash", "clear")] if name == "clear" else [
+        ("hls", "cbcs"), ("dash", "cbcs")]
+    if name == "mixed4":
+        choices = [("hls", "clear"), ("hls", "cbcs"), ("hls-ts", "clear"),
+                   ("hls-ts", "hls-sample-aes"), ("dash", "cbcs")]
+    outputs = {"$schema": SCHEMA_ROOT + "output-config-v4.schema.json",
+               "schema_version": 4, "output_dir": "result", "outputs": []}
+    keys = {"$schema": SCHEMA_ROOT + "named-keys-v2.schema.json", "schema_version": 2, "outputs": {}}
+    # One complete public dummy Widevine PSSH; its payload names the same dummy KID.
+    pssh = "000000327073736800000000edef8ba979d64acea3c827dcd51d21ed000000121210" + OUTPUT_KID
+    for format, target in choices:
+        item = output_spec(format, target)["outputs"][0]
+        item["id"] = format + ("-clear" if target == "clear" else "-encrypted")
+        outputs["outputs"].append(item)
+        if target == "clear":
+            continue
+        key = key_config(format, target)["outputs"][format]
+        if format == "dash":
+            item["drms"] = ["widevine", "playready"]
+            key["signaling"] = {"system": "multi-drm", "widevine_pssh": pssh,
+                                "playready_license_url": "https://license.example.invalid/playready"}
+        else:
+            item["drms"] = ["fairplay"]
+            key["hls_key_uri"] = "skd://example"
+            key["signaling"] = {"system": "multi-drm", "fairplay": True}
+        keys["outputs"][item["id"]] = key
+    return outputs, keys
+
+
+def template_artifacts():
+    return {f"{name}-{kind}.json": json_text(value)
+            for name in ("clear", "encrypted", "mixed4")
+            for kind, value in zip(("outputs", "keys"), template_pair(name))}
+
+
 
 def entrypoint(output):
     return f"result/{output}/" + ({"mp4": "media.mp4", "dash": "manifest.mpd"}
@@ -177,7 +217,8 @@ def main():
     parser.add_argument("--check", action="store_true", help="Refuse stale complete configuration examples")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1] / "docs/examples"
-    for name, expected in (("keys", key_artifacts()), ("outputs", output_artifacts())):
+    for name, expected in (("keys", key_artifacts()), ("outputs", output_artifacts()),
+                           ("templates", template_artifacts())):
         directory = root / name
         if args.check:
             actual = {path.name: path.read_text(encoding="utf-8") for path in directory.glob("*.json")}

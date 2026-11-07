@@ -5,7 +5,8 @@ eighteen-chapter web guide. Keep commands, key roles, format restrictions and li
 aligned across languages. Record the content update date in both frontmatter
 blocks.
 
-Generate the two committed static pages with Python 3.9 or later:
+Generate the two committed static pages and eight configuration downloads with
+Python 3.9 or later:
 
 ```sh
 python3 tools/build_guide_site.py
@@ -24,6 +25,18 @@ shared across locales; change them together with the static and browser gates.
 source-to-output identity, local references and semantic HTML. Browser checks
 separately cover responsive reading, native keyboard scrolling, locale links,
 print styles and accessibility. Passing generation alone is not rendered QA.
+
+The versioned editor schemas and six public dummy-key templates are copied from
+`schemas/` and `docs/examples/templates/` into the explicit Pages payload. Page
+assets retain their 640 KiB limit; the eight downloads have a separate 24 KiB
+limit and are not fetched when opening the guide. Schema corpus checks require
+Python 3.10 or later and `tools/requirements-schema.txt`; the tested constraints
+need Python 3.11 or later:
+
+```sh
+python3 -m pip install -r tools/requirements-schema.txt -c tools/constraints-schema.txt
+python3 -m unittest discover -s tools/tests -p test_configuration_schemas.py -v
+```
 
 Keep examples illustrative. Do not add real keys, private paths, internal
 evidence or claims of playback-device/DRM-license qualification. Link to public

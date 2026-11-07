@@ -16,6 +16,9 @@ const files = new Map([
   ['assets/fonts/ibm-plex-sans-latin-400-normal.woff2', 'font/woff2'],
   ['assets/fonts/ibm-plex-sans-latin-600-normal.woff2', 'font/woff2'],
   ['assets/fonts/ibm-plex-mono-latin-400-normal.woff2', 'font/woff2'],
+  ...['output-config-v4.schema.json', 'named-keys-v2.schema.json'].map(name => [`schemas/${name}`, 'application/schema+json; charset=utf-8']),
+  ...['clear', 'encrypted', 'mixed4'].flatMap(name => ['outputs', 'keys'].map(kind =>
+    [`examples/templates/${name}-${kind}.json`, 'application/json; charset=utf-8'])),
 ]);
 
 export function resource(raw) {

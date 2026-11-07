@@ -9,9 +9,13 @@ export const assets = [
   'assets/fonts/ibm-plex-sans-latin-400-normal.woff2',
   'assets/fonts/ibm-plex-sans-latin-600-normal.woff2',
   'assets/fonts/ibm-plex-mono-latin-400-normal.woff2',
+  'schemas/output-config-v4.schema.json', 'schemas/named-keys-v2.schema.json',
+  ...['clear', 'encrypted', 'mixed4'].flatMap(name => ['outputs', 'keys'].map(kind => `examples/templates/${name}-${kind}.json`)),
 ];
 export const builderInputs = ['tools/build_guide_site.py', 'tools/conversion_examples.py', 'tools/templates/guide.html',
-  'site-content/guide/en.md', 'site-content/guide/ja.md'];
+  'site-content/guide/en.md', 'site-content/guide/ja.md',
+  'schemas/output-config-v4.schema.json', 'schemas/named-keys-v2.schema.json',
+  ...['clear', 'encrypted', 'mixed4'].flatMap(name => ['outputs', 'keys'].map(kind => `docs/examples/templates/${name}-${kind}.json`))];
 export const publicOrigin = 'https://kazuhide.github.io';
 export const publicBase = publicOrigin + '/drmr/';
 export const localOrigin = 'http://127.0.0.1:4173';

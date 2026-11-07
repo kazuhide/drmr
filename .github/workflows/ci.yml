@@ -88,6 +88,10 @@ jobs:
       - name: Run browser unit tests
         run: node --test crates/drmr-server/tests/js/*.test.cjs
 
+      - name: Install the tested editor-schema validator
+        run: |
+          python3 -m pip install --only-binary=:all: -r tools/requirements-schema.txt -c tools/constraints-schema.txt
+
       - name: Test measurement helpers
         run: python3 -W error::ResourceWarning -m unittest discover -s tools/tests -v
 

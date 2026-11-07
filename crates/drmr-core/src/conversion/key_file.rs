@@ -183,6 +183,12 @@ struct RawFile {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawBundle {
+    #[serde(
+        default,
+        rename = "$schema",
+        deserialize_with = "configuration::editor_schema"
+    )]
+    _editor_schema: (),
     schema_version: u32,
     #[serde(default)]
     input: RawInput,

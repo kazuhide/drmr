@@ -1,6 +1,6 @@
 ---
 title: User guide
-updated: 2026-11-04
+updated: 2026-11-08
 version: 1.2.0
 ---
 
@@ -273,7 +273,7 @@ A KID (key identifier) selects a key; it is not the secret key. Keys and KIDs us
 
 Use an owner-only work directory. On macOS/Linux, protect a new file before entering secrets; for an existing private `keys.json`, use `chmod 600 keys.json`. Chapter 12 explains Windows ACLs. The CLI refuses unsafe files, symbolic links, multiple hard links, duplicate or unknown fields, unsupported schemas and oversized settings. Keep keys outside source/result directories and version control.
 
-Configuration errors can show known field positions and required formats without private values. See [correcting settings](https://github.com/kazuhide/drmr/blob/main/docs/configuration.md#correcting-a-configuration-error).
+Use [editor schemas and templates](https://github.com/kazuhide/drmr/blob/main/docs/configuration.md#editor-validation-and-templates) for field suggestions and complete Clear, Encrypted or Mixed HLS + DASH files. The optional `$schema` annotation needs the 1.3 development build; remove it for 1.2.0. Runtime configuration errors still identify fields without private values when possible.
 
 ## Complete named-output key examples
 

@@ -136,9 +136,11 @@ class Site(unittest.TestCase):
 
     def test_actual_site_is_small_self_contained_and_mount_independent(self):
         result = self.check()
-        self.assertEqual(result["files"], 12)
-        self.assertLessEqual(result["bytes"], 640 * 1024)
+        self.assertEqual(result["files"], 20)
+        self.assertLessEqual(result["page_asset_bytes"], 640 * 1024)
         self.assertEqual(result["byte_budget"], 640 * 1024)
+        self.assertLessEqual(result["configuration_bytes"], 24 * 1024)
+        self.assertEqual(result["configuration_byte_budget"], 24 * 1024)
         self.assertEqual(set(result["builder_inputs"]), set(CHECK.BUILDER_INPUTS))
         self.assertEqual({v["chapters"] for v in result["guides"].values()}, {18})
         self.assertEqual(result["mounts"], ["/", "/drmr/"])
@@ -146,6 +148,23 @@ class Site(unittest.TestCase):
         self.assertEqual(result["languages"], ["en", "ja"])
         self.assertEqual(set(result["sha256"]), CHECK.FILES)
         self.assertEqual(result["pending_docs"], ["docs/docker.md"])
+
+    def test_stale_configuration_downloads_are_refused(self):
+        for relative in CHECK.CONFIGURATION_FILES:
+            path = self.site / relative
+            original = path.read_bytes()
+            with self.subTest(relative=relative):
+                path.write_bytes(original + b" ")
+                with self.assertRaisesRegex(CHECK.Failure, "site-configuration-generated"):
+                    self.check()
+                path.write_bytes(original)
+
+    def test_configuration_download_budget_cannot_expand_the_page_budget(self):
+        self.assertEqual(CHECK.MAX_BYTES, 640 * 1024)
+        path = self.site / "schemas/output-config-v4.schema.json"
+        path.write_bytes(path.read_bytes() + b" " * CHECK.MAX_CONFIGURATION_BYTES)
+        with self.assertRaisesRegex(CHECK.Failure, "site-configuration-byte-budget"):
+            self.check()
 
 
     def test_stale_generated_guide_is_refused_without_rewriting_inputs_or_output(self):

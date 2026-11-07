@@ -19,6 +19,55 @@ schema 4 and key-file schema 2. Quick single-output commands use the same key
 format and select `outputs.default`; configured outputs select their explicit IDs.
 See the [1.2 migration](releases.md#version-12-migration) for replaced names.
 
+## Editor validation and templates
+
+The public [output-configuration schema](../schemas/output-config-v4.schema.json)
+and [named-key schema](../schemas/named-keys-v2.schema.json) use JSON Schema
+Draft 7. An editor that supports JSON Schema can suggest fields and check required
+values, types, enums, unknown fields, counts and supported output/DRM combinations
+while you edit. These schemas add no dependency to the drmr CLI.
+
+Support for the optional `$schema` annotation is in development for 1.3 and is
+not in the 1.2.0 archives. When using those archives, remove this member from
+the downloaded templates and associate the schemas through your editor settings.
+
+Choose a complete pair below and save the files as `outputs.json` and `keys.json`.
+The files contain public dummy keys and assume clear input. For encrypted input,
+add the appropriate [source-key mapping](#keysjson) or start from an existing
+[input-key example](examples/README.md). Apply the private-file permissions
+described below before using a real key file.
+
+| Template | Output list | Key file | Selected outputs |
+| --- | --- | --- | --- |
+| Clear | [Download outputs.json](https://kazuhide.github.io/drmr/examples/templates/clear-outputs.json) | [Download keys.json](https://kazuhide.github.io/drmr/examples/templates/clear-keys.json) | Clear fMP4 HLS and clear DASH |
+| Encrypted | [Download outputs.json](https://kazuhide.github.io/drmr/examples/templates/encrypted-outputs.json) | [Download keys.json](https://kazuhide.github.io/drmr/examples/templates/encrypted-keys.json) | CBCS fMP4 HLS with FairPlay; CBCS DASH with Widevine and PlayReady |
+| Mixed HLS + DASH | [Download outputs.json](https://kazuhide.github.io/drmr/examples/templates/mixed4-outputs.json) | [Download keys.json](https://kazuhide.github.io/drmr/examples/templates/mixed4-keys.json) | Four HLS outputs: clear/FairPlay fMP4 and clear/FairPlay MPEG-TS; plus encrypted DASH |
+
+For clear input and the Clear template, omit `--keys-file`; its empty key file is
+an optional starting point for adding encrypted input later. The Encrypted and
+Mixed templates need their matching `--keys-file keys.json`. Replace every dummy
+output key, KID, URI and PSSH with values issued for your content. The templates
+select native checks; optional external manifest tools are not required by these
+settings. Processing remains `auto`, subject to the supported media routes.
+
+Each template includes an optional top-level `$schema` reference to its public
+schema. To associate a hand-written file, use the same reference, or configure a
+local schema mapping in your editor. drmr accepts a nonempty `$schema` string of
+up to 4096 printable ASCII characters without spaces. It discards this annotation;
+it never retrieves the referenced resource, retains it in a saved plan or repeats
+it in diagnostics. Other unknown fields are still refused. Your editor controls
+its own schema downloads and extensions; follow your local policy when editing
+private keys.
+
+Schema validation does not establish that the two files match. drmr still checks
+unique output IDs and source-key identifiers, key roles, complete PSSH contents,
+DRM/KID/scheme correspondence, full URL syntax, the 64 KiB file limit and UTF-8
+byte limits. File ownership, permissions, links and platform destination paths
+also require runtime checks. Neither schema validation nor a valid configuration
+qualifies the source media, proves license-service/device playback or installs
+the requested external validators. Run the normal `plan` or `convert` workflow
+for the corresponding runtime checks.
+
 ## Correcting a configuration error
 
 `analyze`, `plan`, `convert` and `verify` validate a supplied key file before
