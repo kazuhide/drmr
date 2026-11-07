@@ -28,6 +28,51 @@ fn decoded_plan() -> BundlePlan {
     plan
 }
 
+#[test]
+fn a_configured_bundle_allocation_survives_a_lower_free_memory_observation() {
+    let capacity = 1024 * 1024 * 1024;
+    let workload = Workload {
+        max_pixels: Some(1280 * 720),
+        input_buffer_bytes: Some(64 * 1024),
+        tracks: 1,
+    };
+    let plan = decoded_plan();
+    let contexts =
+        retained::<()>(&plan, workload, crate::conversion::ValidationDepth::Decoded).unwrap();
+    assert!(contexts.shared + contexts.worker + contexts.leaf < capacity);
+    let leaf = Claim::for_workload(
+        Workload {
+            input_buffer_bytes: Some(32 * 1024 * 1024),
+            ..workload
+        },
+        crate::toolrun::MAX_CAPTURE_BYTES,
+        crate::toolrun::DEFAULT_STDERR_BYTES,
+    );
+    assert_eq!(contexts.leaf, leaf.memory_bytes);
+    for available in [384 * 1024 * 1024, 512 * 1024 * 1024] {
+        let limiter = Arc::new(Limiter::new(1, capacity));
+        let command = command(&limiter, Arc::new(NoSink));
+        command.backend.runner.register_workload(workload);
+        let execution = Execution {
+            converter: &command,
+            hardware: Some(Hardware::from_observations(1, Some(available), None)),
+        };
+        let (prepared, retained) = execution
+            .prepare::<()>(&plan, None)
+            .expect("the minimum worker fits the configured allocation");
+        assert_eq!(prepared.budget.workers, 1);
+        let permit = prepared
+            .command
+            .backend
+            .runner
+            .native_permit(leaf, &Stop::new(), Duration::from_secs(1))
+            .unwrap();
+        drop(permit);
+        drop(retained);
+        assert_eq!(limiter.capacity(), (1, capacity));
+    }
+}
+
 fn run_parent(
     command: &Converter,
     plan: &BundlePlan,

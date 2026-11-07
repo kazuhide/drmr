@@ -9,8 +9,9 @@ fn resource_budget(
     workload: Workload,
     resources: usize,
     maximum: Option<usize>,
+    allocation: (usize, u64),
 ) -> Result<Budget, ConversionError> {
-    let mut budget = Budget::choose(hardware, workload, maximum)
+    let mut budget = Budget::within_allocation(hardware, workload, maximum, allocation)
         .map_err(|_| ConversionError("resource-budget"))?;
     budget.workers = budget.workers.min(resources.max(1));
     Ok(budget)
@@ -42,12 +43,15 @@ fn scheduling_budget<T>(
     maximum: Option<usize>,
     capacity: (usize, u64),
 ) -> Result<Budget, ConversionError> {
-    let mut budget = resource_budget(hardware, workload, units, maximum)?;
-    budget.cpu_tokens = budget.cpu_tokens.min(capacity.0);
-    budget.memory_tokens_bytes = budget
-        .memory_tokens_bytes
-        .min(capacity.1)
-        .saturating_sub(retained_bytes::<T>(units, metadata)?);
+    let mut budget = resource_budget(hardware, workload, units, maximum, capacity)?;
+    let track_state = u64::try_from(workload.tracks.max(1))
+        .ok()
+        .and_then(|tracks| tracks.checked_mul(crate::resources::TRACK_RESIDENCY_BYTES))
+        .ok_or(ConversionError("resource-budget"))?;
+    let retained = retained_bytes::<T>(units, metadata)?
+        .checked_add(track_state)
+        .ok_or(ConversionError("resource-budget"))?;
+    budget.memory_tokens_bytes = budget.memory_tokens_bytes.saturating_sub(retained);
     let memory_workers = usize::try_from(budget.memory_tokens_bytes / budget.estimated_child_bytes)
         .unwrap_or(usize::MAX);
     budget.workers = budget.workers.min(budget.cpu_tokens).min(memory_workers);
@@ -238,8 +242,9 @@ mod tests {
             tracks: 1,
         };
         for maximum in [Some(1), Some(2), Some(4), None] {
-            let short = resource_budget(hardware, workload, 5, maximum).unwrap();
-            let long = resource_budget(hardware, workload, 200, maximum).unwrap();
+            let allocation = crate::resources::capacity(hardware, workload.tracks);
+            let short = resource_budget(hardware, workload, 5, maximum, allocation).unwrap();
+            let long = resource_budget(hardware, workload, 200, maximum, allocation).unwrap();
             assert_eq!(short.memory_tokens_bytes, long.memory_tokens_bytes);
             assert!(long.workers > 0 && long.workers <= maximum.unwrap_or(32));
         }
@@ -254,19 +259,15 @@ mod tests {
             tracks: 1,
         };
         for units in [5, 200, 2000] {
-            let base = resource_budget(hardware, workload, units, Some(4)).unwrap();
-            let budget = scheduling_budget::<PathBuf>(
-                hardware,
-                workload,
-                units,
-                4096,
-                Some(4),
-                (4, u64::MAX),
-            )
-            .unwrap();
+            let allocation = crate::resources::capacity(hardware, workload.tracks);
+            let base = resource_budget(hardware, workload, units, Some(4), allocation).unwrap();
+            let budget =
+                scheduling_budget::<PathBuf>(hardware, workload, units, 4096, Some(4), allocation)
+                    .unwrap();
             assert_eq!(
                 base.memory_tokens_bytes - budget.memory_tokens_bytes,
                 retained_bytes::<PathBuf>(units, 4096).unwrap()
+                    + crate::resources::TRACK_RESIDENCY_BYTES
             );
             assert!(budget.workers > 0 && budget.workers <= 4);
         }
@@ -277,6 +278,87 @@ mod tests {
                 .is_err()
         );
         assert!(scheduling_budget::<u64>(hardware, workload, 200, 0, Some(1), (1, 1)).is_err());
+    }
+
+    #[test]
+    fn a_configured_allocation_still_charges_each_retained_track() {
+        let hardware = Hardware::from_observations(8, Some(2 * 1024 * 1024 * 1024), None);
+        let workload = Workload {
+            max_pixels: Some(1280 * 720),
+            input_buffer_bytes: Some(64 * 1024),
+            tracks: 7,
+        };
+        let allocation = (2, 1024 * 1024 * 1024);
+        let budget = scheduling_budget::<u64>(hardware, workload, 7, 0, None, allocation)
+            .expect("the retained tracks and media child fit the allocation");
+        assert_eq!(
+            allocation.1 - budget.memory_tokens_bytes,
+            retained_bytes::<u64>(7, 0).unwrap() + 7 * crate::resources::TRACK_RESIDENCY_BYTES
+        );
+        let overfull = Workload {
+            tracks: 200,
+            ..workload
+        };
+        assert!(scheduling_budget::<u64>(hardware, overfull, 1, 0, None, allocation).is_err());
+    }
+
+    #[test]
+    fn a_nested_scheduler_keeps_its_configured_allocation_after_free_memory_falls() {
+        use crate::{
+            concurrency::Stop,
+            events::NoSink,
+            resources::{Claim, Limiter},
+            toolrun::{DEFAULT_STDERR_BYTES, DEFAULT_STDOUT_BYTES, Secrets, ToolRunner},
+        };
+        use std::{sync::Arc, time::Duration};
+
+        let capacity = 1024 * 1024 * 1024;
+        let parent_bytes = 256 * 1024 * 1024;
+        let workload = Workload {
+            max_pixels: Some(1280 * 720),
+            input_buffer_bytes: Some(64 * 1024),
+            tracks: 1,
+        };
+        let leaf = Claim::for_workload(workload, DEFAULT_STDOUT_BYTES, DEFAULT_STDERR_BYTES);
+        assert!(parent_bytes + leaf.memory_bytes + retained_bytes::<u64>(1, 0).unwrap() < capacity);
+        let limiter = Arc::new(Limiter::new(1, capacity));
+        let runner = ToolRunner::new(Arc::new(Secrets::new()), Arc::new(NoSink))
+            .with_limiter(limiter.clone());
+        runner.register_workload(workload);
+        let stop = Stop::new();
+        let retained = runner
+            .retain_context(
+                parent_bytes,
+                leaf.memory_bytes,
+                &stop,
+                Duration::from_secs(1),
+            )
+            .unwrap();
+        let command = Converter::new(
+            Arc::new(runner.within_context(parent_bytes, leaf.memory_bytes)),
+            "must-not-start-packager",
+            "must-not-start-decoder",
+        );
+        for available in [384 * 1024 * 1024, 512 * 1024 * 1024] {
+            let results = Scheduler::observed(
+                &command.backend,
+                Some(1),
+                Hardware::from_observations(1, Some(available), None),
+            )
+            .run(1, 1, 0, |_| {
+                let permit = command
+                    .backend
+                    .runner
+                    .native_permit(leaf, &stop, Duration::from_secs(1))
+                    .map_err(|_| ConversionError("configured-allocation-refused"))?;
+                drop(permit);
+                Ok(7_u64)
+            })
+            .expect("a new free-memory observation must not subtract this allocation again");
+            assert_eq!(results, [7]);
+        }
+        drop(retained);
+        assert_eq!(limiter.capacity(), (1, capacity));
     }
 
     #[test]

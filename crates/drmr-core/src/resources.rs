@@ -172,6 +172,43 @@ pub(crate) fn capacity(hardware: Hardware, tracks: usize) -> (usize, u64) {
 }
 
 impl Budget {
+    /// Schedule within an allocation that already reserves host headroom.
+    /// A later free-memory snapshot includes this process's own allocations;
+    /// it must not replace the pool's eligibility limit. CPU observations still
+    /// bound concurrency, and callers charge their additional retained state.
+    pub(crate) fn within_allocation(
+        hardware: Hardware,
+        workload: Workload,
+        maximum_workers: Option<usize>,
+        allocation: (usize, u64),
+    ) -> Result<Self, BudgetError> {
+        if maximum_workers.is_some_and(|maximum| maximum == 0 || maximum > 64) {
+            return Err(BudgetError::InvalidWorkers);
+        }
+        if hardware.available_memory_bytes == Some(0) {
+            return Err(BudgetError::Insufficient);
+        }
+        let cpu_tokens = capacity(hardware, workload.tracks).0.min(allocation.0);
+        let estimated_child_bytes =
+            workload.estimated_child_bytes(DEFAULT_STDOUT_BYTES, DEFAULT_STDERR_BYTES);
+        let memory_workers =
+            usize::try_from(allocation.1 / estimated_child_bytes).unwrap_or(usize::MAX);
+        let workers = cpu_tokens
+            .min(memory_workers)
+            .min(maximum_workers.unwrap_or(32));
+        if workers == 0 {
+            return Err(BudgetError::Insufficient);
+        }
+        Ok(Self {
+            workers,
+            child_threads: 1,
+            cpu_tokens,
+            memory_tokens_bytes: allocation.1,
+            estimated_child_bytes,
+            memory_source: hardware.memory_source,
+        })
+    }
+
     /// Select concurrency from hardware, actual media, and an optional user upper bound.
     /// Reserve a quarter of available memory (at least 256 MiB), track state, and a quarter
     /// of CPU parallelism when more than one CPU is available. Unknown memory allows one child.
@@ -206,5 +243,57 @@ impl Budget {
             estimated_child_bytes,
             memory_source: hardware.memory_source,
         })
+    }
+}
+
+#[cfg(test)]
+mod allocation_tests {
+    use super::*;
+
+    fn audio() -> Workload {
+        Workload {
+            max_pixels: Some(0),
+            input_buffer_bytes: Some(64 * 1024),
+            tracks: 1,
+        }
+    }
+
+    #[test]
+    fn allocated_pools_still_bound_cpu_memory_and_explicit_workers() {
+        let hardware = Hardware::from_observations(64, Some(384 * MIB), None);
+        let allocation = (4, 1024 * MIB);
+        let budget = Budget::within_allocation(hardware, audio(), None, allocation).unwrap();
+        assert_eq!(budget.workers, 4);
+        assert_eq!(budget.cpu_tokens, 4);
+        assert_eq!(budget.memory_tokens_bytes, allocation.1);
+        assert_eq!(
+            Budget::within_allocation(hardware, audio(), Some(2), allocation)
+                .unwrap()
+                .workers,
+            2
+        );
+        let unknown = Hardware::from_observations(64, None, None);
+        assert_eq!(
+            Budget::within_allocation(unknown, audio(), None, allocation)
+                .unwrap()
+                .workers,
+            1
+        );
+    }
+
+    #[test]
+    fn allocated_pools_refuse_exhaustion_and_invalid_worker_limits() {
+        let hardware = Hardware::from_observations(8, Some(1024 * MIB), None);
+        for allocation in [(0, 1024 * MIB), (2, 1)] {
+            assert!(Budget::within_allocation(hardware, audio(), None, allocation).is_err());
+        }
+        let exhausted = Hardware::from_observations(8, Some(0), None);
+        assert!(Budget::within_allocation(exhausted, audio(), None, (2, 1024 * MIB)).is_err());
+        for maximum in [0, 65] {
+            assert!(matches!(
+                Budget::within_allocation(hardware, audio(), Some(maximum), (2, 1024 * MIB)),
+                Err(BudgetError::InvalidWorkers)
+            ));
+        }
     }
 }
