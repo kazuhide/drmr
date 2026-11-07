@@ -270,6 +270,7 @@ impl Converter {
         tools: &ManifestValidationTools,
         acquired: Option<&crate::conversion::download::native::AcquiredNative>,
     ) -> Result<BundleConversionReport, ConversionError> {
+        validate_output_keys(request.outputs, keys)?;
         let command = self.bundle_cohort();
         let phase = command.pipeline_phase(crate::conversion::pipeline::Phase::Source);
         let PreparedPlan {
@@ -661,6 +662,7 @@ impl Converter {
         keys: &BundleOperatorKeys,
         tools: &ManifestValidationTools,
     ) -> Result<BundleVerificationReport, ConversionError> {
+        validate_verification_keys(outputs, keys)?;
         let result_root = destination::ExistingDirectoryGuard::new(output_root)?;
         let command = self.bundle_cohort();
         let PreparedPlan {
@@ -703,7 +705,7 @@ impl Converter {
         for output in &plan.outputs {
             self.check_saved_processing(plan.processing_mode(&output.id))?;
         }
-        validate_keys(plan, keys)?;
+        validate_intent_keys(&plan.outputs, keys, KeyUse::Verify)?;
         self.backend.check_cancelled()?;
         self.refuse_bundle_signaling()?;
         let admitted = prepared.is_some();
@@ -1150,10 +1152,41 @@ fn drm_profile(output: &BundleOutputIntent) -> bool {
         .is_ok()
 }
 
+/// Check a new output configuration against its named runtime keys without reading media.
+/// This does not qualify source media or require output keys when saving a plan.
+pub fn validate_output_keys(
+    outputs: &[BundleOutputIntent],
+    keys: &BundleOperatorKeys,
+) -> Result<(), ConversionError> {
+    validate_intent_keys(&normalized(outputs)?, keys, KeyUse::Publish)
+}
+
+/// Check keys for existing named outputs before reading media. An expected
+/// identity-key HLS URI is optional; a new playlist requires a publishing URI.
+pub fn validate_verification_keys(
+    outputs: &[BundleOutputIntent],
+    keys: &BundleOperatorKeys,
+) -> Result<(), ConversionError> {
+    validate_intent_keys(&normalized(outputs)?, keys, KeyUse::Verify)
+}
+
+#[derive(Clone, Copy)]
+enum KeyUse {
+    Publish,
+    Verify,
+}
+
 fn validate_keys(plan: &BundlePlan, keys: &BundleOperatorKeys) -> Result<(), ConversionError> {
+    validate_intent_keys(&plan.outputs, keys, KeyUse::Publish)
+}
+
+fn validate_intent_keys(
+    outputs: &[BundleOutputIntent],
+    keys: &BundleOperatorKeys,
+    purpose: KeyUse,
+) -> Result<(), ConversionError> {
     if keys.outputs.iter().any(|(id, keys)| {
-        !plan
-            .outputs
+        !outputs
             .iter()
             .any(|output| &output.id == id && output.target != TargetProtection::Clear)
             || !keys.input.keys.is_empty()
@@ -1161,7 +1194,7 @@ fn validate_keys(plan: &BundlePlan, keys: &BundleOperatorKeys) -> Result<(), Con
     }) {
         return Err(KEYS);
     }
-    for output in &plan.outputs {
+    for output in outputs {
         let configured = keys.outputs.get(&output.id);
         if output.target != TargetProtection::Clear && configured.is_none() {
             return Err(KEYS);
@@ -1172,6 +1205,17 @@ fn validate_keys(plan: &BundlePlan, keys: &BundleOperatorKeys) -> Result<(), Con
             .unwrap_or_default();
         if actual != output.drms {
             return Err(DRM);
+        }
+        if let Some(configured) = configured {
+            match purpose {
+                KeyUse::Publish => {
+                    configured.validate_output_settings(Some(output.format), output.target)?;
+                }
+                KeyUse::Verify => {
+                    configured
+                        .validate_verification_settings(Some(output.format), output.target)?;
+                }
+            }
         }
     }
     Ok(())

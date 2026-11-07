@@ -132,9 +132,7 @@ impl OutputSignaling {
         let playready = (!self.license_url.is_empty())
             .then(|| OutputSignaling::playready(&self.license_url)?.objects(key, target))
             .transpose()?;
-        if let Some(widevine) = &multi.widevine {
-            super::multi::validate_widevine(widevine, Some(&key.0.id_hex()), Some(target))?;
-        }
+        self.validate_output_key_for_target(key, Some(target))?;
         let widevine_hex = multi
             .widevine
             .as_ref()
@@ -173,12 +171,20 @@ impl OutputSignaling {
         &self,
         key: &OutputKey,
     ) -> Result<(), ConversionError> {
+        self.validate_output_key_for_target(key, None)
+    }
+
+    pub(in crate::conversion) fn validate_output_key_for_target(
+        &self,
+        key: &OutputKey,
+        target: Option<TargetProtection>,
+    ) -> Result<(), ConversionError> {
         if let Some(widevine) = self
             .multi
             .as_ref()
             .and_then(|multi| multi.widevine.as_ref())
         {
-            super::multi::validate_widevine(widevine, Some(&key.0.id_hex()), None)?;
+            super::multi::validate_widevine(widevine, Some(&key.0.id_hex()), target)?;
         }
         Ok(())
     }

@@ -383,3 +383,154 @@ fn per_output_keys_must_match_exactly_the_encrypted_output_ids_and_drm_set() {
     plan.outputs[0].drms.push(DrmSystem::PlayReady);
     assert_eq!(validate_keys(&plan, &keys).unwrap_err(), DRM);
 }
+
+#[test]
+fn existing_identity_hls_can_omit_a_publishing_uri_but_still_requires_valid_key_roles() {
+    let mut output = intent("hls");
+    output.format = OutputFormat::Hls;
+    output.target = TargetProtection::Cenc;
+    let mut configured = OperatorKeys::default();
+    configured.output = Some(
+        crate::conversion::OutputKey::from_hex(
+            "00000000000000000000000000000001",
+            "00112233445566778899aabbccddeeff",
+        )
+        .unwrap(),
+    );
+    let mut keys = BundleOperatorKeys::default();
+    keys.outputs.insert(output.id.clone(), configured);
+    let outputs = [output];
+    assert_eq!(validate_verification_keys(&outputs, &keys), Ok(()));
+    assert_eq!(
+        validate_output_keys(&outputs, &keys),
+        Err(ConversionError("hls-key-uri-required"))
+    );
+    keys.outputs.get_mut("hls").unwrap().output = None;
+    assert_eq!(
+        validate_verification_keys(&outputs, &keys),
+        Err(ConversionError("output-key-role-mismatch"))
+    );
+}
+
+#[test]
+fn existing_identity_sample_aes_uses_playlist_iv_while_publication_and_fairplay_require_one() {
+    use crate::conversion::{Aes128Key, HlsOutputKey, SegmentIv};
+    let mut output = intent("hls");
+    output.format = OutputFormat::HlsTs;
+    output.target = TargetProtection::HlsSampleAes;
+    let mut configured = OperatorKeys::default();
+    configured.hls_output = Some(
+        HlsOutputKey::new(
+            "https://keys.example.invalid/identity.key",
+            Aes128Key::from_hex("00112233445566778899aabbccddeeff").unwrap(),
+        )
+        .unwrap(),
+    );
+    let mut keys = BundleOperatorKeys::default();
+    keys.outputs.insert(output.id.clone(), configured);
+    let mut outputs = [output];
+    assert_eq!(validate_verification_keys(&outputs, &keys), Ok(()));
+    assert_eq!(
+        validate_output_keys(&outputs, &keys),
+        Err(ConversionError("hls-sample-output-iv-required"))
+    );
+    outputs[0].drms = vec![DrmSystem::FairPlay];
+    let configured = keys.outputs.get_mut("hls").unwrap();
+    configured.signaling = Some(OutputSignaling::multi_drm(None, None, true).unwrap());
+    assert_eq!(
+        validate_verification_keys(&outputs, &keys),
+        Err(ConversionError("hls-sample-output-iv-required"))
+    );
+    let configured = keys.outputs.get_mut("hls").unwrap();
+    configured.hls_output = Some(
+        HlsOutputKey::new_with_iv(
+            "skd://fixture",
+            Aes128Key::from_hex("00112233445566778899aabbccddeeff").unwrap(),
+            SegmentIv::from_hex("0123456789abcdeffedcba9876543210").unwrap(),
+        )
+        .unwrap(),
+    );
+    assert_eq!(validate_verification_keys(&outputs, &keys), Ok(()));
+    assert_eq!(validate_output_keys(&outputs, &keys), Ok(()));
+}
+
+fn assert_typed_output_preflight_rejected(
+    output: BundleOutputIntent,
+    configured: OperatorKeys,
+    expected: ConversionError,
+) {
+    let root = crate::native::private_tempdir().unwrap();
+    let source = root.path().join("missing.mpd");
+    let destination = root.path().join("result");
+    assert!(!source.exists());
+    let mut keys = BundleOperatorKeys::default();
+    keys.outputs.insert(output.id.clone(), configured);
+    let outputs = [output];
+    let preflight = validate_output_keys(&outputs, &keys);
+    let runner = std::sync::Arc::new(crate::toolrun::ToolRunner::new(
+        std::sync::Arc::new(crate::toolrun::Secrets::new()),
+        std::sync::Arc::new(crate::events::NoSink),
+    ));
+    let converter = Converter::new(runner, "must-not-start-packager", "must-not-start-decoder");
+    let execution = converter.convert_bundle(
+        &source,
+        &outputs,
+        &destination,
+        &keys,
+        &ManifestValidationTools::default(),
+    );
+    assert_eq!(
+        (preflight, execution.err()),
+        (Err(expected), Some(expected)),
+        "typed output errors must take precedence over the missing source"
+    );
+    assert!(!destination.exists());
+}
+
+#[test]
+fn typed_output_preflight_rejects_fairplay_without_uri() {
+    let mut output = intent("hls");
+    output.format = OutputFormat::Hls;
+    output.target = TargetProtection::Cbcs;
+    output.drms = vec![DrmSystem::FairPlay];
+    let mut keys = OperatorKeys::default();
+    keys.output = Some(
+        crate::conversion::OutputKey::from_hex(
+            "00000000000000000000000000000001",
+            "00112233445566778899aabbccddeeff",
+        )
+        .unwrap(),
+    );
+    keys.signaling = Some(OutputSignaling::multi_drm(None, None, true).unwrap());
+    assert_typed_output_preflight_rejected(
+        output,
+        keys,
+        ConversionError("output-signaling-invalid"),
+    );
+}
+
+#[test]
+fn typed_output_preflight_rejects_widevine_kid_mismatch() {
+    let declared_kid = "00000000000000000000000000000001";
+    let payload = hex::decode(format!("1210{declared_kid}")).unwrap();
+    let pssh =
+        crate::playready::build_pssh_box(&crate::playready::WIDEVINE_SYSTEM_ID, &payload).unwrap();
+    let mut output = intent("dash");
+    output.target = TargetProtection::Cenc;
+    output.drms = vec![DrmSystem::Widevine];
+    let mut keys = OperatorKeys::default();
+    keys.output = Some(
+        crate::conversion::OutputKey::from_hex(
+            "00000000000000000000000000000002",
+            "00112233445566778899aabbccddeeff",
+        )
+        .unwrap(),
+    );
+    keys.signaling =
+        Some(OutputSignaling::multi_drm(Some(&hex::encode(pssh)), None, false).unwrap());
+    assert_typed_output_preflight_rejected(
+        output,
+        keys,
+        ConversionError("output-signaling-invalid"),
+    );
+}

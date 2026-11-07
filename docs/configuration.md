@@ -217,6 +217,11 @@ only Widevine/PlayReady uses embedded DRM declarations and omits
 advertised key URI or license URL. Those values may be written to output
 manifests and must not contain private authentication tokens.
 
+Direct conversion checks key roles, IV rules, and the key identifiers and
+encryption scheme in DRM initialization data before acquiring the source.
+It completes format-specific checks after determining the output format.
+Saving a plan does not require output keys.
+
 ### Clear source to encrypted HLS
 
 Use the two complete files above and run:

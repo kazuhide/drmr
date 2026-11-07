@@ -147,6 +147,144 @@ fn direct_settings_verify_existing_outputs_and_refuse_wrong_protection_without_a
     assert_no_stages(root.path());
 }
 
+fn make_identity_sample_aes_playlists(output: &Path, uri: &str, iv: &str) {
+    // Keep the encrypted payload and URI. Identity declarations carry the same
+    // IV supplied to the FairPlay encryption operation, which may omit it in HLS.
+    let mut directories = vec![output.join("hls")];
+    let mut rewritten = 0;
+    while let Some(directory) = directories.pop() {
+        for entry in std::fs::read_dir(directory).unwrap() {
+            let entry = entry.unwrap();
+            let kind = entry.file_type().unwrap();
+            let path = entry.path();
+            if kind.is_dir() {
+                directories.push(path);
+            } else if kind.is_file()
+                && path
+                    .extension()
+                    .is_some_and(|extension| extension == "m3u8")
+            {
+                let original = std::fs::read_to_string(&path).unwrap();
+                let identity = original
+                    .replace(
+                        "KEYFORMAT=\"com.apple.streamingkeydelivery\"",
+                        "KEYFORMAT=\"identity\"",
+                    )
+                    .replace(",KEYFORMATVERSIONS=\"1\"", "");
+                if identity != original {
+                    let identity = if identity.contains("IV=") {
+                        identity
+                    } else {
+                        identity.replace(
+                            "KEYFORMAT=\"identity\"",
+                            &format!("KEYFORMAT=\"identity\",IV=0x{iv}"),
+                        )
+                    };
+                    assert!(identity.contains(&format!("URI=\"{uri}\"")));
+                    assert!(identity.contains(&format!("IV=0x{iv}")));
+                    std::fs::write(path, identity).unwrap();
+                    rewritten += 1;
+                }
+            }
+        }
+    }
+    assert!(rewritten > 0);
+}
+
+#[test]
+fn identity_sample_aes_verification_reads_the_associated_iv_from_existing_playlists() {
+    use drmr_core::conversion::{
+        Aes128Key, DecodeEvidence, DrmSystem, HlsOutputKey, OutputSignaling, SegmentIv,
+        ValidationDepth, key_file::OperatorKeys,
+    };
+    const KEY: &str = "101112131415161718191a1b1c1d1e1f";
+    const IV: &str = "303132333435363738393a3b3c3d3e3f";
+    const URI: &str = "skd://identity-sample-aes";
+
+    let root = drmr_core::native::private_tempdir().unwrap();
+    let input = root.path().join("source.mp4");
+    video(&input);
+    let original = std::fs::read(&input).unwrap();
+    let output = root.path().join("result");
+    let intents = [BundleOutputIntent {
+        id: "hls".into(),
+        format: OutputFormat::HlsTs,
+        target: TargetProtection::HlsSampleAes,
+        drms: Vec::new(),
+        conformance: ManifestValidation::None,
+        processing: None,
+        dash_addressing: None,
+        manifest_profile: None,
+    }];
+    let command = converter().with_decode(false).with_new_output_defaults();
+    let planned = command
+        .create_bundle_plan(BundlePlanRequest {
+            input: VerificationSource {
+                input: &input,
+                input_keys: &InputKeys::default(),
+                hls_keys: &HlsInputKeys::default(),
+            },
+            output_root: &output,
+            outputs: &intents,
+        })
+        .unwrap();
+    let saved = root.path().join("bundle.plan.json");
+    plan::write_bundle(&saved, &planned).unwrap();
+    let SavedPlan::Bundle(loaded) = plan::read_saved(&saved).unwrap() else {
+        panic!("the saved plan was not dispatched to the bundle schema");
+    };
+    let mut publish_keys = BundleOperatorKeys::default();
+    let mut encryption = OperatorKeys::default();
+    encryption.hls_output = Some(
+        HlsOutputKey::new_with_iv(
+            URI,
+            Aes128Key::from_hex(KEY).unwrap(),
+            SegmentIv::from_hex(IV).unwrap(),
+        )
+        .unwrap(),
+    );
+    encryption.signaling = Some(OutputSignaling::multi_drm(None, None, true).unwrap());
+    publish_keys.outputs.insert("hls".into(), encryption);
+    let tools = ManifestValidationTools::default();
+    let mut publication_intents = intents.clone();
+    publication_intents[0].drms = vec![DrmSystem::FairPlay];
+    let converted = command
+        .convert_bundle(&input, &publication_intents, &output, &publish_keys, &tools)
+        .unwrap();
+    assert_eq!(converted.outputs.len(), 1);
+    assert!(converted.outputs[0].conversion.verification.passed);
+    assert!(output.join("hls/master.m3u8").is_file());
+
+    make_identity_sample_aes_playlists(&output, URI, IV);
+
+    // Existing identity playlists supply their IV; the expected key need not repeat it.
+    let mut verification_keys = BundleOperatorKeys::default();
+    let mut expected = OperatorKeys::default();
+    expected.hls_output = Some(HlsOutputKey::new(URI, Aes128Key::from_hex(KEY).unwrap()).unwrap());
+    verification_keys.outputs.insert("hls".into(), expected);
+    for verified in [
+        command
+            .verify_bundle_config(&input, &intents, &output, &verification_keys, &tools)
+            .unwrap(),
+        command
+            .verify_bundle_plan(&loaded, &verification_keys, &tools)
+            .unwrap(),
+    ] {
+        assert!(verified.passed && verified.source_unchanged);
+        assert_eq!(verified.outputs.len(), 1);
+        let child = &verified.outputs[0];
+        assert!(child.output_matches_plan && child.verification.passed);
+        assert!(child.verification.checks.is_pass());
+        assert_eq!(child.verification.required_depth, ValidationDepth::Native);
+        assert_eq!(
+            child.verification.decode_evidence,
+            DecodeEvidence::not_requested()
+        );
+    }
+    assert_eq!(std::fs::read(&input).unwrap(), original);
+    assert_no_stages(root.path());
+}
+
 #[test]
 fn required_external_check_refuses_publication_and_single_profile_is_saved_and_reused() {
     use drmr_core::conversion::{

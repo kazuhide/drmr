@@ -57,13 +57,12 @@ pub(super) fn complete_track_views(
 use super::metadata::mp4_language as language;
 
 fn validate_mp4_output_keys(request: &ConversionRequest<'_>) -> Result<(), ConversionError> {
-    if matches!(
+    super::super::key_file::validate_output_key_role(
         request.target,
-        TargetProtection::Cenc | TargetProtection::Cbcs
-    ) != request.output_key.is_some()
-        || request.hls_output_key.is_some()
-        || request.hls_key_uri.is_some()
-    {
+        request.output_key,
+        request.hls_output_key,
+    )?;
+    if request.hls_output_key.is_some() || request.hls_key_uri.is_some() {
         return Err(ConversionError("output-key-role-mismatch"));
     }
     Ok(())

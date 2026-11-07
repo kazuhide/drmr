@@ -25,39 +25,18 @@ pub(super) fn validate_request(
     if request.target == TargetProtection::HlsAes128 && request.format != OutputFormat::Hls {
         return Err(ConversionError("target-requires-hls-output"));
     }
-    if matches!(
+    conversion::key_file::validate_output_key_role(
         request.target,
-        TargetProtection::Cenc | TargetProtection::Cbcs
-    ) != request.output_key.is_some()
-        || (request.target == TargetProtection::HlsAes128) != request.hls_output_key.is_some()
-    {
-        return Err(ConversionError("output-key-role-mismatch"));
-    }
-    if request
-        .hls_output_key
-        .and_then(conversion::HlsOutputKey::associated_iv)
-        .is_some()
-    {
-        return Err(ConversionError("output-iv-not-used"));
-    }
-    if request.format == OutputFormat::Hls
-        && matches!(
-            request.target,
-            TargetProtection::Cenc | TargetProtection::Cbcs
-        )
-        && converter.output_signaling.is_none()
-    {
-        let uri = request
-            .hls_key_uri
-            .ok_or(ConversionError("hls-key-uri-required"))?;
-        if uri.is_empty()
-            || uri.len() > 4096
-            || uri.contains('"')
-            || uri.chars().any(char::is_control)
-        {
-            return Err(ConversionError("invalid-hls-key-uri"));
-        }
-    }
+        request.output_key,
+        request.hls_output_key,
+    )?;
+    conversion::key_file::validate_output_iv(request.target, request.hls_output_key)?;
+    conversion::signaling::validate_sample_hls_uri(
+        request.format,
+        request.target,
+        request.hls_key_uri,
+        converter.output_signaling.as_deref(),
+    )?;
     if let Some(signaling) = &converter.output_signaling {
         signaling.validate_profile(request.format, request.target)?;
         signaling.validate_uri(request.hls_key_uri.or_else(|| {

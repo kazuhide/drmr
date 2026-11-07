@@ -5,6 +5,7 @@ use super::{
     Aes128Key, ContentKey, ConversionError, HlsInputKeys, HlsOutputKey, InputKeys, OutputKey,
     SegmentIv,
 };
+use crate::inspection::{OutputFormat, TargetProtection};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -54,6 +55,63 @@ impl OperatorKeys {
             .map(String::as_str)
             .or_else(|| self.hls_output.as_ref().map(HlsOutputKey::key_uri))
     }
+    /// Check output keys and signaling without opening source media.
+    /// Without a known format, defer format-specific checks. Success does not
+    /// establish that source media is eligible for conversion.
+    pub fn validate_output_settings(
+        &self,
+        format: Option<OutputFormat>,
+        target: TargetProtection,
+    ) -> Result<(), ConversionError> {
+        self.validate_verification_settings(format, target)?;
+        validate_output_iv(target, self.hls_output.as_ref())?;
+        if let Some(format) = format {
+            super::signaling::validate_sample_hls_uri(
+                format,
+                target,
+                self.output.as_ref().and_then(|_| self.hls_output_uri()),
+                self.signaling.as_ref(),
+            )?;
+        }
+        Ok(())
+    }
+    /// Existing identity-key HLS outputs carry their own URI. Verification may
+    /// omit that expected value; publishing a new playlist still requires it.
+    pub(in crate::conversion) fn validate_verification_settings(
+        &self,
+        format: Option<OutputFormat>,
+        target: TargetProtection,
+    ) -> Result<(), ConversionError> {
+        if let Some(signaling) = &self.signaling {
+            match format {
+                Some(format) => signaling.validate_profile(format, target)?,
+                None => signaling.validate_target(target)?,
+            }
+        }
+        validate_output_key_role(target, self.output.as_ref(), self.hls_output.as_ref())?;
+        // Identity SAMPLE-AES can use the existing playlist's explicit IV.
+        // FairPlay verification binds the separately supplied expected IV.
+        if target != TargetProtection::HlsSampleAes || self.signaling.is_some() {
+            validate_output_iv(target, self.hls_output.as_ref())?;
+        }
+        if let Some(signaling) = &self.signaling {
+            if let Some(key) = &self.output {
+                signaling.validate_output_key_for_target(key, Some(target))?;
+            }
+            signaling.validate_uri(self.hls_output_uri())?;
+        }
+        if let Some(format) = format
+            && self.hls_output_uri().is_some()
+        {
+            super::signaling::validate_sample_hls_uri(
+                format,
+                target,
+                self.output.as_ref().and_then(|_| self.hls_output_uri()),
+                self.signaling.as_ref(),
+            )?;
+        }
+        Ok(())
+    }
     /// Match output HLS playlist declarations without retrieving the advertised URI.
     pub fn output_hls_verification_keys(&self) -> Result<HlsInputKeys, ConversionError> {
         self.hls_output.as_ref().map_or_else(
@@ -79,6 +137,38 @@ impl OperatorKeys {
             },
         )
     }
+}
+
+pub(in crate::conversion) fn validate_output_key_role(
+    target: TargetProtection,
+    output_key: Option<&OutputKey>,
+    hls_output_key: Option<&HlsOutputKey>,
+) -> Result<(), ConversionError> {
+    if matches!(target, TargetProtection::Cenc | TargetProtection::Cbcs) != output_key.is_some()
+        || matches!(
+            target,
+            TargetProtection::HlsAes128 | TargetProtection::HlsSampleAes
+        ) != hls_output_key.is_some()
+    {
+        return Err(ConversionError("output-key-role-mismatch"));
+    }
+    Ok(())
+}
+
+pub(in crate::conversion) fn validate_output_iv(
+    target: TargetProtection,
+    hls_output_key: Option<&HlsOutputKey>,
+) -> Result<(), ConversionError> {
+    let has_iv = hls_output_key
+        .and_then(HlsOutputKey::associated_iv)
+        .is_some();
+    if target == TargetProtection::HlsSampleAes && !has_iv {
+        return Err(ConversionError("hls-sample-output-iv-required"));
+    }
+    if target != TargetProtection::HlsSampleAes && has_iv {
+        return Err(ConversionError("output-iv-not-used"));
+    }
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -671,6 +761,36 @@ mod canonical_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inferred_format_rejects_impossible_drm_targets_without_forcing_a_container() {
+        let keys = OperatorKeys {
+            output: Some(
+                OutputKey::from_hex(
+                    "00000000000000000000000000000001",
+                    "00112233445566778899aabbccddeeff",
+                )
+                .unwrap(),
+            ),
+            signaling: Some(super::super::OutputSignaling::multi_drm(None, None, true).unwrap()),
+            sample_hls_uri: Some(Zeroizing::new("skd://fixture".into())),
+            ..OperatorKeys::default()
+        };
+        assert_eq!(
+            keys.validate_output_settings(None, TargetProtection::Cbcs),
+            Ok(())
+        );
+        for format in [None, Some(OutputFormat::Hls)] {
+            assert_eq!(
+                keys.validate_output_settings(format, TargetProtection::Cenc),
+                Err(ConversionError("output-signaling-profile-not-supported"))
+            );
+        }
+        assert_eq!(
+            keys.validate_output_settings(Some(OutputFormat::Dash), TargetProtection::Cbcs),
+            Err(ConversionError("output-signaling-profile-not-supported"))
+        );
+    }
 
     #[test]
     fn source_loader_validates_both_schemas_without_selecting_an_output_domain() {

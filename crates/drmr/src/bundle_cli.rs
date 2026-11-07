@@ -565,11 +565,15 @@ pub fn convert_direct(args: &ConvertArgs) -> ExitCode {
     }
     let validators = tools(&args.hls_validator_bin, &args.dash_validator_bin);
     let output = output.as_path();
+    let settings = crate::output_cli::validate(
+        args.dash_addressing,
+        outputs.iter().map(|output| output.format),
+    )
+    .and_then(|()| plan::bundle::validate_output_keys(&outputs, &session.keys));
+    if let Err(cause) = settings {
+        return convert_cli::error("convert", cause, args.json, &session.progress, Some(2));
+    }
     session.run("convert", args.json, args.measure, |converter| {
-        crate::output_cli::validate(
-            args.dash_addressing,
-            outputs.iter().map(|output| output.format),
-        )?;
         let report = match &input {
             Input::Local(input) => {
                 session.progress.mark("input-preparation");
@@ -650,6 +654,9 @@ pub fn verify_direct(args: &VerifyArgs) -> ExitCode {
         .as_deref()
         .expect("clap requires the original source");
     let validators = verify_tools(args);
+    if let Err(cause) = plan::bundle::validate_verification_keys(&outputs, &session.keys) {
+        return convert_cli::error("verify", cause, args.json, &session.progress, Some(2));
+    }
     session.run("verify", args.json, args.measure, |converter| {
         let report =
             converter.verify_bundle_config(source, &outputs, root, &session.keys, &validators)?;

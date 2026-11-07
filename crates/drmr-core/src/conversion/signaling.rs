@@ -48,6 +48,28 @@ pub struct OutputSignaling {
     license_url: Zeroizing<String>,
     multi: Option<multi::MultiDrm>,
 }
+
+pub(in crate::conversion) fn validate_sample_hls_uri(
+    format: OutputFormat,
+    target: TargetProtection,
+    uri: Option<&str>,
+    signaling: Option<&OutputSignaling>,
+) -> Result<(), ConversionError> {
+    if format == OutputFormat::Hls
+        && matches!(target, TargetProtection::Cenc | TargetProtection::Cbcs)
+        && signaling.is_none()
+    {
+        let uri = uri.ok_or(ConversionError("hls-key-uri-required"))?;
+        if uri.is_empty()
+            || uri.len() > 4096
+            || uri.contains('"')
+            || uri.chars().any(char::is_control)
+        {
+            return Err(ConversionError("invalid-hls-key-uri"));
+        }
+    }
+    Ok(())
+}
 impl std::fmt::Debug for OutputSignaling {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OutputSignaling")
@@ -131,6 +153,26 @@ impl OutputSignaling {
             multi::profile(&self.systems(), format, target)
         } else {
             Self::profile(format, target)
+        }
+    }
+    /// Refuse DRM/target combinations that no container can represent before
+    /// source inspection determines an inferred output format.
+    pub(in crate::conversion) fn validate_target(
+        &self,
+        target: TargetProtection,
+    ) -> Result<(), ConversionError> {
+        if [
+            OutputFormat::Mp4,
+            OutputFormat::Dash,
+            OutputFormat::Hls,
+            OutputFormat::HlsTs,
+        ]
+        .into_iter()
+        .any(|format| self.validate_profile(format, target).is_ok())
+        {
+            Ok(())
+        } else {
+            Err(UNSUPPORTED)
         }
     }
     pub(super) fn profile(
@@ -848,24 +890,12 @@ impl super::Converter {
         request: &super::ConversionRequest<'_>,
         admitted: Option<&super::SourceQualification>,
     ) -> Result<(), ConversionError> {
-        if request.format == OutputFormat::Hls
-            && matches!(
-                request.target,
-                TargetProtection::Cenc | TargetProtection::Cbcs
-            )
-            && self.output_signaling.is_none()
-        {
-            let uri = request
-                .hls_key_uri
-                .ok_or(ConversionError("hls-key-uri-required"))?;
-            if uri.is_empty()
-                || uri.len() > 4096
-                || uri.contains('"')
-                || uri.chars().any(char::is_control)
-            {
-                return Err(ConversionError("invalid-hls-key-uri"));
-            }
-        }
+        validate_sample_hls_uri(
+            request.format,
+            request.target,
+            request.hls_key_uri,
+            self.output_signaling.as_deref(),
+        )?;
         if let Some(signaling) = &self.output_signaling {
             signaling.validate_profile(request.format, request.target)?;
             self.register_provider_secrets(

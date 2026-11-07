@@ -156,7 +156,22 @@ the [source layout](source-layout.md); no layout selector is needed.
 The output list and saved plan contain no keys, license addresses, or DRM
 initialization data. Use a protected, schema-version-2 key file for the shared
 input keys and separate output settings. Its `outputs` names must match the
-encrypted output IDs. Clear outputs have no entry. The complete example below
+encrypted output IDs. Clear outputs have no entry.
+
+Direct conversion and configured verification validate runtime keys before reading
+source media. Checks include output IDs, key roles, initialization vectors (IVs),
+required key addresses, DRM systems, key identifiers and declared encryption
+schemes. Invalid settings are refused before a URL download starts or output
+files are created. Saving a plan still requires only the keys needed to read its
+input; supply output keys when executing the saved plan.
+
+Verification keeps optional expectations for existing outputs. For fMP4 HLS
+without DRM declarations, the expected key address may be omitted. For
+SAMPLE-AES TS using the `identity` key format (no DRM provider declarations),
+an explicit playlist IV can be used without repeating it in the key file.
+New SAMPLE-AES outputs and FairPlay TS verification require the expected IV.
+
+The complete example below
 uses public dummy values, including a complete Widevine PSSH with the matching
 KID. Replace all of them with the values issued for your content. The two output
 key domains are independent, even though these test values are identical:
