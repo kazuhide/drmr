@@ -39,15 +39,21 @@ fn scheduling_budget<T>(
     hardware: Hardware,
     workload: Workload,
     units: usize,
+    reserved_track_contexts: usize,
     metadata: u64,
     maximum: Option<usize>,
     capacity: (usize, u64),
 ) -> Result<Budget, ConversionError> {
     let mut budget = resource_budget(hardware, workload, units, maximum, capacity)?;
-    let track_state = u64::try_from(workload.tracks.max(1))
-        .ok()
-        .and_then(|tracks| tracks.checked_mul(crate::resources::TRACK_RESIDENCY_BYTES))
-        .ok_or(ConversionError("resource-budget"))?;
+    let track_state = u64::try_from(
+        workload
+            .tracks
+            .max(1)
+            .saturating_sub(reserved_track_contexts),
+    )
+    .ok()
+    .and_then(|tracks| tracks.checked_mul(crate::resources::TRACK_RESIDENCY_BYTES))
+    .ok_or(ConversionError("resource-budget"))?;
     let retained = retained_bytes::<T>(units, metadata)?
         .checked_add(track_state)
         .ok_or(ConversionError("resource-budget"))?;
@@ -160,6 +166,7 @@ impl<'a> Scheduler<'a> {
             self.hardware,
             workload,
             units,
+            self.backend.reserved_track_contexts,
             metadata_bytes,
             self.maximum_workers,
             self.backend.runner.native_capacity(),
@@ -261,9 +268,16 @@ mod tests {
         for units in [5, 200, 2000] {
             let allocation = crate::resources::capacity(hardware, workload.tracks);
             let base = resource_budget(hardware, workload, units, Some(4), allocation).unwrap();
-            let budget =
-                scheduling_budget::<PathBuf>(hardware, workload, units, 4096, Some(4), allocation)
-                    .unwrap();
+            let budget = scheduling_budget::<PathBuf>(
+                hardware,
+                workload,
+                units,
+                0,
+                4096,
+                Some(4),
+                allocation,
+            )
+            .unwrap();
             assert_eq!(
                 base.memory_tokens_bytes - budget.memory_tokens_bytes,
                 retained_bytes::<PathBuf>(units, 4096).unwrap()
@@ -274,10 +288,10 @@ mod tests {
         assert!(retained_bytes::<u64>(usize::MAX, 0).is_err());
         assert!(retained_bytes::<u8>(1, u64::MAX).is_err());
         assert!(
-            scheduling_budget::<u64>(hardware, workload, 200, u64::MAX, Some(1), (1, u64::MAX))
+            scheduling_budget::<u64>(hardware, workload, 200, 0, u64::MAX, Some(1), (1, u64::MAX))
                 .is_err()
         );
-        assert!(scheduling_budget::<u64>(hardware, workload, 200, 0, Some(1), (1, 1)).is_err());
+        assert!(scheduling_budget::<u64>(hardware, workload, 200, 0, 0, Some(1), (1, 1)).is_err());
     }
 
     #[test]
@@ -289,7 +303,7 @@ mod tests {
             tracks: 7,
         };
         let allocation = (2, 1024 * 1024 * 1024);
-        let budget = scheduling_budget::<u64>(hardware, workload, 7, 0, None, allocation)
+        let budget = scheduling_budget::<u64>(hardware, workload, 7, 0, 0, None, allocation)
             .expect("the retained tracks and media child fit the allocation");
         assert_eq!(
             allocation.1 - budget.memory_tokens_bytes,
@@ -299,7 +313,17 @@ mod tests {
             tracks: 200,
             ..workload
         };
-        assert!(scheduling_budget::<u64>(hardware, overfull, 1, 0, None, allocation).is_err());
+        assert!(scheduling_budget::<u64>(hardware, overfull, 1, 0, 0, None, allocation).is_err());
+        for reserved in [3, 7] {
+            let budget =
+                scheduling_budget::<u64>(hardware, workload, 7, reserved, 0, None, allocation)
+                    .unwrap();
+            assert_eq!(
+                allocation.1 - budget.memory_tokens_bytes,
+                retained_bytes::<u64>(7, 0).unwrap()
+                    + (7 - reserved as u64) * crate::resources::TRACK_RESIDENCY_BYTES
+            );
+        }
     }
 
     #[test]

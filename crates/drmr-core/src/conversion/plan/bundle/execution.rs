@@ -160,6 +160,10 @@ impl<'a> Execution<'a> {
         let mut scoped = command.with_processing_clone(command.processing_mode);
         scoped.backend.runner =
             std::sync::Arc::new(command.backend.runner.within_context(bytes, floor));
+        scoped.backend.reserved_track_contexts = scoped
+            .backend
+            .reserved_track_contexts
+            .max(workload.tracks.max(1));
         Ok((
             Prepared {
                 command: scoped,

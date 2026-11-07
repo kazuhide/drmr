@@ -54,6 +54,9 @@ output file metadata and prepared track state consume a separate retained memory
 reservation, without holding CPU tokens while child work waits. Once output processing
 is admitted, that reservation remains held through final source checks, publication,
 cancellation and workspace cleanup.
+Child pools reuse the track-state allowance covered by that reservation. Additional
+tracks still consume additional budget; unrelated retained contexts do not provide
+this allowance.
 
 Source reopening and discovery run before this coordinator reservation, under their
 own bounded capture and discovery limits. Source file metadata kept while a call
