@@ -115,7 +115,7 @@ still fails. The suite covers:
   this negative control. Discovery routes and all replay samples are retained.
   No programmatic scroll, refocus, viewport epsilon or whole-test retry is used.
 
-The pre-publish landing and guide jobs serve only twelve allowlisted files on
+The pre-publish landing and guide jobs serve only twenty allowlisted files on
 loopback. Both must pass, along with static validation on both operating systems,
 before deployment. The guide suite separately covers:
 
@@ -154,10 +154,12 @@ Code examples use native named figures and captions, without overriding the
 figure role. Validated code-language metadata permits visual JSON wrapping while
 retaining complete original code text; shell continuations retain command tokens.
 Static validation requires exact regeneration of both committed guide pages
-from the standard-library builder, recipe generator, template and two Markdown sources. The
-payload remains bounded to 640 KiB, including all twelve files; Markdown,
-templates, build code and test dependencies are outside the uploaded site.
-The source commit/tree, twelve payload hashes and five builder/input hashes
+from the standard-library builder, recipe generator, template and two Markdown sources.
+The twelve page assets remain bounded to 640 KiB. Two versioned editor schemas
+and six public dummy-key JSON templates have a separate 24 KiB download budget;
+they are not fetched when opening a page. Markdown, HTML build templates, build
+code and test dependencies remain outside the uploaded site.
+The source commit/tree, twenty payload hashes and thirteen builder/input hashes
 are retained in both browser suites. Generated output is checked again from
 that checkout before browser or published-byte inspection. No generator or
 JavaScript runs in the production page.
@@ -165,7 +167,7 @@ The post-publish job is main-only, needs successful deployment, and has only
 `contents: read`. It has one fixed remote destination:
 `https://kazuhide.github.io/drmr/`. It does not accept another remote URL.
 
-Before published browser checks, `wait-published.mjs` polls all twelve raw file
+Before published browser checks, `wait-published.mjs` polls all twenty raw file
 hashes against the workflow checkout, with at most 30 passes, a 120-second
 budget and at most five seconds per request. This bounded propagation wait does
 not restart failed browser tests. Redirects are rejected. A later deployment
@@ -204,7 +206,7 @@ human visual review. Layout measurements are not a substitute for that review.
 The lockfile has five exact development packages: `@playwright/test`,
 `playwright` and `playwright-core` 1.64.1 (Apache-2.0), plus
 `@axe-core/playwright` and `axe-core` 4.14.0 (MPL-2.0). They are CI-only and are not
-redistributed in the twelve-file Pages artifact. The npm audit gate is a current
+redistributed in the twenty-file Pages artifact. The npm audit gate is a current
 advisory check, not a claim that these dependencies can never have a defect.
 The pure Node controls are separate from the 23 landing and 12 guide browser cases and
 the applicable workflow checks, which depend on changed paths. Publish/live

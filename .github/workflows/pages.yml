@@ -36,6 +36,9 @@ jobs:
         with:
           python-version: '3.13.12'
 
+      - name: Install the tested editor-schema validator
+        run: python -m pip install --only-binary=:all: -r tools/requirements-schema.txt -c tools/constraints-schema.txt
+
       - name: Check the validator and the complete static site
         run: |
           set -euo pipefail
@@ -43,6 +46,7 @@ jobs:
           python tools/build_guide_site.py --check
           python -W error::ResourceWarning -m unittest discover -s tools/tests -p test_check_site.py -v
           python -W error::ResourceWarning -m unittest discover -s tools/tests -p test_conversion_examples.py -v
+          python -W error::ResourceWarning -m unittest discover -s tools/tests -p test_configuration_schemas.py -v
           python tools/check_site.py --root site --report "$RUNNER_TEMP/site-report.json"
 
       - name: Upload only the validated website

@@ -1,0 +1,2 @@
+# Python >=3.10. Development/editor-schema checks only; no drmr runtime dependency.
+jsonschema>=4.18,<5

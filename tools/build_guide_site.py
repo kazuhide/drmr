@@ -254,13 +254,23 @@ def outputs_match(root, pages):
                and (Path(root) / "site" / route).read_bytes() == content for route, content in pages.items())
 
 
+def configuration_assets(repository_root):
+    """Copy only the public, versioned schemas and generated dummy-key templates."""
+    root = Path(repository_root)
+    return {**{f"schemas/{name}": (root / "schemas" / name).read_bytes()
+               for name in ("output-config-v4.schema.json", "named-keys-v2.schema.json")},
+            **{f"examples/templates/{name}-{kind}.json":
+               (root / f"docs/examples/templates/{name}-{kind}.json").read_bytes()
+               for name in ("clear", "encrypted", "mixed4") for kind in ("outputs", "keys")}}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--check", action="store_true", help="Refuse stale committed HTML without writing it")
+    parser.add_argument("--check", action="store_true", help="Refuse stale committed pages/downloads without writing them")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     try:
-        pages = render(root)
+        pages = {**render(root), **configuration_assets(root)}
         if args.check:
             if not outputs_match(root, pages):
                 raise ValueError("guide-output-stale")
@@ -269,7 +279,7 @@ def main():
                 target = root / "site" / route
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(content)
-        print("Guide outputs match sources" if args.check else "Generated two guide pages")
+        print("Guide outputs match sources" if args.check else "Generated guide pages and configuration downloads")
         return 0
     except (OSError, ValueError) as error:
         print("Guide build refused: " + str(error))

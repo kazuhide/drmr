@@ -14,7 +14,7 @@ import re
 import stat
 from urllib.parse import unquote, urljoin, urlsplit
 
-FILES = frozenset((
+PAGE_FILES = frozenset((
     "index.html", "ja/index.html", "guide/index.html", "ja/guide/index.html",
     "assets/site.css", "assets/guide.css", "assets/drmr.svg",
     "assets/fonts/ibm-plex-sans-latin-400-normal.woff2",
@@ -22,8 +22,12 @@ FILES = frozenset((
     "assets/fonts/ibm-plex-mono-latin-400-normal.woff2",
     "assets/fonts/LICENSE-ibm-plex.txt", "assets/fonts/README.txt",
 ))
-DIRECTORIES = frozenset(("ja", "guide", "ja/guide", "assets", "assets/fonts"))
+CONFIGURATION_FILES = frozenset(("schemas/output-config-v4.schema.json", "schemas/named-keys-v2.schema.json")) | frozenset(
+    f"examples/templates/{name}-{kind}.json" for name in ("clear", "encrypted", "mixed4") for kind in ("outputs", "keys"))
+FILES = PAGE_FILES | CONFIGURATION_FILES
+DIRECTORIES = frozenset(("ja", "guide", "ja/guide", "assets", "assets/fonts", "schemas", "examples", "examples/templates"))
 MAX_BYTES = 640 * 1024
+MAX_CONFIGURATION_BYTES = 24 * 1024
 PAGES = {"index.html": ("en", "https://kazuhide.github.io/drmr/"),
          "ja/index.html": ("ja", "https://kazuhide.github.io/drmr/ja/"),
          "guide/index.html": ("en", "https://kazuhide.github.io/drmr/guide/"),
@@ -45,7 +49,9 @@ GUIDE_CHAPTER_REFERENCES = {
     for origin, (language, canonical) in PAGES.items() if origin not in LANDING_PAGES
 }
 BUILDER_INPUTS = ("tools/build_guide_site.py", "tools/conversion_examples.py", "tools/templates/guide.html",
-                  "site-content/guide/en.md", "site-content/guide/ja.md")
+                  "site-content/guide/en.md", "site-content/guide/ja.md",
+                  "schemas/output-config-v4.schema.json", "schemas/named-keys-v2.schema.json") + tuple(
+    f"docs/examples/templates/{name}-{kind}.json" for name in ("clear", "encrypted", "mixed4") for kind in ("outputs", "keys"))
 
 
 def alternates(origin):
@@ -90,7 +96,10 @@ def inventory(root):
                 require(relative in FILES, "site-file-set")
                 files[relative] = info.st_size
     require(set(files) == FILES, "site-file-set")
-    require(sum(files.values()) <= MAX_BYTES, "site-byte-budget")
+    # Downloads are not loaded by the pages; preserve the existing page asset budget.
+    require(sum(size for path, size in files.items() if path in PAGE_FILES) <= MAX_BYTES, "site-byte-budget")
+    require(sum(size for path, size in files.items() if path in CONFIGURATION_FILES)
+            <= MAX_CONFIGURATION_BYTES, "site-configuration-byte-budget")
     return files
 
 
@@ -645,6 +654,10 @@ def generated_guides(root, repository):
     require(set(expected) == {"guide/index.html", "ja/guide/index.html"}, "site-guide-generated")
     for relative, content in expected.items():
         require(isinstance(content, bytes) and (root / relative).read_bytes() == content, "site-guide-generated")
+    downloads = builder.configuration_assets(repository)
+    require(set(downloads) == CONFIGURATION_FILES, "site-configuration-generated")
+    for relative, content in downloads.items():
+        require(isinstance(content, bytes) and (root / relative).read_bytes() == content, "site-configuration-generated")
     return hashes
 
 def document(reference, repository, pending_docs):
@@ -742,6 +755,9 @@ def validate(root, repository, pending_docs=()):
             "pages": {path: {"language": value[0], "canonical": value[1]} for path, value in PAGES.items()},
             "pending_docs": sorted(pending), "conversion_matrices": matrices, "guides": guides,
             "builder_inputs": builder_inputs, "byte_budget": MAX_BYTES,
+            "page_asset_bytes": sum(size for path, size in files.items() if path in PAGE_FILES),
+            "configuration_bytes": sum(size for path, size in files.items() if path in CONFIGURATION_FILES),
+            "configuration_byte_budget": MAX_CONFIGURATION_BYTES,
             "sha256": {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in sorted(files)},
             "limits": ["static checks only; no browser, keyboard, visual or screen-reader qualification", "repository document existence checked locally; no remote HTTP requests"]}
 

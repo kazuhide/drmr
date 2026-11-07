@@ -78,7 +78,7 @@ test('only the fixed static payload resolves at either mount', () => {
     assert.equal(assetPath('http://127.0.0.1:4173' + path), 'ja/index.html');
   }
   assert.equal(assetRoute('ja/index.html'), 'ja/');
-  assert.equal(assets.length, 12);
+  assert.equal(assets.length, 20);
   assert.throws(() => assetRoute('../keys.json'));
   assert.equal(resource('/drmr/ja/keys.json'), null);
   assert.equal(resource('/drmr/ja/%2e%2e%2f%2e%2e%2fkeys.json'), null);
@@ -123,7 +123,7 @@ test('published checks have one fixed project origin and refuse arbitrary modes 
   }
 });
 
-test('all twelve published raw hashes must match once; stale, missing or duplicate rows fail', () => {
+test('all twenty published raw hashes must match once; stale, missing or duplicate rows fail', () => {
   const hashes = Object.fromEntries(assets.map(path => [path, digest(Buffer.from(path))]));
   const rows = assets.map(path => ({ path, status: 200, sha256: hashes[path] }));
   assert.equal(matchesPublication(rows, hashes), true);
@@ -134,7 +134,8 @@ test('all twelve published raw hashes must match once; stale, missing or duplica
   assert.notEqual(digest(Buffer.from('line\n')), digest(Buffer.from('line\r\n')));
   const staleJapanese = rows.map(row => row.path === 'ja/index.html' ? { ...row, sha256: digest(Buffer.from('stale-ja')) } : row);
   assert.equal(matchesPublication(staleJapanese, hashes), false);
-  for (const asset of ['guide/index.html', 'ja/guide/index.html', 'assets/guide.css']) {
+  for (const asset of ['guide/index.html', 'ja/guide/index.html', 'assets/guide.css',
+    'schemas/output-config-v4.schema.json', 'examples/templates/mixed4-keys.json']) {
     assert.equal(matchesPublication(rows.map(row => row.path === asset ? { ...row, sha256: digest(Buffer.from('stale')) } : row), hashes), false);
   }
 });
@@ -564,7 +565,7 @@ test('OFF discovery selects only a healthy partial bottom and refuses unrelated 
 
 
 test('nested guide routes and generation inputs belong to the exact payload contract', () => {
-  assert.equal(assets.length, 12);
+  assert.equal(assets.length, 20);
   for (const [path, expected] of [['/guide/', 'guide/index.html'],
     ['/drmr/guide/index.html', 'guide/index.html'],
     ['/ja/guide/', 'ja/guide/index.html'], ['/drmr/ja/guide/', 'ja/guide/index.html']]) {
@@ -573,7 +574,14 @@ test('nested guide routes and generation inputs belong to the exact payload cont
   }
   assert.equal(resource('/drmr/assets/guide.css').type, 'text/css; charset=utf-8');
   assert.deepEqual(identity.builderInputs, ['tools/build_guide_site.py', 'tools/conversion_examples.py', 'tools/templates/guide.html',
-    'site-content/guide/en.md', 'site-content/guide/ja.md']);
+    'site-content/guide/en.md', 'site-content/guide/ja.md', 'schemas/output-config-v4.schema.json', 'schemas/named-keys-v2.schema.json',
+    ...['clear', 'encrypted', 'mixed4'].flatMap(name => ['outputs', 'keys'].map(kind => `docs/examples/templates/${name}-${kind}.json`))]);
+  for (const asset of assets.filter(path => path.endsWith('.json'))) {
+    for (const mount of ['/', '/drmr/']) {
+      assert.equal(resource(mount + asset).relative, asset);
+      assert.match(resource(mount + asset).type, /^application\/(schema\+)?json;/);
+    }
+  }
   for (const path of ['/drmr/guide/keys.json', '/drmr/ja/guide/%2e%2e%2fprivate.json',
     '/drmr/site-content/guide/en.md', '/drmr/tools/build_guide_site.py']) {
     assert.equal(resource(path), null);

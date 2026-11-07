@@ -420,6 +420,31 @@ impl Failure {
     }
 }
 
+/// Accept bounded editor metadata without retaining it or interpreting it as a resource.
+pub(crate) fn editor_schema<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<(), D::Error> {
+    struct EditorSchema;
+    impl serde::de::Visitor<'_> for EditorSchema {
+        type Value = ();
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a bounded editor schema reference")
+        }
+
+        fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<(), E> {
+            if value.is_empty()
+                || value.len() > 4096
+                || !value.bytes().all(|byte| byte.is_ascii_graphic())
+            {
+                return Err(E::custom("invalid editor schema reference"));
+            }
+            Ok(())
+        }
+    }
+    deserializer.deserialize_str(EditorSchema)
+}
+
 /// Deserialize from the already bounded read, retaining only a safe schema location.
 pub(crate) fn parse<T: DeserializeOwned>(bytes: &[u8], file: File) -> Result<T, Failure> {
     let mut decoder = serde_json::Deserializer::from_slice(bytes);

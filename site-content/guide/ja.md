@@ -1,6 +1,6 @@
 ---
 title: ユーザーガイド
-updated: 2026-11-04
+updated: 2026-11-08
 version: 1.2.0
 ---
 
@@ -289,7 +289,7 @@ KID は key identifier、つまり鍵を選ぶための識別子で、秘密の�
 
 作業場所は所有者だけがアクセスできるディレクトリにします。macOS/Linux では、秘密情報を入力する前にファイルを保護してください。作成済みの非公開 `keys.json` には `chmod 600 keys.json` を使えます。Windows の ACL 設定は第12章にあります。安全でない権限、シンボリックリンク、複数のハードリンク、重複・不明なフィールド、未対応の schema_version、上限を超える設定は拒否します。鍵ファイルは原本・出力のディレクトリとバージョン管理の対象から外してください。
 
-設定の誤りを特定できる場合は、値を伏せたまま項目の位置と必要な形式を表示します。[設定エラーの修正方法](https://github.com/kazuhide/drmr/blob/main/docs/configuration.md#correcting-a-configuration-error)を参照してください。
+項目の入力候補と Clear・Encrypted・Mixed HLS + DASH の完全な設定例は、[エディター用スキーマとテンプレート](https://github.com/kazuhide/drmr/blob/main/docs/configuration.md#editor-validation-and-templates)を参照してください。`$schema` の受理は 1.3 開発中の機能です。1.2.0 ではこの項目を削除してください。設定の誤りを特定できる場合は、値を伏せて項目の位置と必要な形式を示します。
 
 ## 名前付き出力の鍵ファイルの例
 

@@ -10,6 +10,10 @@ Completed changes are recorded by category before the next release.
 
 ### Added
 
+- Add editor JSON Schemas for schema-4 output settings and schema-2 named keys,
+  with downloadable Clear, Encrypted and mixed HLS/DASH template pairs. Accept
+  an optional bounded `$schema` annotation without fetching or retaining it;
+  keep runtime key, DRM, media and private-file checks authoritative.
 - Write one fragmented MP4 from qualified separate video and AAC audio tracks
   in DASH or fMP4 HLS, with clear, CENC or CBCS protection subject to the existing
   codec profiles. Preserve encoded samples, clocks and audio playback windows;

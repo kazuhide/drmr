@@ -1,0 +1,19 @@
+{
+  "$schema": "https://kazuhide.github.io/drmr/schemas/output-config-v4.schema.json",
+  "schema_version": 4,
+  "output_dir": "result",
+  "outputs": [
+    {
+      "id": "hls-clear",
+      "output_format": "hls-fmp4",
+      "encryption": "clear",
+      "drms": []
+    },
+    {
+      "id": "dash-clear",
+      "output_format": "dash",
+      "encryption": "clear",
+      "drms": []
+    }
+  ]
+}

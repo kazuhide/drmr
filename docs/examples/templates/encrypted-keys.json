@@ -1,0 +1,24 @@
+{
+  "$schema": "https://kazuhide.github.io/drmr/schemas/named-keys-v2.schema.json",
+  "schema_version": 2,
+  "outputs": {
+    "hls-encrypted": {
+      "kid": "101112131415161718191a1b1c1d1e1f",
+      "key": "ffeeddccbbaa99887766554433221100",
+      "hls_key_uri": "skd://example",
+      "signaling": {
+        "system": "multi-drm",
+        "fairplay": true
+      }
+    },
+    "dash-encrypted": {
+      "kid": "101112131415161718191a1b1c1d1e1f",
+      "key": "ffeeddccbbaa99887766554433221100",
+      "signaling": {
+        "system": "multi-drm",
+        "widevine_pssh": "000000327073736800000000edef8ba979d64acea3c827dcd51d21ed000000121210101112131415161718191a1b1c1d1e1f",
+        "playready_license_url": "https://license.example.invalid/playready"
+      }
+    }
+  }
+}

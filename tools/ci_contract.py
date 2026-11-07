@@ -18,6 +18,10 @@ SITE_FILES = frozenset("site/" + name for name in (
     "assets/fonts/ibm-plex-sans-latin-600-normal.woff2",
     "assets/fonts/ibm-plex-mono-latin-400-normal.woff2",
     "assets/fonts/LICENSE-ibm-plex.txt", "assets/fonts/README.txt",
+    "schemas/output-config-v4.schema.json", "schemas/named-keys-v2.schema.json",
+    "examples/templates/clear-outputs.json", "examples/templates/clear-keys.json",
+    "examples/templates/encrypted-outputs.json", "examples/templates/encrypted-keys.json",
+    "examples/templates/mixed4-outputs.json", "examples/templates/mixed4-keys.json",
 ))
 GUIDE_FILES = frozenset("site-content/guide/" + name for name in ("en.md", "ja.md", "README.md"))
 GATE_NAMES = {"ci.yml": "CI / required checks", "windows.yml": "Windows / required checks",

@@ -64,6 +64,12 @@ fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawConfig {
+    #[serde(
+        default,
+        rename = "$schema",
+        deserialize_with = "configuration::editor_schema"
+    )]
+    _editor_schema: (),
     schema_version: u32,
     #[serde(default, deserialize_with = "present")]
     output_dir: Option<PathBuf>,
