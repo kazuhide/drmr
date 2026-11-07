@@ -654,7 +654,7 @@ pub fn verify_direct(args: &VerifyArgs) -> ExitCode {
         .as_deref()
         .expect("clap requires the original source");
     let validators = verify_tools(args);
-    if let Err(cause) = plan::bundle::validate_output_keys(&outputs, &session.keys) {
+    if let Err(cause) = plan::bundle::validate_verification_keys(&outputs, &session.keys) {
         return convert_cli::error("verify", cause, args.json, &session.progress, Some(2));
     }
     session.run("verify", args.json, args.measure, |converter| {

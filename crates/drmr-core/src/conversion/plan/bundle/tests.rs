@@ -384,6 +384,34 @@ fn per_output_keys_must_match_exactly_the_encrypted_output_ids_and_drm_set() {
     assert_eq!(validate_keys(&plan, &keys).unwrap_err(), DRM);
 }
 
+#[test]
+fn existing_identity_hls_can_omit_a_publishing_uri_but_still_requires_valid_key_roles() {
+    let mut output = intent("hls");
+    output.format = OutputFormat::Hls;
+    output.target = TargetProtection::Cenc;
+    let mut configured = OperatorKeys::default();
+    configured.output = Some(
+        crate::conversion::OutputKey::from_hex(
+            "00000000000000000000000000000001",
+            "00112233445566778899aabbccddeeff",
+        )
+        .unwrap(),
+    );
+    let mut keys = BundleOperatorKeys::default();
+    keys.outputs.insert(output.id.clone(), configured);
+    let outputs = [output];
+    assert_eq!(validate_verification_keys(&outputs, &keys), Ok(()));
+    assert_eq!(
+        validate_output_keys(&outputs, &keys),
+        Err(ConversionError("hls-key-uri-required"))
+    );
+    keys.outputs.get_mut("hls").unwrap().output = None;
+    assert_eq!(
+        validate_verification_keys(&outputs, &keys),
+        Err(ConversionError("output-key-role-mismatch"))
+    );
+}
+
 fn assert_typed_output_preflight_rejected(
     output: BundleOutputIntent,
     configured: OperatorKeys,

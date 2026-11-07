@@ -63,6 +63,24 @@ impl OperatorKeys {
         format: Option<OutputFormat>,
         target: TargetProtection,
     ) -> Result<(), ConversionError> {
+        self.validate_verification_settings(format, target)?;
+        if let Some(format) = format {
+            super::signaling::validate_sample_hls_uri(
+                format,
+                target,
+                self.output.as_ref().and_then(|_| self.hls_output_uri()),
+                self.signaling.as_ref(),
+            )?;
+        }
+        Ok(())
+    }
+    /// Existing identity-key HLS outputs carry their own URI. Verification may
+    /// omit that expected value; publishing a new playlist still requires it.
+    pub(in crate::conversion) fn validate_verification_settings(
+        &self,
+        format: Option<OutputFormat>,
+        target: TargetProtection,
+    ) -> Result<(), ConversionError> {
         if let Some(signaling) = &self.signaling
             && let Some(format) = format
         {
@@ -76,7 +94,9 @@ impl OperatorKeys {
             }
             signaling.validate_uri(self.hls_output_uri())?;
         }
-        if let Some(format) = format {
+        if let Some(format) = format
+            && self.hls_output_uri().is_some()
+        {
             super::signaling::validate_sample_hls_uri(
                 format,
                 target,
