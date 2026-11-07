@@ -31,9 +31,12 @@ one estimate fails with `resource-budget`.
 
 These are conservative admission estimates, not operating-system memory or CPU quotas.
 Codecs, allocators, process helpers, and retained result metadata can use more memory.
-The shared capacity is a point-in-time snapshot; memory pressure can change afterward.
-Pool recommendations take another snapshot at admission. Separate CLI processes do not
-share reservations. Batch processing currently runs one asset worker at a time.
+The shared capacity is a point-in-time allocation; memory pressure can change afterward.
+Nested pools schedule within that allocation and keep charging retained track, result
+and manifest state. They do not deduct operating-system headroom again from a later
+free-memory observation, which can already reflect their own retained data. A later
+observation of exhausted memory still refuses new scheduling. Separate CLI processes
+do not share reservations. Batch processing currently runs one asset worker at a time.
 
 When external decoding is requested, the media backend explicitly sets FFmpeg decoder, encoder, and filter thread counts to
 one, and FFprobe decoder threads to one. One CPU token represents that codec allocation;

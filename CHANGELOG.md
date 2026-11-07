@@ -35,6 +35,9 @@ Completed changes are recorded by category before the next release.
 
 ### Fixed
 
+- Keep nested media scheduling within its existing resource allocation when a
+  later free-memory observation falls. Preserve retained-state charges, worker
+  limits, waiting for occupied capacity and refusal when a workload cannot fit.
 - Preserve the final URL's safe filename for downloaded source entrypoints,
   including after redirects. URLs without a filename keep their format-specific
   fallback; existing retained sources and saved plans remain usable.

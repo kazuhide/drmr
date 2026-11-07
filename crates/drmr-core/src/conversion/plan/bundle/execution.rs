@@ -280,13 +280,9 @@ fn budget(
     units: usize,
     contexts: &Contexts,
 ) -> Result<Budget, ConversionError> {
-    let mut budget = Budget::choose(hardware, workload, maximum)
+    let mut budget = Budget::within_allocation(hardware, workload, maximum, capacity)
         .map_err(|_| ConversionError("resource-budget"))?;
-    budget.cpu_tokens = budget.cpu_tokens.min(capacity.0);
-    budget.memory_tokens_bytes = budget
-        .memory_tokens_bytes
-        .min(capacity.1)
-        .saturating_sub(contexts.shared);
+    budget.memory_tokens_bytes = budget.memory_tokens_bytes.saturating_sub(contexts.shared);
     budget.estimated_child_bytes = contexts
         .worker
         .checked_add(contexts.leaf)
