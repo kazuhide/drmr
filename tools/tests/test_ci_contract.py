@@ -193,6 +193,35 @@ class NativeQualification(unittest.TestCase):
         with self.assertRaises(CI.Refusal):
             CI.validate_jobs("ci.yml", jobs, self.source, self.run, self.attempt)
 
+    def test_windows_requires_both_shards_for_each_profile_and_both_archive_jobs(self):
+        expected = {
+            "Windows / minimum / private files and process trees / shard 0",
+            "Windows / minimum / private files and process trees / shard 1",
+            "Windows / stable / private files and process trees / shard 0",
+            "Windows / stable / private files and process trees / shard 1",
+            "Windows CLI release / minimum", "Windows CLI release / stable",
+        }
+        self.assertEqual(set(CI.NATIVE_JOBS["windows.yml"]), expected)
+        jobs = self.jobs("windows.yml")
+        for release in (False, True):
+            CI.validate_jobs("windows.yml", jobs, self.source, self.run, self.attempt, release=release)
+            for index, job in enumerate(jobs):
+                if job["name"] not in expected:
+                    continue
+                with self.subTest(missing=job["name"], release=release), self.assertRaises(CI.Refusal):
+                    CI.validate_jobs("windows.yml", jobs[:index] + jobs[index + 1:],
+                                     self.source, self.run, self.attempt, release=release)
+                for conclusion in ("failure", "cancelled", "skipped", "neutral"):
+                    changed = copy.deepcopy(jobs)
+                    changed[index]["conclusion"] = conclusion
+                    with self.subTest(job=job["name"], conclusion=conclusion), self.assertRaises(CI.Refusal):
+                        CI.validate_jobs("windows.yml", changed, self.source, self.run, self.attempt, release=release)
+        legacy = [job for job in jobs if job["name"] not in expected or job["name"].startswith("Windows CLI")]
+        for index, rust in enumerate(("minimum", "stable"), 100):
+            legacy.append({**jobs[0], "id": index, "name": "Windows / " + rust + " / private files and process trees"})
+        with self.assertRaises(CI.Refusal):
+            CI.validate_jobs("windows.yml", legacy, self.source, self.run, self.attempt)
+
     def test_active_aggregate_is_allowed_but_cannot_qualify_a_release(self):
         jobs = self.jobs()
         jobs[-1].update(status="in_progress", conclusion=None)
@@ -255,6 +284,25 @@ class WorkflowWiring(unittest.TestCase):
         body = text.split("\njobs:\n", 1)[1]
         chunks = re.split(r"^  ([a-z][a-z0-9-]*):\n", body, flags=re.MULTILINE)
         return dict(zip(chunks[1::2], chunks[2::2]))
+
+    def test_windows_shard_identity_and_evidence_are_unique_and_required(self):
+        blocks = self.blocks("windows.yml")
+        native = blocks["native"]
+        self.assertIn("rust: [minimum, stable]", native)
+        self.assertIn("shard: [0, 1]", native)
+        self.assertIn("name: Windows / ${{ matrix.rust }} / private files and process trees / shard ${{ matrix.shard }}", native)
+        self.assertIn("DRMR_CI_SHARD: ${{ matrix.shard }}", native)
+        self.assertIn("DRMR_CI_RUST_PROFILE: ${{ matrix.rust }}", native)
+        self.assertIn("name: windows-native-results-${{ matrix.rust }}-shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}", native)
+        self.assertIn("drmr-native-user/shard-receipt.json", native)
+        self.assertIn("needs: [scope, native, release]", blocks["qualification"])
+        self.assertIn("actions/download-artifact@", blocks["qualification"])
+        self.assertIn("--check-shards", blocks["qualification"])
+        script = (ROOT / ".github/scripts/windows-native-tests.ps1").read_text(encoding="utf-8")
+        self.assertIn("--validate", script)
+        self.assertIn("shard-receipt.json", script)
+        self.assertIn("expected_reports", script)
+        self.assertLess(script.index("--validate"), script.index("Invoke-DrmrNativeTestGroups"))
 
     def test_optimized_native_tests_keep_assertions_and_integer_overflow_checks(self):
         expected = {"CARGO_PROFILE_TEST_OPT_LEVEL": "1",

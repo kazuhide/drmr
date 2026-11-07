@@ -2,6 +2,7 @@
 """Plan complete native test coverage from the compiled libtest inventory."""
 import argparse
 import collections
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -27,6 +28,15 @@ POLICY_CHECKS = (
 ORDER = ("conversion_ts_output", "conversion_abr_hls", "drmr_core",
          "conversion_hls_multi_drm", "conversion_finite_outputs", "conversion_bundle_encryption",
          "conversion_multi_drm", "conversion_ts", "conversion_saved_output_options", "toolrun")
+# Relative placement weights from complete Windows native groups. Process and
+# memory limits are independent; unknown targets still enter the complete plan.
+SHARD_WEIGHTS = {"conversion_abr_hls": 70, "conversion_ts_output": 52, "drmr_core": 26,
+                 "conversion_finite_outputs": 15, "conversion_bundle_encryption": 15,
+                 "conversion_hls_multi_drm": 12}
+REPORT_TESTS = {
+    "bbb-media-report.json": "the_real_cli_saves_converts_and_independently_verifies_the_bbb_multi_drm_plan",
+    "conversion-report.json": "the_real_cli_verifies_all_sixteen_bbb_protection_routes",
+}
 
 
 def parse_listing(text):
@@ -133,6 +143,121 @@ def validate_selection(item, text):
         raise ValueError("Native test filters changed the planned coverage")
 
 
+def canonical(value):
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
+def portable_plan(groups):
+    return [{**item, "executable": re.split(r"[/\\]", item["executable"])[-1]} for item in groups]
+
+
+def validate_shards(groups, shards):
+    early = [item for item in groups if item["priority"]]
+    remaining = [item for item in groups if not item["priority"]]
+    if len(early) != 3 or len(shards) != 2 or any(
+            canonical(shard[:3]) != canonical(early) for shard in shards):
+        raise ValueError("Every native shard must retain the three early guards")
+    selected = [item for shard in shards for item in shard[3:]]
+    expected = collections.Counter((item["executable"], test) for item in remaining for test in item["tests"])
+    actual = collections.Counter((item["executable"], test) for item in selected for test in item["tests"])
+    if (actual != expected or any(count != 1 for count in actual.values())
+            or collections.Counter(map(canonical, selected)) != collections.Counter(map(canonical, remaining))):
+        raise ValueError("Native shard coverage is incomplete, repeated or changed")
+
+
+def shard_plans(groups):
+    early = [item for item in groups if item["priority"]]
+    remaining = [item for item in groups if not item["priority"]]
+    assigned, loads = [[], []], [0, 0]
+    def weight(index):
+        item = remaining[index]
+        return SHARD_WEIGHTS.get(name(item["executable"]), max(1, len(item["tests"])))
+    for index in sorted(range(len(remaining)), key=lambda index: (-weight(index), index)):
+        shard = min(range(2), key=lambda shard: (loads[shard], shard))
+        assigned[shard].append(index)
+        loads[shard] += weight(index)
+    shards = [early + [remaining[index] for index in sorted(indexes)] for indexes in assigned]
+    validate_shards(groups, shards)
+    return shards
+
+
+def make_receipt(groups, identity):
+    if (not isinstance(identity, dict) or set(identity) != {
+            "source_sha", "rust_profile", "shard_index", "shard_count", "run_id", "run_attempt"}
+            or not isinstance(identity["source_sha"], str)
+            or not re.fullmatch(r"[0-9a-f]{40}", identity["source_sha"])
+            or identity["rust_profile"] not in ("minimum", "stable")
+            or type(identity["shard_index"]) is not int or identity["shard_index"] not in (0, 1)
+            or type(identity["shard_count"]) is not int or identity["shard_count"] != 2
+            or any(type(identity[key]) is not int or identity[key] < 1 for key in ("run_id", "run_attempt"))):
+        raise ValueError("Invalid native shard identity")
+    shards = shard_plans(groups)
+    selected = shards[identity["shard_index"]]
+    reports = []
+    for report, test in REPORT_TESTS.items():
+        owners = [item for item in groups if name(item["executable"]) == "bbb_media" and test in item["tests"]]
+        if len(owners) != 1:
+            raise ValueError("Native media report coverage is missing or ambiguous")
+        if owners[0] in selected:
+            reports.append(report)
+    complete = portable_plan(groups)
+    digest = lambda value: hashlib.sha256(canonical(value).encode("utf-8")).hexdigest()
+    return {"schema_version": 1, **identity, "inventory_sha256": digest(complete),
+            "plan_sha256": digest(selected), "expected_reports": reports, "complete_plan": complete}
+
+
+def validate_receipt(groups, selected, receipt, identity):
+    expected = make_receipt(groups, identity)
+    if (canonical(selected) != canonical(shard_plans(groups)[identity["shard_index"]])
+            or canonical(receipt) != canonical(expected)):
+        raise ValueError("Native shard receipt does not match this execution")
+
+
+def validate_run_receipts(evidence, source, run_id, attempt):
+    if not isinstance(evidence, list) or len(evidence) != 4:
+        raise ValueError("Both Windows profiles require both native shard receipts")
+    profiles = {rust: {} for rust in ("minimum", "stable")}
+    for row in evidence:
+        receipt, selected = row["receipt"], row["plan"]
+        identity = {key: receipt[key] for key in
+                    ("source_sha", "rust_profile", "shard_index", "shard_count", "run_id", "run_attempt")}
+        expected = make_receipt(receipt["complete_plan"], identity)
+        index, rust = identity["shard_index"], identity["rust_profile"]
+        expected["plan_sha256"] = hashlib.sha256(canonical(selected).encode("utf-8")).hexdigest()
+        artifact = f"windows-native-results-{rust}-shard-{index}-attempt-{attempt}"
+        if (identity["source_sha"] != source or identity["run_id"] != run_id
+                or identity["run_attempt"] != attempt or index in profiles[rust]
+                or row["artifact"] != artifact or canonical(receipt) != canonical(expected)
+                or canonical(portable_plan(selected)) != canonical(shard_plans(receipt["complete_plan"])[index])
+                or sorted(row["reports"]) != sorted(expected["expected_reports"])):
+            raise ValueError("Native shard receipts do not belong to the same qualification")
+        profiles[rust][index] = row
+    for shards in profiles.values():
+        if set(shards) != {0, 1}:
+            raise ValueError("A required native shard receipt is missing")
+        complete = shards[0]["receipt"]["complete_plan"]
+        if canonical(complete) != canonical(shards[1]["receipt"]["complete_plan"]):
+            raise ValueError("Native shards used different compiled inventories")
+        validate_shards(complete, [portable_plan(shards[index]["plan"]) for index in range(2)])
+        reports = collections.Counter(report for row in shards.values() for report in row["reports"])
+        if reports != collections.Counter({report: 1 for report in REPORT_TESTS}):
+            raise ValueError("Each Windows profile must retain each media report once")
+
+
+def check_shard_directory(directory, source, run_id, attempt):
+    artifacts = {f"windows-native-results-{rust}-shard-{index}-attempt-{attempt}"
+                 for rust in ("minimum", "stable") for index in range(2)}
+    if {path.name for path in directory.iterdir()} != artifacts:
+        raise ValueError("Native evidence artifacts are missing or belong to another configuration")
+    evidence = []
+    for artifact in sorted(artifacts):
+        path = directory / artifact / "drmr-native-user"
+        evidence.append({"artifact": artifact, "receipt": read_json(path / "shard-receipt.json"),
+                         "plan": read_json(path / "test-plan.json"),
+                         "reports": [report for report in REPORT_TESTS if (path / report).is_file()]})
+    validate_run_receipts(evidence, source, run_id, attempt)
+
+
 def list_tests(executable, arguments=()):
     result = subprocess.run([executable, *arguments, "--list", "--format", "terse"],
                             capture_output=True, text=True, check=True, timeout=60)
@@ -152,19 +277,72 @@ def plan(executables, *, windows=False, split_transport=True):
     return groups
 
 
+def read_json(path):
+    def unique(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError("Ambiguous native plan JSON")
+            value[key] = item
+        return value
+    def constant(_value):
+        raise ValueError("Invalid native plan JSON")
+    return json.loads(path.read_text(encoding="utf-8-sig"), object_pairs_hook=unique, parse_constant=constant)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--executables", type=Path, required=True)
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--executables", type=Path)
+    parser.add_argument("--output", type=Path)
     parser.add_argument("--windows", action="store_true")
+    parser.add_argument("--shard-index", type=int, choices=(0, 1))
+    parser.add_argument("--source-sha")
+    parser.add_argument("--rust-profile", choices=("minimum", "stable"))
+    parser.add_argument("--run-id", type=int)
+    parser.add_argument("--run-attempt", type=int)
+    parser.add_argument("--receipt", type=Path)
+    parser.add_argument("--validate", action="store_true")
+    parser.add_argument("--check-shards", type=Path)
     args = parser.parse_args()
-    paths = json.loads(args.executables.read_text(encoding="utf-8-sig"))
+    if args.check_shards is not None:
+        if any((args.executables, args.output, args.windows, args.shard_index is not None,
+                args.rust_profile, args.receipt, args.validate)):
+            parser.error("Qualification consumes only the current run's shard evidence")
+        check_shard_directory(args.check_shards, args.source_sha, args.run_id, args.run_attempt)
+        print("Validated complete Windows native profiles from four matching shard receipts.")
+        return
+    if args.executables is None or args.output is None:
+        parser.error("Planning requires compiled executables and an output path")
+    identity = None
+    if args.shard_index is not None:
+        if not args.windows or args.receipt is None:
+            parser.error("A Windows shard requires its identity and receipt")
+        identity = {"source_sha": args.source_sha, "rust_profile": args.rust_profile,
+                    "shard_index": args.shard_index, "shard_count": 2,
+                    "run_id": args.run_id, "run_attempt": args.run_attempt}
+    elif any(value is not None for value in (args.source_sha, args.rust_profile, args.run_id,
+                                              args.run_attempt, args.receipt)) or args.validate:
+        parser.error("Shard identity and receipt options require a Windows shard")
+    paths = read_json(args.executables)
     if not isinstance(paths, list) or not all(isinstance(path, str) for path in paths):
         raise ValueError("Invalid native test binaries")
     groups = plan(paths, windows=args.windows)
+    receipt = None
+    if identity is not None:
+        receipt = make_receipt(groups, identity)
+        selected = shard_plans(groups)[args.shard_index]
+        if args.validate:
+            validate_receipt(groups, read_json(args.output), read_json(args.receipt), identity)
+            print("Validated the native shard identity, complete inventory and selected plan.")
+            return
+        groups = selected
     with args.output.open("x", encoding="utf-8") as output:
         json.dump(groups, output)
         output.write("\n")
+    if receipt is not None:
+        with args.receipt.open("x", encoding="utf-8") as output:
+            json.dump(receipt, output)
+            output.write("\n")
     print(f"Planned {sum(len(item['tests']) for item in groups)} tests in {len(groups)} complete native groups.")
 
 
