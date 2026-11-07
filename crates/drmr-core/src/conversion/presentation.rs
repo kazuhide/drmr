@@ -722,26 +722,15 @@ fn validate_request(request: &TrackConversionRequest<'_>) -> Result<(), Conversi
     if request.target == TargetProtection::HlsSampleAes {
         return Err(ConversionError("target-requires-ts-output"));
     }
-    if request
-        .hls_output_key
-        .and_then(HlsOutputKey::associated_iv)
-        .is_some()
-    {
-        return Err(ConversionError("output-iv-not-used"));
-    }
+    super::key_file::validate_output_iv(request.target, request.hls_output_key)?;
     if request.target == TargetProtection::HlsAes128 && request.format != OutputFormat::Hls {
         return Err(ConversionError("target-requires-hls-output"));
     }
-    if matches!(
+    super::key_file::validate_output_key_role(
         request.target,
-        TargetProtection::Cenc | TargetProtection::Cbcs
-    ) != request.output_key.is_some()
-    {
-        return Err(ConversionError("output-key-role-mismatch"));
-    }
-    if (request.target == TargetProtection::HlsAes128) != request.hls_output_key.is_some() {
-        return Err(ConversionError("output-key-role-mismatch"));
-    }
+        request.output_key,
+        request.hls_output_key,
+    )?;
     Ok(())
 }
 /// Select the source policy for conversion or for comparing supported existing media.
@@ -2544,31 +2533,18 @@ fn validate_output(request: &ConversionRequest<'_>) -> Result<(), ConversionErro
         ) {
             return Err(ConversionError("ts-output-profile-not-supported"));
         }
-        if request.output_key.is_some()
-            || request.hls_key_uri.is_some()
-            || (request.target != TargetProtection::Clear) != request.hls_output_key.is_some()
-        {
+        if request.hls_key_uri.is_some() {
             return Err(ConversionError("output-key-role-mismatch"));
         }
-        if request.target == TargetProtection::HlsSampleAes
-            && request
-                .hls_output_key
-                .and_then(HlsOutputKey::associated_iv)
-                .is_none()
-        {
-            return Err(ConversionError("hls-sample-output-iv-required"));
-        }
+        super::key_file::validate_output_key_role(
+            request.target,
+            request.output_key,
+            request.hls_output_key,
+        )?;
     } else if request.target == TargetProtection::HlsSampleAes {
         return Err(ConversionError("target-requires-ts-output"));
     }
-    if request.target != TargetProtection::HlsSampleAes
-        && request
-            .hls_output_key
-            .and_then(HlsOutputKey::associated_iv)
-            .is_some()
-    {
-        return Err(ConversionError("output-iv-not-used"));
-    }
+    super::key_file::validate_output_iv(request.target, request.hls_output_key)?;
     Ok(())
 }
 impl Converter {

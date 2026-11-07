@@ -460,6 +460,8 @@ pub(crate) fn error(
                 | "output-key-required"
                 | "output-key-not-used"
                 | "output-key-role-mismatch"
+                | "hls-sample-output-iv-required"
+                | "output-iv-not-used"
                 | "hls-key-uri-required"
                 | "multi-track-mp4-output-not-supported"
                 | "target-requires-hls-output"
@@ -825,6 +827,11 @@ pub fn convert(args: &ConvertArgs) -> ExitCode {
         Ok(keys) => keys,
         Err(cause) => return error("convert", cause, args.json, &progress, None),
     };
+    if let Err(cause) =
+        keys.validate_output_settings(args.format, args.to.expect("clap requires a direct target"))
+    {
+        return error("convert", cause, args.json, &progress, Some(2));
+    }
     let converter = configured_converter(args, &keys, progress.clone(), cancellation.stop.clone());
     let local_format = match configured_format(&converter, args, &input, &progress) {
         Ok(value) => value,

@@ -38,6 +38,10 @@ Completed changes are recorded by category before the next release.
 
 ### Fixed
 
+- Check output key roles, initialization vectors, DRM key identifiers and
+  declared encryption schemes before source acquisition, including quick
+  single-output conversion. Match named keys to the output configuration and
+  keep output keys optional when saving a plan.
 - Keep nested media scheduling within its existing resource allocation when a
   later free-memory observation falls. Preserve retained-state charges, worker
   limits, waiting for occupied capacity and refusal when a workload cannot fit.

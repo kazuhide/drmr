@@ -400,28 +400,15 @@ fn validate_request(request: &ConversionRequest<'_>) -> Result<(), ConversionErr
     ) {
         return Err(ConversionError("ts-output-profile-not-supported"));
     }
-    if request.output_key.is_some()
-        || request.hls_key_uri.is_some()
-        || (request.target != TargetProtection::Clear) != request.hls_output_key.is_some()
-    {
+    if request.hls_key_uri.is_some() {
         return Err(ConversionError("output-key-role-mismatch"));
     }
-    if request.target == TargetProtection::HlsSampleAes
-        && request
-            .hls_output_key
-            .and_then(super::super::HlsOutputKey::associated_iv)
-            .is_none()
-    {
-        return Err(ConversionError("hls-sample-output-iv-required"));
-    }
-    if request.target != TargetProtection::HlsSampleAes
-        && request
-            .hls_output_key
-            .and_then(super::super::HlsOutputKey::associated_iv)
-            .is_some()
-    {
-        return Err(ConversionError("output-iv-not-used"));
-    }
+    super::super::key_file::validate_output_key_role(
+        request.target,
+        request.output_key,
+        request.hls_output_key,
+    )?;
+    super::super::key_file::validate_output_iv(request.target, request.hls_output_key)?;
     Ok(())
 }
 

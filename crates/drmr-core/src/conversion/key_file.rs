@@ -5,6 +5,7 @@ use super::{
     Aes128Key, ContentKey, ConversionError, HlsInputKeys, HlsOutputKey, InputKeys, OutputKey,
     SegmentIv,
 };
+use crate::inspection::{OutputFormat, TargetProtection};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -54,6 +55,37 @@ impl OperatorKeys {
             .map(String::as_str)
             .or_else(|| self.hls_output.as_ref().map(HlsOutputKey::key_uri))
     }
+    /// Check output keys and signaling without opening source media.
+    /// Without a known format, defer format-specific checks. Success does not
+    /// establish that source media is eligible for conversion.
+    pub fn validate_output_settings(
+        &self,
+        format: Option<OutputFormat>,
+        target: TargetProtection,
+    ) -> Result<(), ConversionError> {
+        if let Some(signaling) = &self.signaling
+            && let Some(format) = format
+        {
+            signaling.validate_profile(format, target)?;
+        }
+        validate_output_key_role(target, self.output.as_ref(), self.hls_output.as_ref())?;
+        validate_output_iv(target, self.hls_output.as_ref())?;
+        if let Some(signaling) = &self.signaling {
+            if let Some(key) = &self.output {
+                signaling.validate_output_key_for_target(key, Some(target))?;
+            }
+            signaling.validate_uri(self.hls_output_uri())?;
+        }
+        if let Some(format) = format {
+            super::signaling::validate_sample_hls_uri(
+                format,
+                target,
+                self.output.as_ref().and_then(|_| self.hls_output_uri()),
+                self.signaling.as_ref(),
+            )?;
+        }
+        Ok(())
+    }
     /// Match output HLS playlist declarations without retrieving the advertised URI.
     pub fn output_hls_verification_keys(&self) -> Result<HlsInputKeys, ConversionError> {
         self.hls_output.as_ref().map_or_else(
@@ -79,6 +111,38 @@ impl OperatorKeys {
             },
         )
     }
+}
+
+pub(in crate::conversion) fn validate_output_key_role(
+    target: TargetProtection,
+    output_key: Option<&OutputKey>,
+    hls_output_key: Option<&HlsOutputKey>,
+) -> Result<(), ConversionError> {
+    if matches!(target, TargetProtection::Cenc | TargetProtection::Cbcs) != output_key.is_some()
+        || matches!(
+            target,
+            TargetProtection::HlsAes128 | TargetProtection::HlsSampleAes
+        ) != hls_output_key.is_some()
+    {
+        return Err(ConversionError("output-key-role-mismatch"));
+    }
+    Ok(())
+}
+
+pub(in crate::conversion) fn validate_output_iv(
+    target: TargetProtection,
+    hls_output_key: Option<&HlsOutputKey>,
+) -> Result<(), ConversionError> {
+    let has_iv = hls_output_key
+        .and_then(HlsOutputKey::associated_iv)
+        .is_some();
+    if target == TargetProtection::HlsSampleAes && !has_iv {
+        return Err(ConversionError("hls-sample-output-iv-required"));
+    }
+    if target != TargetProtection::HlsSampleAes && has_iv {
+        return Err(ConversionError("output-iv-not-used"));
+    }
+    Ok(())
 }
 
 #[derive(Deserialize)]

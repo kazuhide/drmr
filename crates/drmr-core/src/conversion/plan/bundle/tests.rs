@@ -383,3 +383,84 @@ fn per_output_keys_must_match_exactly_the_encrypted_output_ids_and_drm_set() {
     plan.outputs[0].drms.push(DrmSystem::PlayReady);
     assert_eq!(validate_keys(&plan, &keys).unwrap_err(), DRM);
 }
+
+fn assert_typed_output_preflight_rejected(
+    output: BundleOutputIntent,
+    configured: OperatorKeys,
+    expected: ConversionError,
+) {
+    let root = crate::native::private_tempdir().unwrap();
+    let source = root.path().join("missing.mpd");
+    let destination = root.path().join("result");
+    assert!(!source.exists());
+    let mut keys = BundleOperatorKeys::default();
+    keys.outputs.insert(output.id.clone(), configured);
+    let outputs = [output];
+    let preflight = validate_output_keys(&outputs, &keys);
+    let runner = std::sync::Arc::new(crate::toolrun::ToolRunner::new(
+        std::sync::Arc::new(crate::toolrun::Secrets::new()),
+        std::sync::Arc::new(crate::events::NoSink),
+    ));
+    let converter = Converter::new(runner, "must-not-start-packager", "must-not-start-decoder");
+    let execution = converter.convert_bundle(
+        &source,
+        &outputs,
+        &destination,
+        &keys,
+        &ManifestValidationTools::default(),
+    );
+    assert_eq!(
+        (preflight, execution.err()),
+        (Err(expected), Some(expected)),
+        "typed output errors must take precedence over the missing source"
+    );
+    assert!(!destination.exists());
+}
+
+#[test]
+fn typed_output_preflight_rejects_fairplay_without_uri() {
+    let mut output = intent("hls");
+    output.format = OutputFormat::Hls;
+    output.target = TargetProtection::Cbcs;
+    output.drms = vec![DrmSystem::FairPlay];
+    let mut keys = OperatorKeys::default();
+    keys.output = Some(
+        crate::conversion::OutputKey::from_hex(
+            "00000000000000000000000000000001",
+            "00112233445566778899aabbccddeeff",
+        )
+        .unwrap(),
+    );
+    keys.signaling = Some(OutputSignaling::multi_drm(None, None, true).unwrap());
+    assert_typed_output_preflight_rejected(
+        output,
+        keys,
+        ConversionError("output-signaling-invalid"),
+    );
+}
+
+#[test]
+fn typed_output_preflight_rejects_widevine_kid_mismatch() {
+    let declared_kid = "00000000000000000000000000000001";
+    let payload = hex::decode(format!("1210{declared_kid}")).unwrap();
+    let pssh =
+        crate::playready::build_pssh_box(&crate::playready::WIDEVINE_SYSTEM_ID, &payload).unwrap();
+    let mut output = intent("dash");
+    output.target = TargetProtection::Cenc;
+    output.drms = vec![DrmSystem::Widevine];
+    let mut keys = OperatorKeys::default();
+    keys.output = Some(
+        crate::conversion::OutputKey::from_hex(
+            "00000000000000000000000000000002",
+            "00112233445566778899aabbccddeeff",
+        )
+        .unwrap(),
+    );
+    keys.signaling =
+        Some(OutputSignaling::multi_drm(Some(&hex::encode(pssh)), None, false).unwrap());
+    assert_typed_output_preflight_rejected(
+        output,
+        keys,
+        ConversionError("output-signaling-invalid"),
+    );
+}

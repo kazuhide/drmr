@@ -1,4 +1,7 @@
 //! Remote input validation must finish before any network or media work starts.
+#[path = "support/output_key_preflight.rs"]
+mod output_key_preflight;
+
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::Path;
