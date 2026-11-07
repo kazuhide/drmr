@@ -24,6 +24,12 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::ThreadId;
 use std::time::{Duration, Instant};
 
+mod revalidation;
+pub(crate) use revalidation::{CopyReservation, RevalidatedFetch, Revalidation, StrongEtag};
+
+#[cfg(test)]
+mod revalidation_tests;
+
 /// One network read (`_CHUNK`).
 const CHUNK: usize = 64 * 1024;
 /// One local read (`_LOCAL_CHUNK`).
@@ -181,10 +187,12 @@ impl Fetcher {
 
     pub(crate) fn reserve(&self, count: u64) -> Result<(), SourceError> {
         let mut shared = lock(&self.shared);
-        if shared.used.saturating_add(count) > self.policy.max_total_bytes {
-            return Err(token("byte-budget-exceeded"));
-        }
-        shared.used += count;
+        let used = shared
+            .used
+            .checked_add(count)
+            .filter(|used| *used <= self.policy.max_total_bytes)
+            .ok_or_else(|| token("byte-budget-exceeded"))?;
+        shared.used = used;
         Ok(())
     }
 
@@ -223,6 +231,19 @@ impl Fetcher {
 
     pub(crate) fn release_disk(&self, count: u128) {
         lock(&self.shared).inflight -= count;
+    }
+
+    /// Reserve space for an extra immutable cache copy, in addition to in-flight bodies.
+    pub(crate) fn reserve_copy(&self, size: u64) -> Result<CopyReservation<'_>, Failure> {
+        if self.stop.is_set() {
+            return Err(Failure::Cancelled);
+        }
+        self.claim_disk(u128::from(size))
+            .map_err(|fault| escape_os(fault, "OSError"))?;
+        Ok(CopyReservation {
+            fetcher: self,
+            size: u128::from(size),
+        })
     }
 
     // --- public reads ----------------------------------------------------------------------
@@ -329,6 +350,29 @@ impl Fetcher {
         self.fetch_file_created(url, destination, None, true)
     }
 
+    /// Opt in to private strong-validator recording and conditional reuse of verified bytes.
+    /// A 304 charges the cached size once, but creates no file and receives no body bytes.
+    pub(crate) fn fetch_revalidated(
+        &self,
+        url: &str,
+        destination: &Path,
+        byte_range: Option<ByteRange>,
+        prior: Option<&Revalidation>,
+    ) -> Result<RevalidatedFetch, Failure> {
+        self.fetch_file_revalidated(url, destination, byte_range, false, true, prior)
+    }
+
+    /// The entrypoint variant retains bounded format sniffing on a fresh response. Prior
+    /// entrypoint receipts are used only for known MP4 bodies, never mutable manifests.
+    pub(crate) fn fetch_entrypoint_revalidated(
+        &self,
+        url: &str,
+        destination: &Path,
+        prior: Option<&Revalidation>,
+    ) -> Result<RevalidatedFetch, Failure> {
+        self.fetch_file_revalidated(url, destination, None, true, true, prior)
+    }
+
     fn fetch_file_created(
         &self,
         url: &str,
@@ -336,12 +380,37 @@ impl Fetcher {
         byte_range: Option<ByteRange>,
         entrypoint: bool,
     ) -> Result<(Fetched, crate::native::FileIdentity), Failure> {
+        match self.fetch_file_revalidated(url, destination, byte_range, entrypoint, false, None)? {
+            RevalidatedFetch::Fresh {
+                fetched, created, ..
+            } => Ok((fetched, created)),
+            RevalidatedFetch::NotModified { .. } => Err(Failure::source("source-http-failed")),
+        }
+    }
+
+    fn fetch_file_revalidated(
+        &self,
+        url: &str,
+        destination: &Path,
+        byte_range: Option<ByteRange>,
+        entrypoint: bool,
+        record_validator: bool,
+        prior: Option<&Revalidation>,
+    ) -> Result<RevalidatedFetch, Failure> {
+        if record_validator && byte_range.is_some_and(|range| range.length == 0) {
+            return Err(Failure::source("invalid-byte-range"));
+        }
+        if let Some(prior) = prior {
+            prior.check_range(byte_range)?;
+        }
         let mut sink = Sink::new(
             self,
             Some(destination.to_path_buf()),
             self.policy.max_resource_bytes,
             false,
         );
+        sink.revalidation.record = record_validator;
+        sink.revalidation.prior = prior.cloned();
         if entrypoint {
             sink.entrypoint_prefix = Some(Vec::new());
             sink.cap = self
@@ -358,18 +427,23 @@ impl Fetcher {
             });
         match result {
             Ok(effective) => {
+                if sink.revalidation.not_modified {
+                    sink.transfer.complete();
+                    return Ok(RevalidatedFetch::NotModified { effective });
+                }
                 let created = sink
                     .created
                     .ok_or_else(|| Failure::Source(token("snapshot-write-failed")))?;
                 sink.transfer.complete();
-                Ok((
-                    Fetched {
+                Ok(RevalidatedFetch::Fresh {
+                    fetched: Fetched {
                         effective,
                         sha256: sink.digest(),
                         size: sink.size,
                     },
                     created,
-                ))
+                    etag: sink.revalidation.etag.take(),
+                })
             }
             Err(failure) => {
                 sink.discard();
@@ -400,6 +474,9 @@ impl Fetcher {
         } else {
             self.fetch_remote(url, sink, byte_range)?
         };
+        if sink.revalidation.not_modified {
+            return Ok(effective);
+        }
         if let Some(range) = byte_range
             && !sink.metadata.ignored
             && sink.size != range.length
@@ -518,6 +595,7 @@ impl Fetcher {
         byte_range: Option<ByteRange>,
     ) -> Result<String, Failure> {
         let mut url = url.to_string();
+        let prior = sink.revalidation.prior.clone();
         for _ in 0..HOPS {
             if self.url_limit.is_some_and(|limit| url.len() > limit) {
                 return Err(Failure::Source(token("source-url-limit")));
@@ -537,8 +615,11 @@ impl Fetcher {
                 _ => default_port,
             };
             let host = parts.hostname().unwrap_or_default();
-            let addresses = self.resolve_host(&host, port)?;
             let mut headers = self.policy.headers_for(&origin);
+            if sink.revalidation.record {
+                revalidation::check_headers(&headers)?;
+            }
+            let addresses = self.resolve_host(&host, port)?;
             set_header(&mut headers, "Accept-Encoding", "identity");
             if let Some(range) = byte_range {
                 let last = u128::from(range.offset) + u128::from(range.length) - 1;
@@ -548,6 +629,10 @@ impl Fetcher {
                     &format!("bytes={}-{last}", range.offset),
                 );
             }
+            let revalidation = prior.as_ref().filter(|prior| prior.matches(&url));
+            if let Some(prior) = revalidation {
+                set_header(&mut headers, "If-None-Match", prior.strong_etag.as_str());
+            }
             let request = Request {
                 url: &url,
                 parts: &parts,
@@ -556,6 +641,7 @@ impl Fetcher {
                 addresses: &addresses,
                 headers: &headers,
                 byte_range,
+                revalidation,
             };
             match self.attempts(&request, sink)? {
                 Hop::Done => return Ok(url),
@@ -685,6 +771,9 @@ impl Fetcher {
         if response.status >= 500 && attempt + 1 < self.policy.attempts as usize {
             return Ok(Step::ServerError);
         }
+        if response.status == 304 {
+            return revalidation::reuse(&response, request, sink);
+        }
         let expected = if request.byte_range.is_some() {
             206
         } else {
@@ -701,6 +790,7 @@ impl Fetcher {
         if encoding.to_lowercase() != "identity" {
             return Err(fatal("unsupported-content-encoding"));
         }
+        sink.revalidation.record(&response);
         let expected_length = response.declared_length();
         if let Some(range) = request.byte_range
             && !ignored_range
@@ -855,6 +945,7 @@ struct Request<'a> {
     addresses: &'a [SocketAddr],
     headers: &'a [(String, String)],
     byte_range: Option<ByteRange>,
+    revalidation: Option<&'a Revalidation>,
 }
 
 /// `headers[name] = value` on a dict: the exact key keeps its place, a new key goes last.
@@ -982,6 +1073,7 @@ pub(crate) struct Sink<'f> {
     /// At most 64 bytes used to distinguish a manifest from streamed binary media.
     entrypoint_prefix: Option<Vec<u8>>,
     metadata: MetadataState,
+    revalidation: revalidation::State,
     transfer: super::progress::Transfer,
 }
 
@@ -1003,6 +1095,7 @@ impl<'f> Sink<'f> {
             claim: 0,
             entrypoint_prefix: None,
             metadata: MetadataState::default(),
+            revalidation: revalidation::State::default(),
             transfer: super::progress::Transfer::new(fetcher.progress.as_ref()),
         }
     }
@@ -1019,6 +1112,8 @@ impl<'f> Sink<'f> {
         self.claim = 0;
         self.metadata.ignored = false;
         self.metadata.total = None;
+        self.revalidation.etag = None;
+        self.revalidation.not_modified = false;
         if self.entrypoint_prefix.is_some() {
             self.entrypoint_prefix = Some(Vec::new());
             self.cap = self
@@ -1045,6 +1140,20 @@ impl<'f> Sink<'f> {
             self.fetcher.release_disk(self.claim);
             self.claim = 0;
         }
+    }
+
+    /// Reused bytes count toward current acquisition budgets, but never network progress.
+    fn reuse(&mut self, size: u64) -> Result<(), Fault> {
+        if self.fetcher.stop.is_set() {
+            return Err(Fault::Cancelled);
+        }
+        if size > self.fetcher.policy.max_resource_bytes {
+            return Err(Fault::Source(token("byte-budget-exceeded")));
+        }
+        self.fetcher.reserve(size)?;
+        self.reserved += size;
+        self.revalidation.not_modified = true;
+        Ok(())
     }
 
     fn write(&mut self, chunk: &[u8]) -> Result<(), Fault> {

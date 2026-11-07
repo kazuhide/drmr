@@ -1,7 +1,49 @@
 //! Remote-input classification and destination checks performed before acquisition.
+use clap::Args;
 use drmr_core::conversion::ConversionError;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+
+/// Retained URL acquisition settings shared by analyze, saved planning and conversion.
+#[derive(Clone, Default, Args)]
+pub struct DownloadOptions {
+    /// New directory retaining the original input; required for complete URL input.
+    #[arg(long)]
+    #[arg(help_heading = "Input", value_name = "DIR")]
+    pub download_dir: Option<PathBuf>,
+    /// Private JSON settings for allowed origins, authentication and bounded retrieval.
+    #[arg(long = "fetch-config")]
+    #[arg(help_heading = "Input", value_name = "FILE")]
+    pub fetch_policy: Option<PathBuf>,
+    /// Keep completed originals from the first opt-in attempt for a retry after failed URL acquisition.
+    /// Requires URL input and --download-dir naming a new directory. Cached originals are revalidated;
+    /// successful acquisition removes the resume cache. Use completed downloads as local input.
+    #[arg(long, requires = "download_dir")]
+    #[arg(help_heading = "Input")]
+    pub resume_download: bool,
+}
+
+impl DownloadOptions {
+    pub(crate) fn protect_report(&self) -> Result<(), ConversionError> {
+        if let Some(directory) = &self.download_dir {
+            crate::reporting::protect(directory, true)?;
+            if self.resume_download {
+                // Match the documented sibling cache; reports must never become
+                // unrecognized entries in an otherwise reusable source cache.
+                let source = resolved(directory)?;
+                let mut name = std::ffi::OsString::from(".");
+                name.push(
+                    source
+                        .file_name()
+                        .ok_or(ConversionError("download-destination-unsafe"))?,
+                );
+                name.push(".drmr-download");
+                crate::reporting::protect(&source.with_file_name(name), true)?;
+            }
+        }
+        Ok(())
+    }
+}
 
 pub enum Input {
     Local(PathBuf),

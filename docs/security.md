@@ -55,6 +55,16 @@ licenses and does not decrypt media. It streams resources into private files;
 decryption and media admission use separately supplied keys afterward. The
 download summary includes local paths, not the source URL or request headers.
 
+Explicit [`--resume-download`](download-resume.md) retains complete original
+resources in an owner-private sibling cache after interrupted acquisition.
+Its receipts contain URL hashes and bounded strong validators, not request
+headers or encryption keys. Original manifest blobs can still contain signed
+URLs. Each retry applies the current network policy and revalidates cached
+bytes before copying them. File identities, ownership and locks prevent unsafe
+adoption and concurrent use; they do not isolate an attacker controlling the
+same account. Cache data is not encrypted at rest. Changed or unknown entries
+are preserved when automatic cleanup cannot be confirmed.
+
 `analyze --metadata-only URL` uses the same request policy for bounded temporary
 metadata reads, without retaining source media. It fetches HLS/DASH declarations
 or MP4 structural ranges, not media segments, keys or licenses. MP4 media

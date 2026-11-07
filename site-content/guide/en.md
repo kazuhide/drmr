@@ -665,6 +665,8 @@ drmr convert source/master.m3u8 --output-config outputs.json \
 
 A completed source can be used offline, including after a later conversion failure. Use the retained entrypoint, such as `source/manifest.mpd` for DASH or `source/video.mp4` for MP4. Earlier downloads named `input.*` and existing saved plans remain usable at their recorded paths. Incomplete downloads are refused.
 
+[Download resume (1.3 development)](https://github.com/kazuhide/drmr/blob/main/docs/download-resume.md).
+
 Source bytes and local references are checked through final publication. Changed or missing source files prevent publication. To retry, use the local entrypoint instead of passing an existing download directory to another URL acquisition.
 
 `convert --plan-file` refuses overrides of source, format, protection and destination. Create a new plan for different conditions or a different destination. Use `verify --plan-file` for a later independent check of a completed result.

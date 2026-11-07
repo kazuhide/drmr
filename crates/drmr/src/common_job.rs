@@ -227,8 +227,11 @@ fn invoke(request: ChildRequest) -> ExitCode {
             analyze_cli::analyze(&analyze_cli::AnalyzeArgs {
                 input,
                 metadata_only: false,
-                download_dir,
-                fetch_policy,
+                acquisition: crate::download_cli::DownloadOptions {
+                    download_dir,
+                    fetch_policy,
+                    ..Default::default()
+                },
                 keys_file: keys,
                 packager_bin: tools.packager_bin,
                 max_workers: workers,
@@ -255,8 +258,7 @@ fn invoke(request: ChildRequest) -> ExitCode {
             outputs: Some(output_spec_file),
             output_dir: Some(output_root),
             output_file: None,
-            download_dir: None,
-            fetch_policy: None,
+            acquisition: crate::download_cli::DownloadOptions::default(),
             manifest_profile: None,
             external_manifest_check: false,
             keys_file: keys,
@@ -272,8 +274,7 @@ fn invoke(request: ChildRequest) -> ExitCode {
         } => convert_cli::convert(&convert_cli::ConvertArgs {
             input: None,
             plan: Some(plan_file),
-            download_dir: None,
-            fetch_policy: None,
+            acquisition: crate::download_cli::DownloadOptions::default(),
             to: None,
             format: None,
             processing,

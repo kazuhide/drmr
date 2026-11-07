@@ -1,4 +1,6 @@
 //! Remote acquisition preserves source bytes and publishes only a complete local graph.
+#[path = "conversion_download/resume.rs"]
+mod resume;
 use drmr_core::{
     concurrency::Stop,
     conversion::{ConversionRequest, Converter, HlsInputKeys, InputKeys},

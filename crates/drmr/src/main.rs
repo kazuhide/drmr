@@ -187,23 +187,22 @@ fn protect_report(command: &Command) -> Result<(), drmr_core::conversion::Conver
     match command {
         Command::Analyze(args) => {
             source(&args.input)?;
-            files(&[args.keys_file.as_ref(), args.fetch_policy.as_ref()])?;
-            if let Some(path) = &args.download_dir {
-                reporting::protect(path, true)?;
-            }
+            files(&[
+                args.keys_file.as_ref(),
+                args.acquisition.fetch_policy.as_ref(),
+            ])?;
+            args.acquisition.protect_report()?;
         }
         Command::Plan(args) => {
             source(&args.input)?;
             files(&[
                 args.keys_file.as_ref(),
-                args.fetch_policy.as_ref(),
+                args.acquisition.fetch_policy.as_ref(),
                 args.outputs.as_ref(),
                 args.save.as_ref(),
             ])?;
-            for path in [&args.download_dir, &args.output_dir, &args.output_file]
-                .into_iter()
-                .flatten()
-            {
+            args.acquisition.protect_report()?;
+            for path in [&args.output_dir, &args.output_file].into_iter().flatten() {
                 reporting::protect(path, true)?;
             }
         }
@@ -213,14 +212,12 @@ fn protect_report(command: &Command) -> Result<(), drmr_core::conversion::Conver
             }
             files(&[
                 args.keys_file.as_ref(),
-                args.fetch_policy.as_ref(),
+                args.acquisition.fetch_policy.as_ref(),
                 args.outputs.as_ref(),
                 args.plan.as_ref(),
             ])?;
-            for path in [&args.download_dir, &args.output_dir, &args.output_file]
-                .into_iter()
-                .flatten()
-            {
+            args.acquisition.protect_report()?;
+            for path in [&args.output_dir, &args.output_file].into_iter().flatten() {
                 reporting::protect(path, true)?;
             }
         }

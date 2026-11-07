@@ -220,6 +220,7 @@ impl super::Converter {
             source_hls_target_ms: self.source_hls_target_ms,
             hls_target_policy: self.hls_target_policy,
             maximum_workers: self.maximum_workers,
+            download_resume: self.download_resume,
             downloaded: self.downloaded.clone(),
             frozen_source: self.frozen_source.clone(),
             planned_destination: self.planned_destination.clone(),

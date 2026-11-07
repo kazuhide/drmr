@@ -1,7 +1,7 @@
 //! Content detection and retained entrypoints share the sealed acquisition transaction.
 use super::{
     CHANGED, ConversionError, Expected, Graph, INVALID, IO, bytes_digest, dash, failure, files,
-    source, valid_url, write_private,
+    resume, resume_cache, source, valid_url, write_private,
 };
 use crate::inspection::{self, InputFormat};
 use std::{
@@ -75,16 +75,9 @@ impl Graph<'_> {
         self.admit_node()?;
         let stage = files::Stage::new(self.owned.path().parent())?;
         let path = stage.private_root().join("entrypoint");
-        let (received, created) =
-            self.fetcher
-                .fetch_entrypoint_created(url, &path)
-                .map_err(|error| {
-                    if self.fetcher.stop().is_set() {
-                        ConversionError("cancelled")
-                    } else {
-                        failure(&error)
-                    }
-                })?;
+        let root = resume::entrypoint(self.resume, self.fetcher, url, &path)?;
+        let received = root.fetched;
+        let created = root.created;
         valid_url(&received.effective)?;
         let mut input = files::regular_input(&path).map_err(|_| CHANGED)?;
         if crate::native::FileIdentity::read(&input).map_err(|_| CHANGED)? != created {
@@ -94,6 +87,24 @@ impl Graph<'_> {
         let count = input.read(&mut prefix).map_err(|_| IO)?;
         let format = inspection::format_hint(&prefix[..count]).ok_or(INVALID)?;
         if format == InputFormat::Mp4 {
+            if let Some(cache) = self.resume.filter(|_| !root.checkpointed) {
+                let _disk = self
+                    .fetcher
+                    .reserve_copy(received.size)
+                    .map_err(|e| failure(&e))?;
+                cache.store_file(
+                    resume_cache::CompletedResource {
+                        requested: url,
+                        range: None,
+                        kind: resume_cache::ResourceKind::Mp4,
+                        fetched: &received,
+                        etag: root.etag.as_ref().map(source::StrongEtag::as_str),
+                        path: &path,
+                        created,
+                    },
+                    self.fetcher.stop(),
+                )?;
+            }
             self.text_charge(url.len().saturating_add(received.effective.len()))?;
             self.records.push(serde_json::json!({
                 "kind":"mp4", "requested":url, "effective":received.effective,
@@ -146,6 +157,7 @@ impl Graph<'_> {
         received: &source::Fetched,
         body: &[u8],
     ) -> Result<(String, Entrypoint), ConversionError> {
+        resume::manifest(self.resume, self.fetcher, url, &received.effective, body)?;
         self.playlist_count = 1;
         self.text_charge(body.len() + url.len() + received.effective.len())?;
         self.charge(body.len().saturating_mul(8) + 1024)?;

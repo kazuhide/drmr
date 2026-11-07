@@ -134,6 +134,7 @@ fn acquire_redirected(
         owned: &owned,
         policy: &policy,
         fetcher: &fetcher,
+        resume: None,
         playlists: BTreeMap::new(),
         media: BTreeMap::new(),
         weight: 0,

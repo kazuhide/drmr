@@ -709,6 +709,8 @@ drmr convert source/master.m3u8 --output-config outputs.json \
 
 取得が完了すれば、配信元へ接続せずに保存した原本を使えます。入力には保存した入力ファイルを指定します。たとえば DASH は `source/manifest.mpd`、MP4 は `source/video.mp4` です。以前の取得データの `input.*` や保存済みの計画も、記録済みのパスで引き続き使えます。取得済みの原本は後の変換に失敗しても残ります。未完了の取得は受け付けません。
 
+[取得再開（1.3 開発版）](https://github.com/kazuhide/drmr/blob/main/docs/download-resume.md)。
+
 出力の配置直前まで、原本の内容とローカル参照を確認します。途中で原本が改変・削除された場合は出力を配置しません。URL の再実行に既存の取得先を渡す代わりに、保存したローカルファイルを入力にしてください。
 
 `convert --plan-file` では入力・形式・暗号方式・出力先を上書きできません。別の条件や出力先を使う場合は、新しい計画を作ります。完成した結果の独立検証には `verify --plan-file` を使います。

@@ -48,17 +48,11 @@ pub struct ConvertArgs {
     #[arg(help_heading = "Input", value_name = "INPUT")]
     pub input: Option<PathBuf>,
     /// Execute the exact source and media intent in a saved plan; keys stay separate.
-    #[arg(long = "plan-file", conflicts_with_all = ["input", "download_dir", "fetch_policy", "to", "format", "output_file", "output_dir", "outputs", "manifest_profile", "external_manifest_check"])]
+    #[arg(long = "plan-file", conflicts_with_all = ["input", "download_dir", "resume_download", "fetch_policy", "to", "format", "output_file", "output_dir", "outputs", "manifest_profile", "external_manifest_check"])]
     #[arg(help_heading = "Plan", value_name = "FILE")]
     pub plan: Option<PathBuf>,
-    /// New directory retaining the original input; required for URL input.
-    #[arg(long)]
-    #[arg(help_heading = "Input", value_name = "DIR")]
-    pub download_dir: Option<PathBuf>,
-    /// Private JSON settings for additional origins, authentication and fetch limits.
-    #[arg(long = "fetch-config")]
-    #[arg(help_heading = "Input", value_name = "FILE")]
-    pub fetch_policy: Option<PathBuf>,
+    #[command(flatten)]
+    pub acquisition: crate::download_cli::DownloadOptions,
     /// Target protection: clear, cenc, cbcs, hls-aes128, or hls-sample-aes.
     #[arg(long = "encryption", required_unless_present_any = ["plan", "outputs"], conflicts_with = "outputs")]
     #[arg(help_heading = "Output", value_name = "MODE")]
@@ -277,31 +271,13 @@ fn processing_error_hint(code: &str) -> Option<&'static str> {
     }
 }
 
-fn error_hint(code: &str) -> Option<&'static str> {
+fn download_error_hint(code: &str) -> Option<&'static str> {
     match code {
-        "key-file-invalid" => Some(
-            "Use an owner-only schema-version-2 JSON key file with input keys and named output keys; the simple output ID is default.",
-        ),
-        "cancelled" => Some(
-            "Check the destination and job status before retrying; cancellation is not a media verification result.",
-        ),
-        "verification-mismatch" => {
-            Some("Review every source/result check. Do not use the result as verified media.")
-        }
-        "media-tool-unavailable-or-timeout" | "media-tool-timeout" => Some(
-            "Check external tool discovery and source compatibility, and review the configured media timeout.",
-        ),
-        "media-cleanup-unconfirmed" => Some(
-            "Cleanup is unconfirmed. Resolve the owned process failure before retrying; no verified result is established.",
-        ),
-        "output-signaling-profile-not-supported" => Some(
-            "Use the documented input, output and DRM-signaling combination. Unsupported existing or unknown metadata is refused. See docs/conversion-support.md.",
-        ),
         "download-directory-required" => Some(
             "URL input requires --download-dir pointing to a new directory under an existing parent.",
         ),
         "download-options-require-url" => {
-            Some("Use --download-dir and --fetch-config only with URL input.")
+            Some("Use --download-dir, --resume-download, and --fetch-config only with URL input.")
         }
         "download-output-overlap" => {
             Some("Choose separate download and output paths; neither may contain the other.")
@@ -329,6 +305,39 @@ fn error_hint(code: &str) -> Option<&'static str> {
         ),
         "download-cleanup-unconfirmed" => Some(
             "Partial source cleanup could not be confirmed. Inspect the chosen download directory before retrying.",
+        ),
+        "download-resume-cache-unsafe" => Some(
+            "The completed-resource cache does not match this source and destination, or its ownership is unsafe. Use a new download directory; existing cache entries are never adopted or repaired.",
+        ),
+        "download-resume-in-use" => Some(
+            "Another process is using the completed-resource cache. Wait for that acquisition to finish before retrying the same download directory.",
+        ),
+        "download-resume-cleanup-unconfirmed" => Some(
+            "Cache cleanup could not be confirmed. Inspect the hidden sibling cache beside the requested download directory; changed or unknown files are preserved.",
+        ),
+        _ => None,
+    }
+}
+
+fn error_hint(code: &str) -> Option<&'static str> {
+    match code {
+        "key-file-invalid" => Some(
+            "Use an owner-only schema-version-2 JSON key file with input keys and named output keys; the simple output ID is default.",
+        ),
+        "cancelled" => Some(
+            "Check the destination and job status before retrying; cancellation is not a media verification result.",
+        ),
+        "verification-mismatch" => {
+            Some("Review every source/result check. Do not use the result as verified media.")
+        }
+        "media-tool-unavailable-or-timeout" | "media-tool-timeout" => Some(
+            "Check external tool discovery and source compatibility, and review the configured media timeout.",
+        ),
+        "media-cleanup-unconfirmed" => Some(
+            "Cleanup is unconfirmed. Resolve the owned process failure before retrying; no verified result is established.",
+        ),
+        "output-signaling-profile-not-supported" => Some(
+            "Use the documented input, output and DRM-signaling combination. Unsupported existing or unknown metadata is refused. See docs/conversion-support.md.",
         ),
         "resource-budget" => Some(
             "Free memory or run fewer jobs; the worker maximum does not override memory admission.",
@@ -369,7 +378,8 @@ fn error_hint(code: &str) -> Option<&'static str> {
         "packet-timing-unavailable" => Some(
             "Use an FFmpeg build that supplies complete packet timestamps and durations. See docs/media-processing.md.",
         ),
-        _ => processing_error_hint(code)
+        _ => download_error_hint(code)
+            .or_else(|| processing_error_hint(code))
             .or_else(|| manifest_error_hint(code))
             .or_else(|| crate::output_cli::error_hint(code))
             .or_else(|| crate::reporting::error_hint(code))
@@ -528,7 +538,10 @@ pub(crate) fn configured_download(
 ) -> Result<Option<drmr_core::source::FetchPolicy>, ConfigurationError> {
     match input {
         crate::download_cli::Input::Local(_) => {
-            if args.download_dir.is_some() || args.fetch_policy.is_some() {
+            if args.acquisition.download_dir.is_some()
+                || args.acquisition.fetch_policy.is_some()
+                || args.acquisition.resume_download
+            {
                 Err(ConversionError("download-options-require-url").into())
             } else {
                 Ok(None)
@@ -536,6 +549,7 @@ pub(crate) fn configured_download(
         }
         crate::download_cli::Input::Url(url) => {
             let directory = args
+                .acquisition
                 .download_dir
                 .as_ref()
                 .ok_or(ConversionError("download-directory-required"))?;
@@ -545,9 +559,12 @@ pub(crate) fn configured_download(
                     ..cause.into()
                 }
             })?;
-            drmr_core::conversion::download_policy::read(url, args.fetch_policy.as_deref())
-                .map(Some)
-                .map_err(Into::into)
+            drmr_core::conversion::download_policy::read(
+                url,
+                args.acquisition.fetch_policy.as_deref(),
+            )
+            .map(Some)
+            .map_err(Into::into)
         }
     }
 }
@@ -569,7 +586,10 @@ impl CompletedConversion {
         let summary = (!args.json).then(|| {
             crate::conversion_summary::Summary::single(
                 &self.report,
-                crate::conversion_summary::Source::direct(input, args.download_dir.as_deref()),
+                crate::conversion_summary::Source::direct(
+                    input,
+                    args.acquisition.download_dir.as_deref(),
+                ),
                 args.destination().expect("clap requires the direct output"),
                 self.format,
                 args.to.expect("clap requires the direct target"),
@@ -608,7 +628,8 @@ fn execute_conversion(
             progress.mark("acquisition");
             let source = command.download_source(
                 url,
-                args.download_dir
+                args.acquisition
+                    .download_dir
                     .as_deref()
                     .expect("URL download directory was checked"),
                 args.destination().expect("clap requires a direct output"),
@@ -775,6 +796,7 @@ fn configured_converter(
             ),
             args.dash_addressing,
         )
+        .with_download_resume(args.acquisition.resume_download)
         .with_processing(args.processing.unwrap_or_default())
         .with_output_signaling(keys.signaling.clone()),
         args.manifest_profile,
