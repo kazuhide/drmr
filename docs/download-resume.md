@@ -50,8 +50,8 @@ This does not extend the supported [URL input profile](conversion-support.md#url
 - Self-contained MP4 input uses the same completed-resource checks. A partial
   file is downloaded again from the beginning; this is not byte-range resume.
 
-Changed manifests, effective URLs, media bytes or validators are refused rather
-than mixed into an older source. Choose a new download directory to acquire the
+Changed manifests, effective URLs, media bytes or recorded strong validators are
+refused rather than mixed into an older source. Choose a new download directory to acquire the
 changed source. A changed signed URL also needs a new destination because the
 cache is bound to the complete original URL, including its query string.
 
