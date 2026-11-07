@@ -37,7 +37,8 @@ jobs:
           python-version: '3.13.12'
 
       - name: Install the tested editor-schema validator
-        run: python -m pip install --only-binary=:all: -r tools/requirements-schema.txt -c tools/constraints-schema.txt
+        run: |
+          python -m pip install --only-binary=:all: -r tools/requirements-schema.txt -c tools/constraints-schema.txt
 
       - name: Check the validator and the complete static site
         run: |
