@@ -94,14 +94,12 @@ if ($LASTEXITCODE -ne 0) { throw 'The selected Cargo could not run as a regular 
 if ($LASTEXITCODE -ne 0) { throw 'The selected Rust compiler could not run as a regular user' }
 New-Item -ItemType Directory -Path $env:TEMP | Out-Null
 New-Item -ItemType Directory -Path $env:CARGO_HOME | Out-Null
-# Install test-only Python packages in the ordinary user's disposable workspace.
-$schemaEnvironment = Join-Path $PSScriptRoot 'schema-python'
-& $python -m venv $schemaEnvironment
-if ($LASTEXITCODE -ne 0) { throw 'Could not create the schema validator environment' }
-$python = Join-Path $schemaEnvironment 'Scripts/python.exe'
-& $python -m pip install --only-binary=:all: -r tools/requirements-schema.txt -c tools/constraints-schema.txt
+# Keep the selected interpreter: Windows venv redirectors add process descendants.
+# Install test-only packages in the ordinary user's disposable workspace instead.
+$schemaPackages = Join-Path $PSScriptRoot 'schema-packages'
+& $python -m pip install --only-binary=:all: --target $schemaPackages -r tools/requirements-schema.txt -c tools/constraints-schema.txt
 if ($LASTEXITCODE -ne 0) { throw 'Could not install the tested schema validator' }
-$env:PATH = "$(Split-Path $python);$env:PATH"
+$env:PYTHONPATH = $schemaPackages
 # Fail fast on tool contracts before starting the longer native media groups.
 & python -W error::ResourceWarning -m unittest discover -s tools/tests -v
 if ($LASTEXITCODE -ne 0) { throw 'Tool contract tests failed before native media execution' }
