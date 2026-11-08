@@ -27,12 +27,16 @@ class Failure(Exception):
 def private_fs_unsafe_expressions(data):
     """Extract only the finite braced expressions in these pinned source windows."""
     keyword = rb"\bunsafe\b"
+    # None of these pinned windows contains block comments. Refuse delimiters
+    # even in quoted text rather than approximating Rust's nested-comment grammar.
+    if b"/*" in data or b"*/" in data:
+        return None
     # Mask ordinary literals/comments for brace balancing. Hidden unsafe tokens,
     # raw literals, nested blocks and unmatched syntax fail closed, not as Rust.
     if re.search(rb'\b(?:b?r)#*"', data):
         return None
     masked = bytearray(data)
-    literal = rb'//[^\n]*|/\*[\s\S]*?\*/|"(?:\\[\s\S]|[^"\\])*"|\'(?:\\[\s\S]|[^\'\\])\''
+    literal = rb'//[^\n]*|"(?:\\[\s\S]|[^"\\])*"|\'(?:\\[\s\S]|[^\'\\])\''
     for match in re.finditer(literal, data):
         if re.search(keyword, match[0]):
             return None

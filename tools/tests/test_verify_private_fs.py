@@ -132,6 +132,19 @@ class PrivateFsSource(unittest.TestCase):
                 with self.assertRaisesRegex(VERIFY.Failure, "native-patch-shape"):
                     VERIFY.verify_private_fs(root)
 
+    def test_nested_block_comments_cannot_hide_an_existing_unsafe_expression(self):
+        original = "unsafe { core::mem::zeroed() }"
+        for replacement in (
+                "/* /* */ " + original + " // */\nSelf { Identifier: [1; 16] }",
+                "/* /* */ " + original + " /* */ */\nSelf { Identifier: [1; 16] }",
+                "/* nested /* " + original + " */ */\nSelf { Identifier: [1; 16] }"):
+            with self.subTest(change=replacement), tempfile.TemporaryDirectory() as directory:
+                root = self.copied(directory)
+                self.rebound(root, "src/windows/bindings.rs",
+                             lambda after: after.replace(original, replacement, 1))
+                with self.assertRaisesRegex(VERIFY.Failure, "native-patch-shape"):
+                    VERIFY.verify_private_fs(root)
+
     def test_patch_inventory_cannot_admit_a_sixth_publisher_path(self):
         with tempfile.TemporaryDirectory() as directory:
             root = self.copied(directory)
