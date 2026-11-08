@@ -1,5 +1,5 @@
 //! Small handle-based operations confined to an admitted resume cache.
-use super::{CLEANUP, ConversionError, FileIdentity, UNSAFE};
+use super::{CLEANUP, ConversionError, FileIdentity, UNSAFE, provenance};
 use std::{
     ffi::OsStr,
     fs::{File, OpenOptions},
@@ -10,6 +10,7 @@ pub(super) struct Directory {
     pub(super) path: PathBuf,
     held: Option<File>,
     identity: FileIdentity,
+    nonce: Option<[u8; 32]>,
     private: bool,
     #[cfg(windows)]
     _ancestors: Vec<File>,
@@ -21,24 +22,42 @@ impl Directory {
         let ancestors = pin_ancestors(path)?;
         let held = open_directory(path, private)?;
         let identity = FileIdentity::read(&held).map_err(|_| UNSAFE)?;
+        let nonce = private.then(|| provenance::read(&held)).transpose()?;
         Ok(Self {
             path: path.to_path_buf(),
             held: Some(held),
             identity,
+            nonce,
             private,
             #[cfg(windows)]
             _ancestors: ancestors,
         })
     }
+    pub(super) fn create_new(path: &Path) -> Result<Self, ConversionError> {
+        crate::native::create_private_dir_new(path).map_err(|_| UNSAFE)?;
+        let file = open_directory(path, true)?;
+        provenance::create(&file)?;
+        drop(file);
+        Self::open(path, true)
+    }
     pub(super) fn identity(&self) -> FileIdentity {
         self.identity
+    }
+    pub(super) fn token(&self) -> String {
+        self.nonce.map_or_else(
+            || self.identity.stable_token(),
+            |nonce| provenance::combine(self.identity, nonce),
+        )
     }
     pub(super) fn check(&self) -> Result<(), ConversionError> {
         let held = self.held.as_ref().ok_or(UNSAFE)?;
         verify_directory(held, self.private)?;
+        let current = open_directory(&self.path, self.private)?;
         if FileIdentity::read(held).map_err(|_| UNSAFE)? != self.identity
-            || FileIdentity::read(&open_directory(&self.path, self.private)?).map_err(|_| UNSAFE)?
-                != self.identity
+            || FileIdentity::read(&current).map_err(|_| UNSAFE)? != self.identity
+            || self.nonce.is_some_and(|nonce| {
+                provenance::read(held) != Ok(nonce) || provenance::read(&current) != Ok(nonce)
+            })
         {
             return Err(UNSAFE);
         }
@@ -65,10 +84,12 @@ impl Directory {
             );
             verify_directory(&held, true)?;
             let identity = FileIdentity::read(&held).map_err(|_| UNSAFE)?;
+            let nonce = Some(provenance::read(&held)?);
             let child = Self {
                 path: self.path.join(name),
                 held: Some(held),
                 identity,
+                nonce,
                 private: true,
             };
             self.check()?;
@@ -120,6 +141,7 @@ impl Directory {
         #[cfg(not(any(unix, windows)))]
         let file: File = return Err(UNSAFE);
         verify_file(&file)?;
+        provenance::read(&file)?;
         self.check()?;
         Ok(file)
     }
@@ -134,6 +156,7 @@ impl Directory {
             self.check()?;
             let file = crate::native::open_private_shared_read(&self.path.join(name))
                 .map_err(|_| UNSAFE)?;
+            provenance::read(&file)?;
             self.check()?;
             Ok(file)
         }
@@ -143,13 +166,9 @@ impl Directory {
             Err(UNSAFE)
         }
     }
-    pub(super) fn remove_file(
-        &self,
-        name: &str,
-        expected: FileIdentity,
-    ) -> Result<(), ConversionError> {
+    pub(super) fn remove_file(&self, name: &str, expected: &str) -> Result<(), ConversionError> {
         let current = self.file(name, false).map_err(|_| CLEANUP)?;
-        if FileIdentity::read(&current).map_err(|_| CLEANUP)? != expected {
+        if provenance::token(&current).map_err(|_| CLEANUP)? != expected {
             return Err(CLEANUP);
         }
         drop(current);
@@ -165,18 +184,14 @@ impl Directory {
         {
             let file = crate::native::open_media_mutation(&self.path.join(name), false)
                 .map_err(|_| CLEANUP)?;
-            if FileIdentity::read(&file).map_err(|_| CLEANUP)? != expected {
+            if provenance::token(&file).map_err(|_| CLEANUP)? != expected {
                 return Err(CLEANUP);
             }
             crate::native::delete_media_handle(&file, false).map_err(|_| CLEANUP)?;
         }
         self.check().map_err(|_| CLEANUP)
     }
-    pub(super) fn remove_child(
-        &self,
-        name: &OsStr,
-        expected: FileIdentity,
-    ) -> Result<(), ConversionError> {
+    pub(super) fn remove_child(&self, name: &OsStr, expected: &str) -> Result<(), ConversionError> {
         if Path::new(name).components().count() != 1
             || !matches!(
                 Path::new(name).components().next(),
@@ -187,7 +202,7 @@ impl Directory {
         }
         self.check().map_err(|_| CLEANUP)?;
         let current = Self::open(&self.path.join(name), true).map_err(|_| CLEANUP)?;
-        if current.identity != expected {
+        if current.token() != expected {
             return Err(CLEANUP);
         }
         drop(current);
@@ -212,7 +227,7 @@ impl Directory {
                 .custom_flags(0x0220_0000)
                 .open(self.path.join(name))
                 .map_err(|_| CLEANUP)?;
-            if FileIdentity::read(&directory).map_err(|_| CLEANUP)? != expected {
+            if provenance::token(&directory).map_err(|_| CLEANUP)? != expected {
                 return Err(CLEANUP);
             }
             crate::native::delete_media_handle(&directory, true).map_err(|_| CLEANUP)?;

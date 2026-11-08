@@ -95,6 +95,36 @@ pub fn delete_by_handle(source: impl AsHandle, directory: bool) -> Result<()> {
     nt::delete(nt::mutation_handle(source, directory)?)
 }
 
+/// Set a fixed 32-byte object nonce on a newly created file or directory.
+///
+/// The fixed extended attribute must be absent; an existing or malformed value
+/// is never replaced. The caller must serialize creation and only initialize
+/// objects it just created: Windows has no atomic create-only EA operation.
+/// Owner, ACL and recorded-identity admission remain the caller's responsibility.
+/// The object is reopened by handle for synchronous EA access, without a path.
+/// Filesystems without extended attributes are refused without a fallback.
+pub fn create_object_nonce(source: impl AsHandle, directory: bool, nonce: &[u8; 32]) -> Result<()> {
+    let handle = nt::nonce_handle(source, directory, true)?;
+    if nt::read_nonce(&handle)?.is_some() {
+        return Err(io::Error::new(io::ErrorKind::AlreadyExists, "object nonce exists").into());
+    }
+    nt::write_nonce(&handle, nonce)?;
+    if nt::read_nonce(&handle)? != Some(*nonce) {
+        return Err(Error::IdentityChanged);
+    }
+    Ok(())
+}
+
+/// Read the exact 32-byte nonce from an opened file or directory.
+///
+/// Missing or malformed attributes are refused without initializing or repairing
+/// the object. Owner, ACL and recorded-identity admission belong to the caller.
+/// Only the supplied object is reopened by handle for synchronous EA access.
+pub fn read_object_nonce(source: impl AsHandle, directory: bool) -> Result<[u8; 32]> {
+    nt::read_nonce(nt::nonce_handle(source, directory, false)?)?
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "object nonce is missing").into())
+}
+
 impl PrivateDir {
     /// Explicitly restore owner-only access through this retained handle.
     pub fn harden(&self) -> Result<()> {

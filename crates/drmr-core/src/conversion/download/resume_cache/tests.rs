@@ -169,12 +169,102 @@ fn changed_bytes_and_replaced_identical_objects_are_refused() {
             .is_err()
     );
     assert!(!root.path().join("copy").exists());
+    // Allocate while the original still exists: dev/ino is not a generation
+    // identifier after unlink, so immediate allocation may otherwise reuse it.
+    let replacement = root.path().join("replacement");
+    let mut separate = crate::native::create_private_new(&replacement).unwrap();
+    separate.write_all(b"complete bytes").unwrap();
+    assert!(FileIdentity::read(&separate).unwrap() != candidate.blob_identity);
+    drop(separate);
     std::fs::remove_file(&blob).unwrap();
-    crate::native::create_private_new(&blob)
-        .unwrap()
-        .write_all(b"complete bytes")
-        .unwrap();
+    files::atomic_move(&replacement, &blob).unwrap();
     assert!(cache.lookup(URL, None).is_err());
+}
+
+#[test]
+fn changed_bound_provenance_is_refused_before_reuse_or_cleanup() {
+    let root = crate::native::private_tempdir().unwrap();
+    let download = root.path().join("source");
+    let mut cache = ResumeCache::open(&download, URL, None, &policy(), &Stop::new()).unwrap();
+    cache
+        .store_manifest(URL, URL, b"#EXTM3U\n", &Stop::new())
+        .unwrap();
+    let candidate = cache.lookup(URL, None).unwrap().unwrap();
+    let receipt = candidate.path.join("receipt.json");
+    let mut record = candidate.record.clone();
+    let last = record.blob_identity.len() - 1;
+    let replacement = if record.blob_identity.ends_with('0') {
+        "1"
+    } else {
+        "0"
+    };
+    record.blob_identity.replace_range(last.., replacement);
+    let mut writer = crate::native::create_private_update(&receipt).unwrap();
+    write_json(&mut writer, &record).unwrap();
+    drop(writer);
+    assert!(cache.lookup(URL, None).is_err());
+    assert!(
+        cache
+            .materialize(&candidate, &root.path().join("copy"), &Stop::new())
+            .is_err()
+    );
+    assert!(!root.path().join("copy").exists());
+    assert!(cache.cleanup(&Stop::new()).is_err());
+    assert_eq!(
+        std::fs::read(candidate.path.join("data")).unwrap(),
+        b"#EXTM3U\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn missing_provenance_on_the_same_native_object_refuses_every_owned_object() {
+    for target in [
+        "root",
+        "resource",
+        "data",
+        "receipt.json",
+        "context.json",
+        "lock",
+    ] {
+        let root = crate::native::private_tempdir().unwrap();
+        let download = root.path().join("source");
+        let mut cache = ResumeCache::open(&download, URL, None, &policy(), &Stop::new()).unwrap();
+        cache
+            .store_manifest(URL, URL, b"#EXTM3U\n", &Stop::new())
+            .unwrap();
+        let candidate = cache.lookup(URL, None).unwrap().unwrap();
+        let parent = filesystem::open_directory(root.path(), false).unwrap();
+        assert!(provenance::read(&parent).is_err());
+        let path = match target {
+            "root" => cache.root.path.clone(),
+            "resource" => candidate.path.clone(),
+            "context.json" | "lock" => cache.root.path.join(target),
+            _ => candidate.path.join(target),
+        };
+        let object = if matches!(target, "root" | "resource") {
+            filesystem::open_directory(&path, true).unwrap()
+        } else {
+            crate::native::open_private_read(&path).unwrap()
+        };
+        let native = FileIdentity::read(&object).unwrap();
+        provenance::remove_for_test(&object).unwrap();
+        assert!(FileIdentity::read(&object).unwrap() == native);
+        drop(object);
+        assert!(cache.lookup(URL, None).is_err());
+        assert!(
+            cache
+                .materialize(&candidate, &root.path().join("copy"), &Stop::new())
+                .is_err()
+        );
+        assert!(cache.cleanup(&Stop::new()).is_err());
+        assert!(!root.path().join("copy").exists());
+        assert!(path.exists());
+        assert_eq!(
+            std::fs::read(candidate.path.join("data")).unwrap(),
+            b"#EXTM3U\n"
+        );
+    }
 }
 
 #[test]

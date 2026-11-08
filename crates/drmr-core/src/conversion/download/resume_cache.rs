@@ -18,6 +18,7 @@ use std::{
 };
 
 mod filesystem;
+mod provenance;
 use filesystem::Directory;
 #[cfg(test)]
 mod tests;
@@ -157,24 +158,21 @@ impl ResumeCache {
             stopped(stop)?;
             let stage = files::Stage::new(Some(parent_path))?;
             let pending = stage.private_root().join("cache");
-            crate::native::create_private_dir_new(&pending).map_err(|_| UNSAFE)?;
-            let root = Directory::open(&pending, true)?;
+            let root = Directory::create_new(&pending)?;
             let lock =
                 crate::native::create_private_new(&pending.join("lock")).map_err(|_| UNSAFE)?;
+            provenance::create(&lock)?;
             let mut context_file = crate::native::create_private_new(&pending.join("context.json"))
                 .map_err(|_| UNSAFE)?;
+            provenance::create(&context_file)?;
             let context = Context {
-                version: 1,
+                version: 2,
                 source_sha256: source_sha256.clone(),
                 destination_sha256: destination_sha256.clone(),
                 parent_identity: parent.identity().stable_token(),
-                root_identity: root.identity().stable_token(),
-                lock_identity: FileIdentity::read(&lock)
-                    .map_err(|_| UNSAFE)?
-                    .stable_token(),
-                self_identity: FileIdentity::read(&context_file)
-                    .map_err(|_| UNSAFE)?
-                    .stable_token(),
+                root_identity: root.token(),
+                lock_identity: provenance::token(&lock)?,
+                self_identity: provenance::token(&context_file)?,
             };
             write_json(&mut context_file, &context)?;
             lock.sync_all().map_err(|_| IO)?;
@@ -196,19 +194,13 @@ impl ResumeCache {
             .map_err(|_| ConversionError("download-resume-in-use"))?;
         let context_again: Context = read_json(&root.file("context.json", false)?)?;
         if context != context_again
-            || context.version != 1
+            || context.version != 2
             || context.source_sha256 != source_sha256
             || context.destination_sha256 != destination_sha256
             || context.parent_identity != parent.identity().stable_token()
-            || context.root_identity != root.identity().stable_token()
-            || context.lock_identity
-                != FileIdentity::read(&lock)
-                    .map_err(|_| UNSAFE)?
-                    .stable_token()
-            || context.self_identity
-                != FileIdentity::read(&root.file("context.json", false)?)
-                    .map_err(|_| UNSAFE)?
-                    .stable_token()
+            || context.root_identity != root.token()
+            || context.lock_identity != provenance::token(&lock)?
+            || context.self_identity != provenance::token(&root.file("context.json", false)?)?
             || lock.metadata().map_err(|_| UNSAFE)?.len() != 0
         {
             return Err(UNSAFE);
@@ -258,18 +250,9 @@ impl ResumeCache {
         let context_file = self.root.file("context.json", false)?;
         let lock_file = self.root.shared_file("lock")?;
         if read_json::<Context>(&context_file)? != self.context
-            || FileIdentity::read(&context_file)
-                .map_err(|_| UNSAFE)?
-                .stable_token()
-                != self.context.self_identity
-            || FileIdentity::read(&lock_file)
-                .map_err(|_| UNSAFE)?
-                .stable_token()
-                != self.context.lock_identity
-            || FileIdentity::read(self.lock.as_ref().ok_or(UNSAFE)?)
-                .map_err(|_| UNSAFE)?
-                .stable_token()
-                != self.context.lock_identity
+            || provenance::token(&context_file)? != self.context.self_identity
+            || provenance::token(&lock_file)? != self.context.lock_identity
+            || provenance::token(self.lock.as_ref().ok_or(UNSAFE)?)? != self.context.lock_identity
             || lock_file.metadata().map_err(|_| UNSAFE)?.len() != 0
         {
             return Err(UNSAFE);
@@ -355,7 +338,7 @@ impl ResumeCache {
             return Err(UNSAFE);
         }
         let record = Record {
-            version: 1,
+            version: 2,
             key: resource_key(url, range)?,
             context_sha256: self.context_sha256.clone(),
             requested_url_sha256: fingerprint(url.as_bytes()),
@@ -399,23 +382,24 @@ impl ResumeCache {
         // unreceipted partial files among reusable completed resources.
         let stage = files::Stage::new(Some(&self.parent.path))?;
         let pending = stage.private_root().join("resource");
-        crate::native::create_private_dir_new(&pending).map_err(|_| IO)?;
-        let pending_directory = Directory::open(&pending, true)?;
+        let pending_directory = Directory::create_new(&pending)?;
         let mut output =
             crate::native::create_private_new(&pending.join("data")).map_err(|_| IO)?;
+        provenance::create(&output)?;
         let digest = copy(reader, Some(&mut output), metadata.size, stop)?;
         if digest != metadata.sha256 {
             return Err(CHANGED);
         }
         source_check()?;
         output.sync_all().map_err(|_| IO)?;
-        let blob_identity = FileIdentity::read(&output).map_err(|_| IO)?;
+        let blob_identity = provenance::token(&output)?;
         let mut receipt =
             crate::native::create_private_new(&pending.join("receipt.json")).map_err(|_| IO)?;
+        provenance::create(&receipt)?;
         let mut record = metadata.clone();
-        record.directory_identity = pending_directory.identity().stable_token();
-        record.blob_identity = blob_identity.stable_token();
-        record.receipt_identity = FileIdentity::read(&receipt).map_err(|_| IO)?.stable_token();
+        record.directory_identity = pending_directory.token();
+        record.blob_identity = blob_identity;
+        record.receipt_identity = provenance::token(&receipt)?;
         write_json(&mut receipt, &record)?;
         drop(receipt);
         drop(output);
@@ -502,31 +486,29 @@ impl ResumeCache {
                 }
             })?;
             let child = self.candidate_directory(&candidate).map_err(|_| CLEANUP)?;
-            child.remove_file("data", candidate.blob_identity)?;
-            child.remove_file("receipt.json", candidate.receipt_identity)?;
+            child.remove_file("data", &candidate.record.blob_identity)?;
+            child.remove_file("receipt.json", &candidate.record.receipt_identity)?;
             drop(child);
             self.root
-                .remove_child(OsStr::new(name), candidate.directory_identity)?;
+                .remove_child(OsStr::new(name), &candidate.record.directory_identity)?;
         }
         self.check().map_err(|_| CLEANUP)?;
-        let context_id =
-            FileIdentity::read(&self.root.file("context.json", false)?).map_err(|_| CLEANUP)?;
-        let lock_id =
-            FileIdentity::read(self.lock.as_ref().ok_or(CLEANUP)?).map_err(|_| CLEANUP)?;
-        self.root.remove_file("context.json", context_id)?;
+        let context_id = provenance::token(&self.root.file("context.json", false)?)?;
+        let lock_id = provenance::token(self.lock.as_ref().ok_or(CLEANUP)?)?;
+        self.root.remove_file("context.json", &context_id)?;
         // Retain the lock through removal. On Windows, DELETE sharing must be
         // released only after every other protected cache object has gone.
         #[cfg(unix)]
-        self.root.remove_file("lock", lock_id)?;
+        self.root.remove_file("lock", &lock_id)?;
         #[cfg(windows)]
         {
             self.lock.take();
-            self.root.remove_file("lock", lock_id)?;
+            self.root.remove_file("lock", &lock_id)?;
         }
-        let root_id = self.root.identity();
+        let root_id = self.root.token();
         let name = self.root.path.file_name().ok_or(CLEANUP)?.to_owned();
         self.root.release();
-        self.parent.remove_child(&name, root_id)?;
+        self.parent.remove_child(&name, &root_id)?;
         self.lock.take();
         self.cleaned = true;
         Ok(())
@@ -582,9 +564,9 @@ impl ResumeCache {
         let blob_identity = FileIdentity::read(&blob).map_err(|_| UNSAFE)?;
         let receipt_identity = FileIdentity::read(&receipt).map_err(|_| UNSAFE)?;
         if record.key != key
-            || record.directory_identity != directory_identity.stable_token()
-            || record.blob_identity != blob_identity.stable_token()
-            || record.receipt_identity != receipt_identity.stable_token()
+            || record.directory_identity != directory.token()
+            || record.blob_identity != provenance::token(&blob)?
+            || record.receipt_identity != provenance::token(&receipt)?
             || blob.metadata().map_err(|_| UNSAFE)?.len() != record.size
         {
             return Err(CHANGED);
@@ -624,7 +606,7 @@ impl ResumeCache {
         } else {
             self.limits.resource
         };
-        if record.version != 1
+        if record.version != 2
             || record.context_sha256 != self.context_sha256
             || !hexadecimal(&record.key, 64)
             || !hexadecimal(&record.requested_url_sha256, 64)
@@ -643,7 +625,7 @@ impl ResumeCache {
                     &record.receipt_identity,
                 ]
                 .iter()
-                .any(|value| !hexadecimal(value, 32))
+                .any(|value| !hexadecimal(value, provenance::TOKEN_HEX_LENGTH))
         {
             return Err(UNSAFE);
         }

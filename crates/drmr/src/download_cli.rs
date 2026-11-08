@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 /// Retained URL acquisition settings shared by analyze, saved planning and conversion.
 #[derive(Clone, Default, Args)]
 pub struct DownloadOptions {
-    /// New directory retaining the original input; required for complete URL input.
+    /// Source directories retain original media paths. Use a new directory for complete URL input.
     #[arg(long)]
     #[arg(help_heading = "Input", value_name = "DIR")]
     pub download_dir: Option<PathBuf>,

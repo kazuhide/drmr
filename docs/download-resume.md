@@ -76,6 +76,14 @@ recognized cache. Modified, replaced or unknown files prevent automatic cleanup
 and are preserved. Only one process may use a given cache at a time. Missing or
 unsafe cache metadata is refused, not repaired.
 
+Each cache-owned object is bound to both its native file identifier and a random
+identifier assigned when it is created. This detects replacements even when the
+filesystem reuses a deleted file's identifier. The random identifier is stored
+in a filesystem extended attribute; missing or changed attributes prevent reuse
+and cleanup. Resume therefore requires a filesystem that supports these
+attributes. If that support is unavailable, use another destination or omit
+`--resume-download` to start a normal acquisition.
+
 Abrupt process termination can leave an incomplete download directory or private
 working directories. drmr does not adopt these leftovers. After confirming no
 acquisition is active, move the incomplete download directory aside before
