@@ -19,17 +19,11 @@ pub struct AnalyzeArgs {
     #[arg(help_heading = "Input", value_name = "INPUT")]
     pub input: PathBuf,
     /// Read metadata without keys, media tools, complete media checks, or retained URL input.
-    #[arg(long, conflicts_with_all = ["download_dir", "keys_file", "packager_bin", "max_workers", "decode", "measure"])]
+    #[arg(long, conflicts_with_all = ["download_dir", "resume_download", "keys_file", "packager_bin", "max_workers", "decode", "measure"])]
     #[arg(help_heading = "Verification")]
     pub metadata_only: bool,
-    /// New private original directory; required for complete URL analysis. Source directories are retained.
-    #[arg(long)]
-    #[arg(help_heading = "Input", value_name = "DIR")]
-    pub download_dir: Option<PathBuf>,
-    /// Private settings for allowed origins, authentication, and bounded retrieval.
-    #[arg(long = "fetch-config")]
-    #[arg(help_heading = "Input", value_name = "FILE")]
-    pub fetch_policy: Option<PathBuf>,
+    #[command(flatten)]
+    pub acquisition: crate::download_cli::DownloadOptions,
     /// Protected schema-version-1 or 2 JSON input keys; output domains are not selected.
     #[arg(long)]
     #[arg(help_heading = "Input", value_name = "FILE")]
@@ -64,7 +58,10 @@ fn fetch_settings(
 ) -> Result<Option<drmr_core::source::FetchPolicy>, ConversionError> {
     match input {
         crate::download_cli::Input::Local(_) => {
-            if args.download_dir.is_some() || args.fetch_policy.is_some() {
+            if args.acquisition.download_dir.is_some()
+                || args.acquisition.fetch_policy.is_some()
+                || args.acquisition.resume_download
+            {
                 Err(ConversionError("download-options-require-url"))
             } else {
                 Ok(None)
@@ -72,12 +69,16 @@ fn fetch_settings(
         }
         crate::download_cli::Input::Url(url) => {
             let directory = args
+                .acquisition
                 .download_dir
                 .as_deref()
                 .ok_or(ConversionError("download-directory-required"))?;
             crate::download_cli::preflight_source(directory)?;
-            drmr_core::conversion::download_policy::read(url, args.fetch_policy.as_deref())
-                .map(Some)
+            drmr_core::conversion::download_policy::read(
+                url,
+                args.acquisition.fetch_policy.as_deref(),
+            )
+            .map(Some)
         }
     }
 }
@@ -149,7 +150,8 @@ fn execute_analysis(
             Some(
                 command.acquire_source(
                     url,
-                    args.download_dir
+                    args.acquisition
+                        .download_dir
                         .as_deref()
                         .expect("URL destination was checked"),
                     policy.expect("URL fetch settings were checked"),
@@ -188,7 +190,7 @@ fn metadata_analysis(
     progress: &Arc<Progress>,
 ) -> ExitCode {
     let policy = match input {
-        crate::download_cli::Input::Local(_) if args.fetch_policy.is_some() => {
+        crate::download_cli::Input::Local(_) if args.acquisition.fetch_policy.is_some() => {
             return convert_cli::error(
                 "analyze",
                 ConversionError("download-options-require-url"),
@@ -199,7 +201,10 @@ fn metadata_analysis(
         }
         crate::download_cli::Input::Local(_) => None,
         crate::download_cli::Input::Url(url) => {
-            match drmr_core::conversion::download_policy::read(url, args.fetch_policy.as_deref()) {
+            match drmr_core::conversion::download_policy::read(
+                url,
+                args.acquisition.fetch_policy.as_deref(),
+            ) {
                 Ok(policy) => Some(policy),
                 Err(cause) => {
                     return convert_cli::error("analyze", cause, args.json, progress, None);
@@ -298,6 +303,7 @@ pub fn analyze(args: &AnalyzeArgs) -> ExitCode {
         progress.clone(),
         cancellation.stop.clone(),
     )
+    .with_download_resume(args.acquisition.resume_download)
     .with_new_output_defaults();
     let execute = |command: &Converter| {
         execute_analysis(command, args, &input, policy.as_ref(), &keys, &progress)

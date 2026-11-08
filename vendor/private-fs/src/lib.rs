@@ -79,7 +79,9 @@ mod windows;
 #[cfg(windows)]
 pub use windows::{PrivateDir, PrivateFile};
 #[cfg(windows)]
-pub use windows::{delete_by_handle, rename_by_handle_no_replace};
+pub use windows::{
+    create_object_nonce, delete_by_handle, read_object_nonce, rename_by_handle_no_replace,
+};
 
 /// Requested persistence, independently of private access and atomic visibility.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

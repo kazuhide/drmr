@@ -14,6 +14,11 @@ Completed changes are recorded by category before the next release.
   with downloadable Clear, Encrypted and mixed HLS/DASH template pairs. Accept
   an optional bounded `$schema` annotation without fetching or retaining it;
   keep runtime key, DRM, media and private-file checks authoritative.
+- Resume interrupted URL acquisition explicitly with `--resume-download` on
+  analyze, saved plan creation and direct convert. Retain complete originals in
+  a private sibling cache, revalidate current manifests and media, and remove
+  the recognized cache after a complete sealed download. Preserve existing
+  network policies, byte limits, cancellation and no-overwrite behavior.
 - Write one fragmented MP4 from qualified separate video and AAC audio tracks
   in DASH or fMP4 HLS, with clear, CENC or CBCS protection subject to the existing
   codec profiles. Preserve encoded samples, clocks and audio playback windows;

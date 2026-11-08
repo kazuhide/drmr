@@ -124,6 +124,11 @@ impl Session {
         self
     }
 
+    fn with_download_resume(mut self, resume: bool) -> Self {
+        self.converter = self.converter.with_download_resume(resume);
+        self
+    }
+
     fn run(
         &self,
         command: &str,
@@ -418,9 +423,9 @@ pub fn save(args: &PlanArgs) -> ExitCode {
         args.decoding.decode,
         args.keys_file.as_ref(),
     ) {
-        Ok(session) => {
-            session.with_new_intent(args.processing.unwrap_or_default(), args.dash_addressing)
-        }
+        Ok(session) => session
+            .with_download_resume(args.acquisition.resume_download)
+            .with_new_intent(args.processing.unwrap_or_default(), args.dash_addressing),
         Err(code) => return code,
     };
     crate::output_cli::override_validation(
@@ -545,7 +550,9 @@ pub fn convert_direct(args: &ConvertArgs) -> ExitCode {
         args.keys_file.as_ref(),
         progress,
     ) {
-        Ok(session) => session.with_new_intent(ProcessingMode::Auto, args.dash_addressing),
+        Ok(session) => session
+            .with_download_resume(args.acquisition.resume_download)
+            .with_new_intent(ProcessingMode::Auto, args.dash_addressing),
         Err(code) => return code,
     };
     let policy = match convert_cli::configured_download(args, &input, &output) {
@@ -583,7 +590,8 @@ pub fn convert_direct(args: &ConvertArgs) -> ExitCode {
                 session.progress.mark("acquisition");
                 let downloaded = converter.download_bundle_source(
                     url,
-                    args.download_dir
+                    args.acquisition
+                        .download_dir
                         .as_deref()
                         .expect("download directory checked"),
                     output,
@@ -606,7 +614,7 @@ pub fn convert_direct(args: &ConvertArgs) -> ExitCode {
         } else {
             Some(Summary::bundle(
                 &report,
-                Source::direct(&input, args.download_dir.as_deref()),
+                Source::direct(&input, args.acquisition.download_dir.as_deref()),
                 output,
                 &outputs,
             )?)

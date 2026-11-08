@@ -17,6 +17,7 @@ pub mod pyurl;
 pub use crate::m3u8::SourceError;
 pub(crate) use fetch::MetadataRead;
 pub use fetch::{ByteRange, Fetched, Fetcher};
+pub(crate) use fetch::{RevalidatedFetch, Revalidation, StrongEtag};
 pub use playlist::{COMMON, MASTER, MEDIA, PlaylistKind, lines, positive_int};
 pub use policy::{FetchPolicy, MAX_CONNECTIONS};
 

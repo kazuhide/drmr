@@ -134,6 +134,7 @@ pub struct Converter {
     source_hls_target_ms: Option<u32>,
     hls_target_policy: processing::segment_target::HlsTargetPolicy,
     maximum_workers: Option<usize>,
+    download_resume: bool,
     downloaded: Option<Arc<download::Seal>>,
     frozen_source: Vec<Arc<frozen::OriginalGuard>>,
     planned_destination: Option<Arc<plan::destination::OutputGuard>>,
@@ -153,6 +154,7 @@ impl Converter {
             source_hls_target_ms: None,
             hls_target_policy: processing::segment_target::HlsTargetPolicy::Fresh,
             maximum_workers: None,
+            download_resume: false,
             downloaded: None,
             frozen_source: Vec::new(),
             planned_destination: None,
@@ -180,6 +182,13 @@ impl Converter {
     #[must_use]
     pub fn with_processing(mut self, processing: ProcessingMode) -> Self {
         self.processing_mode = processing;
+        self
+    }
+    /// Retain complete URL resources across failed acquisitions at the same destination.
+    /// Manifests are fetched again; cached media is revalidated before reuse.
+    #[must_use]
+    pub fn with_download_resume(mut self, resume: bool) -> Self {
+        self.download_resume = resume;
         self
     }
     /// Add complete decoding to the required native media checks.
@@ -219,6 +228,7 @@ impl Converter {
             source_hls_target_ms: self.source_hls_target_ms,
             hls_target_policy: self.hls_target_policy,
             maximum_workers: self.maximum_workers,
+            download_resume: self.download_resume,
             downloaded: self.downloaded.clone(),
             frozen_source: self.frozen_source.clone(),
             planned_destination: self.planned_destination.clone(),

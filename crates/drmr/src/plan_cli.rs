@@ -28,20 +28,24 @@ impl PlanInput {
     ) -> Result<Self, convert_cli::ConfigurationError> {
         match crate::download_cli::Input::parse(args.input.as_os_str())? {
             crate::download_cli::Input::Local(path) => {
-                if args.download_dir.is_some() || args.fetch_policy.is_some() {
+                if args.acquisition.download_dir.is_some()
+                    || args.acquisition.fetch_policy.is_some()
+                    || args.acquisition.resume_download
+                {
                     return Err(ConversionError("download-options-require-url").into());
                 }
                 Ok(Self::Local(path))
             }
             crate::download_cli::Input::Url(url) => {
                 let directory = args
+                    .acquisition
                     .download_dir
                     .as_ref()
                     .ok_or(ConversionError("download-directory-required"))?;
                 crate::download_cli::preflight(directory, output)?;
                 let policy = drmr_core::conversion::download_policy::read(
                     &url,
-                    args.fetch_policy.as_deref(),
+                    args.acquisition.fetch_policy.as_deref(),
                 )?;
                 Ok(Self::Url {
                     url,
@@ -169,6 +173,11 @@ impl Session {
         self
     }
 
+    fn with_download_resume(mut self, resume: bool) -> Self {
+        self.converter = self.converter.with_download_resume(resume);
+        self
+    }
+
     fn with_validation(
         mut self,
         profile: Option<drmr_core::conversion::manifest_lint::ManifestProfile>,
@@ -214,6 +223,7 @@ pub fn save(args: &PlanArgs) -> ExitCode {
         args.keys_file.as_ref(),
     ) {
         Ok(value) => value
+            .with_download_resume(args.acquisition.resume_download)
             .with_new_intent(args.processing.unwrap_or_default(), args.dash_addressing)
             .with_validation(
                 args.manifest_profile,

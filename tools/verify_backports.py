@@ -7,10 +7,78 @@ from pathlib import Path
 import re
 
 ROOT = Path(__file__).resolve().parents[1]
+PRIVATE_FS_PATCHES = frozenset(("src/lib.rs", "src/windows/mod.rs", "src/windows/nt.rs",
+                               "src/windows/bindings.rs", "src/windows/tests.rs"))
+# Only these two complete, reviewed expressions may add unsafe code. Ignore source
+# whitespace so rustfmt cannot change this independent native-call shape boundary.
+PRIVATE_FS_EA_UNSAFE = (
+    b"unsafe{NtQueryEaFile(handle.as_handle().as_raw_handle(),&mutio_status,"
+    b"output.0.as_mut_ptr().cast(),output.0.len()asu32,1,query.0.as_ptr().cast(),"
+    b"query.0.len()asu32,ptr::null(),1,)}",
+    b"unsafe{NtSetEaFile(handle.as_handle().as_raw_handle(),&mutio_status,"
+    b"buffer.0.as_ptr().cast(),buffer.0.len()asu32,)}",
+)
 
 
 class Failure(Exception):
     pass
+
+
+def private_fs_unsafe_expressions(data):
+    """Extract only the finite braced expressions in these pinned source windows."""
+    keyword = rb"\bunsafe\b"
+    # None of these pinned windows contains block comments. Refuse delimiters
+    # even in quoted text rather than approximating Rust's nested-comment grammar.
+    if b"/*" in data or b"*/" in data:
+        return None
+    # Mask ordinary literals/comments for brace balancing. Hidden unsafe tokens,
+    # raw literals, nested blocks and unmatched syntax fail closed, not as Rust.
+    if re.search(rb'\b(?:b?r)#*"', data):
+        return None
+    masked = bytearray(data)
+    literal = rb'//[^\n]*|"(?:\\[\s\S]|[^"\\])*"|\'(?:\\[\s\S]|[^\'\\])\''
+    for match in re.finditer(literal, data):
+        if re.search(keyword, match[0]):
+            return None
+        masked[match.start():match.end()] = b" " * len(match[0])
+    masked = bytes(masked)
+    if any(token in masked for token in (b'"', b"'", b"//", b"/*", b"*/")):
+        return None
+    expressions, previous_end = [], 0
+    for match in re.finditer(keyword, masked):
+        if match.start() < previous_end or masked[match.start() - 1:match.start()] == b"#":
+            return None
+        opening = re.match(rb"\s*\{", masked[match.end():])
+        if opening is None:
+            return None
+        position = match.end() + opening.end()
+        depth = 1
+        while position < len(masked) and depth:
+            depth += (masked[position] == ord("{")) - (masked[position] == ord("}"))
+            position += 1
+        expression = data[match.start():position]
+        if depth or len(re.findall(keyword, expression)) != 1:
+            return None
+        expressions.append(expression)
+        previous_end = position
+    return expressions
+
+
+def private_fs_unsafe_shape(name, before, after):
+    original = private_fs_unsafe_expressions(before)
+    patched = private_fs_unsafe_expressions(after)
+    if original is None or patched is None:
+        return False
+    if name != "src/windows/nt.rs":
+        return original == patched
+    expected, retained = list(PRIVATE_FS_EA_UNSAFE), []
+    for expression in patched:
+        compact = b"".join(expression.split())
+        if compact in expected:
+            expected.remove(compact)
+        else:
+            retained.append(expression)
+    return not expected and retained == original
 
 
 def verify(root=ROOT):
@@ -69,7 +137,7 @@ def verify_private_fs(root=ROOT):
     if paths != set(pin["original_files"]) or any(p.is_symlink() for p in entries):
         raise Failure("native-patch-file-set")
     patches = pin["patches"]
-    if type(patches) is not dict or set(patches) != {"src/lib.rs", "src/windows/mod.rs", "src/windows/nt.rs"}:
+    if type(patches) is not dict or set(patches) != PRIVATE_FS_PATCHES:
         raise Failure("native-patch-shape")
     for name, digest in pin["original_files"].items():
         data = (home / name).read_bytes()
@@ -88,7 +156,7 @@ def verify_private_fs(root=ROOT):
                 raise Failure("native-patch-shape")
             before, after = change["before"].encode("utf-8"), change["after"].encode("utf-8")
             if (not after or before == after or data.count(after) != 1
-                    or len(re.findall(rb"\bunsafe\b", after)) > len(re.findall(rb"\bunsafe\b", before))):
+                    or not private_fs_unsafe_shape(name, before, after)):
                 raise Failure("native-patch-shape")
             data = data.replace(after, before, 1)
         if hashlib.sha256(data).hexdigest() != digest:

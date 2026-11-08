@@ -158,6 +158,7 @@ impl Converter {
         Self {
             backend: self.backend.clone(),
             maximum_workers: self.maximum_workers,
+            download_resume: self.download_resume,
             downloaded: self.downloaded.clone(),
             frozen_source: self.frozen_source.clone(),
             planned_destination: Some(Arc::new(guard)),

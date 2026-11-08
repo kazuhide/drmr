@@ -17,6 +17,56 @@ fn fixture() -> (tempfile::TempDir, PrivateDir) {
 }
 
 #[test]
+fn object_nonce_is_create_only_and_bound_to_the_open_object() {
+    let (temp, dir) = fixture();
+    let mut original = dir.create("data").unwrap();
+    original.write_all(b"unchanged").unwrap();
+    assert!(matches!(
+        read_object_nonce(&original, false),
+        Err(Error::Io(error)) if error.kind() == io::ErrorKind::NotFound
+    ));
+    create_object_nonce(&original, false, &[7; 32]).unwrap();
+    assert_eq!(read_object_nonce(&original, false).unwrap(), [7; 32]);
+    assert!(matches!(
+        create_object_nonce(&original, false, &[9; 32]),
+        Err(Error::Io(error)) if error.kind() == io::ErrorKind::AlreadyExists
+    ));
+    assert_eq!(read_object_nonce(&original, false).unwrap(), [7; 32]);
+    std::fs::rename(
+        temp.path().join("private/data"),
+        temp.path().join("private/original"),
+    )
+    .unwrap();
+    let mut replacement = dir.create("data").unwrap();
+    replacement.write_all(b"unchanged").unwrap();
+    assert_eq!(read_object_nonce(&original, false).unwrap(), [7; 32]);
+    assert!(read_object_nonce(&replacement, false).is_err());
+    assert_eq!(
+        std::fs::read(temp.path().join("private/original")).unwrap(),
+        b"unchanged"
+    );
+}
+
+#[test]
+fn object_nonce_supports_read_only_directory_and_lock_handles() {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    let (temp, dir) = fixture();
+    create_object_nonce(&dir, true, &[3; 32]).unwrap();
+    let read_only = PrivateDir::open(temp.path().join("private")).unwrap();
+    assert_eq!(read_object_nonce(&read_only, true).unwrap(), [3; 32]);
+    dir.create("lock").unwrap();
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .share_mode(FILE_SHARE_READ as u32)
+        .custom_flags(FILE_OPEN_REPARSE_POINT as u32)
+        .open(temp.path().join("private/lock"))
+        .unwrap();
+    create_object_nonce(&lock, false, &[5; 32]).unwrap();
+    assert_eq!(read_object_nonce(&lock, false).unwrap(), [5; 32]);
+}
+
+#[test]
 fn classic_publication_fallback_is_atomic_handle_relative_and_keeps_identity() {
     let (temp, dir) = fixture();
     dir.create("data").unwrap().write_all(b"old").unwrap();

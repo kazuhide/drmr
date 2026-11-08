@@ -299,6 +299,11 @@ output copying and sealing. A changed or missing source prevents publication.
 A completed download remains available after conversion failure; an incomplete
 acquisition is removed only after active work has stopped.
 
+For interrupted acquisition, the explicit [`--resume-download` option](download-resume.md)
+keeps completed originals in a private sibling cache and revalidates them on the
+next attempt. It must be enabled before the first attempt; conversion itself is
+not resumed.
+
 Cancellation interrupts active response reads. Name resolution and connection
 setup may wait for the operating system or request timeout before stopping.
 

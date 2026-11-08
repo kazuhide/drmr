@@ -10,7 +10,11 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 #[derive(Clone, Args)]
-#[command(mut_arg("decode", |arg| arg.requires("save").help("Also decode all media while saving the plan; later runs retain this minimum.")))]
+#[command(
+    mut_arg("decode", |arg| arg.requires("save").help("Also decode all media while saving the plan; later runs retain this minimum.")),
+    mut_arg("download_dir", |arg| arg.requires("save").help("Retain an original URL source for a saved execution plan.")),
+    mut_arg("resume_download", |arg| arg.requires("save"))
+)]
 pub struct PlanArgs {
     /// Local media or manifest whose conversion intent should be described.
     #[arg(help_heading = "Input", value_name = "INPUT")]
@@ -56,14 +60,8 @@ pub struct PlanArgs {
     #[arg(long, requires = "save", conflicts_with = "output_file")]
     #[arg(help_heading = "Output", value_name = "DIR")]
     pub output_dir: Option<PathBuf>,
-    /// Retain an original URL source for a saved execution plan.
-    #[arg(long, requires = "save")]
-    #[arg(help_heading = "Input", value_name = "DIR")]
-    pub download_dir: Option<PathBuf>,
-    /// Private HTTP settings for URL metadata or retained acquisition.
-    #[arg(long = "fetch-config")]
-    #[arg(help_heading = "Input", value_name = "FILE")]
-    pub fetch_policy: Option<PathBuf>,
+    #[command(flatten)]
+    pub acquisition: crate::download_cli::DownloadOptions,
     /// Required native final-manifest rules recorded in the execution plan.
     #[arg(long, value_enum, requires = "save")]
     #[arg(help_heading = "Verification", value_name = "PROFILE")]
@@ -109,14 +107,16 @@ fn inspect_input(
 ) -> Result<Inspection, convert_cli::ConfigurationError> {
     match crate::download_cli::Input::parse(args.input.as_os_str())? {
         crate::download_cli::Input::Local(path) => {
-            if args.fetch_policy.is_some() {
+            if args.acquisition.fetch_policy.is_some() {
                 return Err(ConversionError("download-options-require-url").into());
             }
             inspection::inspect(&path).map_err(|error| ConversionError(error.0).into())
         }
         crate::download_cli::Input::Url(url) => {
-            let policy =
-                drmr_core::conversion::download_policy::read(&url, args.fetch_policy.as_deref())?;
+            let policy = drmr_core::conversion::download_policy::read(
+                &url,
+                args.acquisition.fetch_policy.as_deref(),
+            )?;
             progress.mark("acquisition");
             convert_cli::converter("packager", None, false, progress.clone(), stop)
                 .inspect_url_metadata(&url, &policy)

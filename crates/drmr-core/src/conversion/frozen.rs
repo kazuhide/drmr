@@ -171,6 +171,7 @@ impl super::Converter {
         Self {
             backend: self.backend.clone(),
             maximum_workers: self.maximum_workers,
+            download_resume: self.download_resume,
             downloaded: self.downloaded.clone(),
             frozen_source: guards,
             planned_destination: self.planned_destination.clone(),

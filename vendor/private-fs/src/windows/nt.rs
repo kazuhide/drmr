@@ -394,6 +394,147 @@ pub(super) fn security_handle(handle: impl AsHandle) -> Result<OwnedHandle> {
     )
 }
 
+pub(super) fn nonce_handle(
+    handle: impl AsHandle,
+    directory: bool,
+    write: bool,
+) -> Result<OwnedHandle> {
+    let owned = handle.as_handle().try_clone_to_owned()?;
+    let original = metadata(&owned, directory, None)?;
+    let access = (FILE_READ_EA | FILE_READ_ATTRIBUTES | SYNCHRONIZE) as u32
+        | if write { FILE_WRITE_EA as u32 } else { 0 };
+    let reopened = open_access(
+        Some(&owned),
+        OsStr::new(""),
+        directory,
+        FILE_OPEN as u32,
+        None,
+        Some(access),
+    )?;
+    metadata(&reopened, directory, Some(original))?;
+    Ok(reopened)
+}
+
+// The 23-byte name makes the complete single FILE_FULL_EA_INFORMATION record
+// exactly 64 bytes. Both buffers start on the documented four-byte boundary.
+const NONCE_NAME: &[u8; 23] = b"PRIVATE_FS_OBJECT_NONCE";
+const NONCE_VALUE_OFFSET: usize = 8 + NONCE_NAME.len() + 1;
+const NONCE_RECORD_BYTES: usize = NONCE_VALUE_OFFSET + 32;
+#[repr(C, align(4))]
+struct EaBuffer<const N: usize>([u8; N]);
+
+fn invalid_nonce() -> Error {
+    io::Error::new(io::ErrorKind::InvalidData, "malformed object nonce").into()
+}
+
+fn parse_nonce(buffer: &[u8]) -> Result<Option<[u8; 32]>> {
+    if !matches!(buffer.len(), NONCE_VALUE_OFFSET | NONCE_RECORD_BYTES)
+        || buffer[..4] != [0; 4]
+        || buffer[4] != 0
+        || usize::from(buffer[5]) != NONCE_NAME.len()
+        || &buffer[8..NONCE_VALUE_OFFSET - 1] != NONCE_NAME
+        || buffer[NONCE_VALUE_OFFSET - 1] != 0
+    {
+        return Err(invalid_nonce());
+    }
+    let length = usize::from(u16::from_le_bytes([buffer[6], buffer[7]]));
+    match (length, buffer.len()) {
+        (0, NONCE_VALUE_OFFSET) => Ok(None),
+        (32, NONCE_RECORD_BYTES) => Ok(Some(
+            buffer[NONCE_VALUE_OFFSET..]
+                .try_into()
+                .map_err(|_| invalid_nonce())?,
+        )),
+        _ => Err(invalid_nonce()),
+    }
+}
+
+pub(super) fn read_nonce(handle: impl AsHandle) -> Result<Option<[u8; 32]>> {
+    let mut query = EaBuffer([0u8; 5 + NONCE_NAME.len() + 1]);
+    query.0[4] = NONCE_NAME.len() as u8;
+    query.0[5..5 + NONCE_NAME.len()].copy_from_slice(NONCE_NAME);
+    let mut output = EaBuffer([0u8; NONCE_RECORD_BYTES]);
+    let mut io_status = IO_STATUS_BLOCK::default();
+    // SAFETY: nonce_handle supplies a synchronous FILE_READ_EA handle. Both
+    // initialized buffers are four-byte aligned and remain live for this call;
+    // the query contains one bounded, terminated FILE_GET_EA_INFORMATION name.
+    let status = unsafe {
+        NtQueryEaFile(
+            handle.as_handle().as_raw_handle(),
+            &mut io_status,
+            output.0.as_mut_ptr().cast(),
+            output.0.len() as u32,
+            1,
+            query.0.as_ptr().cast(),
+            query.0.len() as u32,
+            ptr::null(),
+            1,
+        )
+    };
+    if matches!(status, STATUS_NO_EAS_ON_FILE | STATUS_NONEXISTENT_EA_ENTRY) {
+        return Ok(None);
+    }
+    nt_result(status)?;
+    if status != 0 || io_status.Information > output.0.len() {
+        return Err(invalid_nonce());
+    }
+    parse_nonce(&output.0[..io_status.Information])
+}
+
+pub(super) fn write_nonce(handle: impl AsHandle, nonce: &[u8; 32]) -> Result<()> {
+    let mut buffer = EaBuffer([0u8; NONCE_RECORD_BYTES]);
+    buffer.0[5] = NONCE_NAME.len() as u8;
+    buffer.0[6..8].copy_from_slice(&32u16.to_le_bytes());
+    buffer.0[8..NONCE_VALUE_OFFSET - 1].copy_from_slice(NONCE_NAME);
+    buffer.0[NONCE_VALUE_OFFSET..].copy_from_slice(nonce);
+    let mut io_status = IO_STATUS_BLOCK::default();
+    // SAFETY: nonce_handle supplies a synchronous FILE_WRITE_EA handle. The
+    // aligned initialized buffer contains one exact FILE_FULL_EA_INFORMATION
+    // record with zero flags/next offset, terminated fixed name and 32-byte value.
+    let status = unsafe {
+        NtSetEaFile(
+            handle.as_handle().as_raw_handle(),
+            &mut io_status,
+            buffer.0.as_ptr().cast(),
+            buffer.0.len() as u32,
+        )
+    };
+    nt_result(status)?;
+    if status != 0 {
+        return Err(invalid_nonce());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod nonce_tests {
+    use super::*;
+
+    #[test]
+    fn nonce_record_rejects_noncanonical_lengths_names_flags_and_offsets() {
+        let mut buffer = [0u8; NONCE_RECORD_BYTES];
+        buffer[5] = NONCE_NAME.len() as u8;
+        buffer[6..8].copy_from_slice(&32u16.to_le_bytes());
+        buffer[8..NONCE_VALUE_OFFSET - 1].copy_from_slice(NONCE_NAME);
+        buffer[NONCE_VALUE_OFFSET..].fill(11);
+        assert_eq!(parse_nonce(&buffer).unwrap(), Some([11; 32]));
+        for index in [0, 4, 5, 6, 7, 8, NONCE_VALUE_OFFSET - 1] {
+            let mut malformed = buffer;
+            malformed[index] ^= 1;
+            assert!(parse_nonce(&malformed).is_err());
+        }
+        for length in 0..NONCE_RECORD_BYTES {
+            assert!(parse_nonce(&buffer[..length]).is_err());
+        }
+        let mut oversized = buffer.to_vec();
+        oversized.push(0);
+        assert!(parse_nonce(&oversized).is_err());
+        buffer[6..8].copy_from_slice(&0u16.to_le_bytes());
+        assert_eq!(parse_nonce(&buffer[..NONCE_VALUE_OFFSET]).unwrap(), None);
+        assert!(parse_nonce(&buffer).is_err());
+    }
+}
+
 pub(super) fn directory_for_listing(parent: &OwnedHandle) -> Result<OwnedHandle> {
     open_access(
         Some(parent),

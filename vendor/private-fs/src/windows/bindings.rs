@@ -9,6 +9,8 @@ windows_link::link!("kernel32.dll" "system" fn GetCurrentProcess() -> HANDLE);
 windows_link::link!("kernel32.dll" "system" fn GetFileInformationByHandleEx(hfile : HANDLE, fileinformationclass : FILE_INFO_BY_HANDLE_CLASS, lpfileinformation : *mut core::ffi::c_void, dwbuffersize : u32) -> BOOL);
 windows_link::link!("kernel32.dll" "system" fn GetFileType(hfile : HANDLE) -> u32);
 windows_link::link!("kernel32.dll" "system" fn GetHandleInformation(hobject : HANDLE, lpdwflags : *mut u32) -> BOOL);
+windows_link::link!("ntdll.dll" "system" fn NtQueryEaFile(filehandle : HANDLE, iostatusblock : *mut IO_STATUS_BLOCK, buffer : *mut core::ffi::c_void, length : u32, returnsingleentry : u8, ealist : *const core::ffi::c_void, ealistlength : u32, eaindex : *const u32, restartscan : u8) -> NTSTATUS);
+windows_link::link!("ntdll.dll" "system" fn NtSetEaFile(filehandle : HANDLE, iostatusblock : *mut IO_STATUS_BLOCK, buffer : *const core::ffi::c_void, length : u32) -> NTSTATUS);
 windows_link::link!("advapi32.dll" "system" fn GetLengthSid(psid : PSID) -> u32);
 windows_link::link!("advapi32.dll" "system" fn GetSecurityDescriptorControl(psecuritydescriptor : PSECURITY_DESCRIPTOR, pcontrol : *mut u16, lpdwrevision : *mut u32) -> BOOL);
 windows_link::link!("advapi32.dll" "system" fn GetSecurityInfo(handle : HANDLE, objecttype : SE_OBJECT_TYPE, securityinfo : SECURITY_INFORMATION, ppsidowner : *mut PSID, ppsidgroup : *mut PSID, ppdacl : *mut PACL, ppsacl : *mut PACL, ppsecuritydescriptor : *mut PSECURITY_DESCRIPTOR) -> u32);
@@ -128,6 +130,7 @@ pub const FILE_OPEN_REPARSE_POINT: i32 = 2097152;
 pub const FILE_PERSISTENT_ACLS: i32 = 8;
 pub const FILE_READ_ATTRIBUTES: i32 = 128;
 pub const FILE_READ_DATA: i32 = 1;
+pub const FILE_READ_EA: i32 = 8;
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct FILE_RENAME_INFORMATION {
@@ -169,6 +172,7 @@ pub struct FILE_STANDARD_INFO {
 pub const FILE_SYNCHRONOUS_IO_NONALERT: i32 = 32;
 pub const FILE_TYPE_DISK: i32 = 1;
 pub const FILE_WRITE_DATA: i32 = 2;
+pub const FILE_WRITE_EA: i32 = 16;
 pub const FSCTL_SET_REPARSE_POINT: i32 = 589988;
 pub const FileAttributeTagInfo: FILE_INFO_BY_HANDLE_CLASS = 9;
 pub const FileDispositionInfo: FILE_INFO_BY_HANDLE_CLASS = 4;
@@ -283,6 +287,8 @@ pub struct SID_AND_ATTRIBUTES {
 pub const STATUS_INVALID_INFO_CLASS: NTSTATUS = 0xC0000003_u32 as _;
 pub const STATUS_INVALID_PARAMETER: NTSTATUS = 0xC000000D_u32 as _;
 pub const STATUS_NOT_SUPPORTED: NTSTATUS = 0xC00000BB_u32 as _;
+pub const STATUS_NO_EAS_ON_FILE: NTSTATUS = 0xC0000052_u32 as _;
+pub const STATUS_NONEXISTENT_EA_ENTRY: NTSTATUS = 0xC0000051_u32 as _;
 pub const STATUS_REPARSE_POINT_ENCOUNTERED: NTSTATUS = 0xC000050B_u32 as _;
 pub const STATUS_STOPPED_ON_SYMLINK: NTSTATUS = 0x8000002D_u32 as _;
 pub const SYNCHRONIZE: i32 = 1048576;

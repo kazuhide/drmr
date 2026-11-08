@@ -8,6 +8,8 @@ mod layout_tests;
 pub(in crate::conversion) mod native;
 use input::{Acquired, Entrypoint};
 mod owned;
+mod resume;
+mod resume_cache;
 pub(super) mod stream;
 use super::layout::{LayoutMode, UrlPathMapper, path_text, path_uri};
 use owned::OwnedDownload;
@@ -37,6 +39,12 @@ struct AcquisitionOptions {
     hls_only: bool,
     layout_mode: LayoutMode,
     prepare_native: bool,
+}
+
+#[derive(Clone, Copy)]
+struct AcquisitionFiles<'a> {
+    owned: &'a OwnedDownload,
+    resume: Option<&'a resume_cache::ResumeCache>,
 }
 
 enum AcquisitionPermit {
@@ -341,19 +349,7 @@ impl Converter {
         // Only this bounded command label is registered. Acquired URL graphs never
         // reach subprocess arguments or diagnostics after canonical localization.
         self.backend.runner.secrets().register([url]);
-        let mut policy = policy.clone();
-        if policy.allowed_origins.is_empty() {
-            policy
-                .allowed_origins
-                .push(source::origin(url).map_err(|_| INVALID)?);
-        }
-        if !policy.allowed_local_roots.is_empty() {
-            return Err(INVALID);
-        }
-        policy
-            .validate()
-            .map_err(|_| ConversionError("invalid-fetch-policy"))?;
-        policy.max_playlist_bytes = policy.max_playlist_bytes.min(4 * 1024 * 1024);
+        let policy = acquisition_policy(url, policy)?;
         let budget = self.acquisition_budget(&policy)?;
         let mut options = self.acquisition_options(options, budget.workers);
         let (mut retained, acquisition_permit) =
@@ -363,11 +359,23 @@ impl Converter {
             Some(output) => OwnedDownload::reserve(directory, output)?,
             None => OwnedDownload::reserve_source(directory)?,
         };
+        let mut cache = resume::open(
+            self.download_resume,
+            directory,
+            url,
+            output,
+            &policy,
+            &mut owned,
+            &self.backend.stop,
+        )?;
         let result = self.acquire(
             url,
             &policy,
             budget.workers,
-            &owned,
+            AcquisitionFiles {
+                owned: &owned,
+                resume: cache.as_ref(),
+            },
             progress.as_ref(),
             options,
         );
@@ -408,6 +416,9 @@ impl Converter {
                     seal.files
                         .insert(PathBuf::from(&seal.entrypoint), pending.digest);
                     seal.check(&self.backend.stop)?;
+                    if let Some(cache) = &mut cache {
+                        cache.cleanup(&self.backend.stop)?;
+                    }
                     Ok(())
                 })();
                 if let Err(error) = commit {
@@ -515,10 +526,17 @@ impl Converter {
         url: &str,
         policy: &FetchPolicy,
         workers: usize,
-        owned: &OwnedDownload,
+        acquisition: AcquisitionFiles<'_>,
         progress: Option<&Arc<source::progress::Progress>>,
         options: AcquisitionOptions,
     ) -> Result<Acquired, ConversionError> {
+        let owned = acquisition.owned;
+        let cache_bytes = acquisition
+            .resume
+            .map_or(0, resume_cache::ResumeCache::retained_bytes);
+        let cache_bytes =
+            usize::try_from(cache_bytes).map_err(|_| ConversionError("download-graph-limit"))?;
+        owned.charge_graph(cache_bytes)?;
         // Content detection chooses one of these after streaming the root. Pay
         // their bounded metadata before creating any retained or pending file.
         for name in ["input.m3u8", "input.mpd", "input.mp4"] {
@@ -547,9 +565,10 @@ impl Converter {
             owned,
             policy,
             fetcher: &fetcher,
+            resume: acquisition.resume,
             playlists: BTreeMap::new(),
             media: BTreeMap::new(),
-            weight: 0,
+            weight: cache_bytes,
             text_bytes: 0,
             records: Vec::new(),
             resources: Vec::new(),
@@ -775,6 +794,7 @@ struct Graph<'a> {
     owned: &'a OwnedDownload,
     policy: &'a FetchPolicy,
     fetcher: &'a Fetcher,
+    resume: Option<&'a resume_cache::ResumeCache>,
     playlists: BTreeMap<String, Playlist>,
     media: BTreeMap<String, String>,
     weight: usize,
@@ -803,6 +823,22 @@ fn valid_url(url: &str) -> Result<(), ConversionError> {
     }
     source::origin(url).map_err(|_| INVALID)?;
     Ok(())
+}
+fn acquisition_policy(url: &str, policy: &FetchPolicy) -> Result<FetchPolicy, ConversionError> {
+    let mut policy = policy.clone();
+    if policy.allowed_origins.is_empty() {
+        policy
+            .allowed_origins
+            .push(source::origin(url).map_err(|_| INVALID)?);
+    }
+    if !policy.allowed_local_roots.is_empty() {
+        return Err(INVALID);
+    }
+    policy
+        .validate()
+        .map_err(|_| ConversionError("invalid-fetch-policy"))?;
+    policy.max_playlist_bytes = policy.max_playlist_bytes.min(4 * 1024 * 1024);
+    Ok(policy)
 }
 impl Graph<'_> {
     fn admit_node(&self) -> Result<(), ConversionError> {
@@ -908,6 +944,7 @@ impl Graph<'_> {
                 }
             })?;
         valid_url(&effective)?;
+        resume::manifest(self.resume, self.fetcher, url, &effective, &body)?;
         self.text_charge(
             body.len()
                 .saturating_add(url.len())
@@ -1103,22 +1140,39 @@ impl Graph<'_> {
                 let path = self.owned.path().join(&resource.path);
                 let owned = self.owned;
                 let text_bytes = &text_bytes;
+                let resume_cache = self.resume;
                 Box::new(move || {
                     let permit = backend
                         .map(|backend| {
                             acquisition_cpu(backend, stop.expect("backend has pool stop"))
                         })
                         .transpose()?;
-                    let (received, created) = fetcher
-                        .fetch_created(&resource.url, &path, None)
-                        .map_err(|error| {
-                            if fetcher.stop().is_set() || abort.is_set() {
-                                ConversionError("cancelled")
-                            } else {
-                                failure(&error)
-                            }
-                        })?;
-                    owned.register_file(Path::new(&resource.path), created)?;
+                    let received = if let Some(cache) = resume_cache {
+                        resume::fetch(
+                            cache,
+                            fetcher,
+                            &resource.url,
+                            &path,
+                            resume_cache::ResourceKind::Media,
+                            |created| owned.register_file(Path::new(&resource.path), created),
+                        )
+                        .map(|(received, _)| received)
+                    } else {
+                        fetcher
+                            .fetch_created(&resource.url, &path, None)
+                            .map_err(|error| failure(&error))
+                            .and_then(|(received, created)| {
+                                owned.register_file(Path::new(&resource.path), created)?;
+                                Ok(received)
+                            })
+                    }
+                    .map_err(|error| {
+                        if fetcher.stop().is_set() || abort.is_set() {
+                            ConversionError("cancelled")
+                        } else {
+                            error
+                        }
+                    })?;
                     valid_url(&received.effective)?;
                     let mut total = text_bytes.lock().map_err(|_| IO)?;
                     *total = total

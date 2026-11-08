@@ -195,7 +195,10 @@ fn saved_url_plans_keep_the_download_destination_explicit() {
     else {
         panic!("expected plan")
     };
-    assert_eq!(args.download_dir.as_deref(), Some(Path::new("source")));
+    assert_eq!(
+        args.acquisition.download_dir.as_deref(),
+        Some(Path::new("source"))
+    );
 }
 
 #[test]
@@ -238,4 +241,177 @@ fn plan_decode_requires_saved_complete_source_checks() {
         panic!("expected plan")
     };
     assert!(args.decoding.decode);
+}
+
+#[test]
+fn resume_download_is_explicit_for_all_complete_url_commands() {
+    let url = "https://example.invalid/media.mp4?private-sentinel";
+    let Command::Analyze(args) = parse(&[
+        "analyze",
+        url,
+        "--download-dir",
+        "source",
+        "--resume-download",
+    ])
+    .command
+    else {
+        panic!("expected analyze")
+    };
+    assert!(args.acquisition.resume_download);
+    let Command::Plan(args) = parse(&[
+        "plan",
+        url,
+        "--encryption",
+        "clear",
+        "--output-file",
+        "new.mp4",
+        "--save",
+        "plan.json",
+        "--download-dir",
+        "source",
+        "--resume-download",
+    ])
+    .command
+    else {
+        panic!("expected plan")
+    };
+    assert!(args.acquisition.resume_download);
+    let Command::Convert(args) = parse(&[
+        "convert",
+        url,
+        "--encryption",
+        "clear",
+        "--output-file",
+        "new.mp4",
+        "--download-dir",
+        "source",
+        "--resume-download",
+    ])
+    .command
+    else {
+        panic!("expected convert")
+    };
+    assert!(args.acquisition.resume_download);
+    let Command::Convert(args) = parse(&[
+        "convert",
+        url,
+        "--output-config",
+        "outputs.json",
+        "--output-dir",
+        "new-results",
+        "--download-dir",
+        "source",
+        "--resume-download",
+    ])
+    .command
+    else {
+        panic!("expected convert")
+    };
+    assert!(args.acquisition.resume_download);
+    let Command::Plan(args) = parse(&[
+        "plan",
+        url,
+        "--output-config",
+        "outputs.json",
+        "--output-dir",
+        "new-results",
+        "--save",
+        "plan.json",
+        "--download-dir",
+        "source",
+        "--resume-download",
+    ])
+    .command
+    else {
+        panic!("expected plan")
+    };
+    assert!(args.acquisition.resume_download);
+}
+
+#[test]
+fn resume_download_stays_disabled_without_the_flag() {
+    let Command::Analyze(args) = parse(&["analyze", "media.mp4"]).command else {
+        panic!("expected analyze")
+    };
+    assert!(!args.acquisition.resume_download);
+    let Command::Plan(args) = parse(&["plan", "media.mp4", "--encryption", "clear"]).command else {
+        panic!("expected plan")
+    };
+    assert!(!args.acquisition.resume_download);
+    let Command::Convert(args) = parse(&[
+        "convert",
+        "media.mp4",
+        "--encryption",
+        "clear",
+        "--output-file",
+        "new.mp4",
+    ])
+    .command
+    else {
+        panic!("expected convert")
+    };
+    assert!(!args.acquisition.resume_download);
+}
+
+#[test]
+fn resume_download_requires_a_download_directory_and_complete_saved_plan() {
+    for arguments in [
+        vec![
+            "analyze",
+            "https://example.invalid/media.mp4",
+            "--resume-download",
+        ],
+        vec![
+            "plan",
+            "https://example.invalid/media.mp4",
+            "--encryption",
+            "clear",
+            "--save",
+            "plan.json",
+            "--output-file",
+            "new.mp4",
+            "--resume-download",
+        ],
+        vec![
+            "plan",
+            "https://example.invalid/media.mp4",
+            "--encryption",
+            "clear",
+            "--download-dir",
+            "source",
+            "--resume-download",
+        ],
+        vec![
+            "convert",
+            "https://example.invalid/media.mp4",
+            "--encryption",
+            "clear",
+            "--output-file",
+            "new.mp4",
+            "--resume-download",
+        ],
+    ] {
+        let error = Cli::try_parse_from(std::iter::once("drmr").chain(arguments))
+            .err()
+            .unwrap();
+        assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+    }
+}
+
+#[test]
+fn metadata_only_and_plan_execution_refuse_download_resume() {
+    for arguments in [
+        vec![
+            "analyze",
+            "https://example.invalid/media.mp4",
+            "--metadata-only",
+            "--resume-download",
+        ],
+        vec!["convert", "--plan-file", "plan.json", "--resume-download"],
+    ] {
+        let error = Cli::try_parse_from(std::iter::once("drmr").chain(arguments))
+            .err()
+            .unwrap();
+        assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
+    }
 }

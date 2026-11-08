@@ -4,6 +4,10 @@ use std::{fs::File, io};
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct FileIdentity(u64, u64);
 impl FileIdentity {
+    /// Version-local durable binding for private ownership receipts, not authentication.
+    pub(crate) fn stable_token(self) -> String {
+        format!("{:016x}{:016x}", self.0, self.1)
+    }
     /// Identify the opened object without retaining one descriptor per resource.
     pub fn read(file: &File) -> io::Result<Self> {
         #[cfg(unix)]
