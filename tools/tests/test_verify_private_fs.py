@@ -102,6 +102,36 @@ class PrivateFsSource(unittest.TestCase):
                 with self.assertRaisesRegex(VERIFY.Failure, "native-patch-shape"):
                     VERIFY.verify_private_fs(root)
 
+    def test_existing_unsafe_expressions_cannot_be_changed_removed_or_duplicated(self):
+        original = "unsafe { core::mem::zeroed() }"
+        for replacement in (
+                "unsafe { core::hint::unreachable_unchecked() }",
+                "core::mem::zeroed()",
+                original + "; " + original):
+            with self.subTest(change=replacement), tempfile.TemporaryDirectory() as directory:
+                root = self.copied(directory)
+                self.rebound(root, "src/windows/bindings.rs",
+                             lambda after: after.replace(original, replacement, 1))
+                with self.assertRaisesRegex(VERIFY.Failure, "native-patch-shape"):
+                    VERIFY.verify_private_fs(root)
+
+    def test_unmatched_or_hidden_unsafe_lexemes_are_refused(self):
+        original = "unsafe { core::mem::zeroed() }"
+        for replacement in (
+                "/* " + original + " */ core::mem::zeroed()",
+                '"' + original + '"',
+                'r#"' + original + '"#',
+                "r#" + original,
+                "unsafe fn unreviewed() {}",
+                "unsafe { core::mem::zeroed()",
+                "unsafe { unsafe { core::mem::zeroed() } }"):
+            with self.subTest(change=replacement), tempfile.TemporaryDirectory() as directory:
+                root = self.copied(directory)
+                self.rebound(root, "src/windows/bindings.rs",
+                             lambda after: after.replace(original, replacement, 1))
+                with self.assertRaisesRegex(VERIFY.Failure, "native-patch-shape"):
+                    VERIFY.verify_private_fs(root)
+
     def test_patch_inventory_cannot_admit_a_sixth_publisher_path(self):
         with tempfile.TemporaryDirectory() as directory:
             root = self.copied(directory)

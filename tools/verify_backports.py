@@ -24,14 +24,57 @@ class Failure(Exception):
     pass
 
 
+def private_fs_unsafe_expressions(data):
+    """Extract only the finite braced expressions in these pinned source windows."""
+    keyword = rb"\bunsafe\b"
+    # Mask ordinary literals/comments for brace balancing. Hidden unsafe tokens,
+    # raw literals, nested blocks and unmatched syntax fail closed, not as Rust.
+    if re.search(rb'\b(?:b?r)#*"', data):
+        return None
+    masked = bytearray(data)
+    literal = rb'//[^\n]*|/\*[\s\S]*?\*/|"(?:\\[\s\S]|[^"\\])*"|\'(?:\\[\s\S]|[^\'\\])\''
+    for match in re.finditer(literal, data):
+        if re.search(keyword, match[0]):
+            return None
+        masked[match.start():match.end()] = b" " * len(match[0])
+    masked = bytes(masked)
+    if any(token in masked for token in (b'"', b"'", b"//", b"/*", b"*/")):
+        return None
+    expressions, previous_end = [], 0
+    for match in re.finditer(keyword, masked):
+        if match.start() < previous_end or masked[match.start() - 1:match.start()] == b"#":
+            return None
+        opening = re.match(rb"\s*\{", masked[match.end():])
+        if opening is None:
+            return None
+        position = match.end() + opening.end()
+        depth = 1
+        while position < len(masked) and depth:
+            depth += (masked[position] == ord("{")) - (masked[position] == ord("}"))
+            position += 1
+        expression = data[match.start():position]
+        if depth or len(re.findall(keyword, expression)) != 1:
+            return None
+        expressions.append(expression)
+        previous_end = position
+    return expressions
+
+
 def private_fs_unsafe_shape(name, before, after):
-    added = len(re.findall(rb"\bunsafe\b", after)) - len(re.findall(rb"\bunsafe\b", before))
+    original = private_fs_unsafe_expressions(before)
+    patched = private_fs_unsafe_expressions(after)
+    if original is None or patched is None:
+        return False
     if name != "src/windows/nt.rs":
-        return added == 0
-    compact_before, compact_after = b"".join(before.split()), b"".join(after.split())
-    return added == 2 and all(compact_after.count(expression) == 1
-                              and expression not in compact_before
-                              for expression in PRIVATE_FS_EA_UNSAFE)
+        return original == patched
+    expected, retained = list(PRIVATE_FS_EA_UNSAFE), []
+    for expression in patched:
+        compact = b"".join(expression.split())
+        if compact in expected:
+            expected.remove(compact)
+        else:
+            retained.append(expression)
+    return not expected and retained == original
 
 
 def verify(root=ROOT):
