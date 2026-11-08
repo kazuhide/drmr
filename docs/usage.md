@@ -162,11 +162,11 @@ A qualified progressive MP4 with one AAC-LC audio track and optional qualified H
 
 A qualified local HLS transport-stream source can produce clear, `cenc`, or `cbcs` DASH or fMP4 HLS, as well as AES-128 fMP4 HLS. `--output-format mp4` writes one fragmented MP4 with clear, `cenc`, or `cbcs` protection: audio only, video only, or one video and one audio track. Restrict a master with several qualities or audio choices to the desired video and associated audio before analysis; drmr refuses ambiguous selections. MP4 output uses `auto` or `stitch`, and `segments` refuses that container change. Use `--output-format hls-ts` to retain transport streams, including SAMPLE-AES encryption for FairPlay media. Combining unrelated files or multiple video qualities into one MP4, live input, and unrestricted DASH/HLS profiles remain unsupported. See [TS to one MP4](conversion-support.md#mpeg-transport-streams-to-one-mp4) and [processing and verification](media-processing.md) for the track, language and timing conditions.
 
-Development for 1.3 also writes one fragmented MP4 from a qualified DASH/fMP4
+Version 1.3.0 also writes one fragmented MP4 from a qualified DASH/fMP4
 HLS presentation with one video and one AAC audio track. This requires the
 [documented rendition mapping](conversion-support.md#fragmented-presentations-to-one-mp4),
-`auto` or `stitch`, and the existing native media checks. It is not included in
-the 1.2.0 release. Use `--output-format mp4 --output-file result.mp4` or a named
+`auto` or `stitch`, and the existing native media checks.
+Use `--output-format mp4 --output-file result.mp4` or a named
 MP4 output configuration.
 
 `verify OUTPUT --source INPUT` independently compares the original source and result. It requires their respective keys when encrypted. Success means the required native stream metadata, complete encoded content, packet clocks and playback windows match. `--decode` additionally requires complete decoded picture/sound equality. Neither depth establishes license acquisition or device playback. Use the generated `manifest.mpd` or `master.m3u8` as the output argument for a presentation. Both commands support `--json` for one versioned result object. New complete-media JSON reports use schema version 2 with explicit required depth, scope and decode evidence; metadata-only and manifest-only reports retain their separate schemas. Progress is separate, as described below.

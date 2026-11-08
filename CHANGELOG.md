@@ -5,8 +5,7 @@ for installation, stable interfaces and versioning.
 
 ## [Unreleased]
 
-Development for 1.3. Changes below are not included in the 1.2.0 release.
-Completed changes are recorded by category before the next release.
+## [1.3.0] - 2026-11-08
 
 ### Added
 
@@ -63,11 +62,6 @@ Completed changes are recorded by category before the next release.
   inputs avoid the fallback 4K estimate when replaying older decoded plans.
 - Use the current `hls-fmp4`, `output_format` and `encryption` names consistently
   in the output tables and English/Japanese guides.
-
-### Before the 1.3 release
-
-- Qualify the final archives on every supported operating system, including the
-  [full release round-trip matrix](docs/releases.md#release-only-round-trip-qualification).
 
 ## [1.2.0] - 2026-11-02
 

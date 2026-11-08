@@ -261,11 +261,11 @@ compares them with the original before publishing the result. No separate
 `analyze`, `plan` or `verify` is required to obtain those checks. For clear HLS TS
 with two or more `stitch` fMP4 HLS/DASH outputs, it also shares joining, track
 separation and clear-media preparation. Each output receives its own working
-copy for encryption. Development for 1.3 can reuse complete checked-source data
+copy for encryption. Version 1.3.0 can reuse complete checked-source data
 within this operation and prepare each final result once for qualification and
 comparison; see [reusing original-source checks](#reusing-original-source-checks).
-This addition is not in the 1.2.0 archives. Input checking is not a persistent
-cache: a later command reads and checks the current files again.
+Input checking is not a persistent cache: a later command reads and checks the
+current files again.
 
 The generated entrypoints are:
 
@@ -282,7 +282,7 @@ physical sharing of their media files is not guaranteed.
 
 ## Reusing original-source checks
 
-**Development for 1.3; not included in the 1.2.0 archives.** Native-depth
+From version 1.3.0, native-depth
 multiple-output conversion of clear HLS TS can retain the complete source
 comparison data from its checked preparation. Every output must be fMP4 HLS or
 DASH and resolve to `stitch`; the usual `auto` selection can choose that route.
@@ -305,11 +305,11 @@ does not share encrypted segment generation. Additional `--decode`, `segments`,
 single-output conversion and other input profiles keep their existing checking
 routes. A separate `verify` process always reads and checks the source and result
 afresh; neither an earlier report nor this command's in-memory data replaces
-that verification. See [Unreleased changes](../CHANGELOG.md#unreleased).
+that verification. See [release changes](../CHANGELOG.md).
 
 ### Checking complete renditions during download
 
-Development for 1.3 can check a complete clear TS HLS rendition on its download
+Version 1.3.0 can check a complete clear TS HLS rendition on its download
 worker while other renditions are still being fetched. The same command reuses
 those native input checks after downloading. This is automatic for compatible
 multiple-output conversions; no additional CLI option is needed.

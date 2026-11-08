@@ -27,9 +27,9 @@ Draft 7. An editor that supports JSON Schema can suggest fields and check requir
 values, types, enums, unknown fields, counts and supported output/DRM combinations
 while you edit. These schemas add no dependency to the drmr CLI.
 
-Support for the optional `$schema` annotation is in development for 1.3 and is
-not in the 1.2.0 archives. When using those archives, remove this member from
-the downloaded templates and associate the schemas through your editor settings.
+Version 1.3.0 accepts the optional `$schema` annotation. For older archives,
+remove this member from the downloaded templates and associate the schemas
+through your editor settings.
 
 Choose a complete pair below and save the files as `outputs.json` and `keys.json`.
 The files contain public dummy keys and assume clear input. For encrypted input,
@@ -388,10 +388,10 @@ The entrypoint is `result/mp4/media.mp4`. The output-list interface always creat
 a result root with named subdirectories, even for one MP4 output. Supported TS
 HLS can also produce one MP4 after selecting at most one video and one associated
 audio rendition. See [TS track conditions](conversion-support.md#mpeg-transport-streams-to-one-mp4).
-Development for 1.3 adds a qualified video/AAC pair from the same DASH/fMP4 HLS
+Version 1.3.0 adds a qualified video/AAC pair from the same DASH/fMP4 HLS
 presentation to this MP4 output configuration. Its
 [metadata and track conditions](conversion-support.md#fragmented-presentations-to-one-mp4)
-are required; the extension is not in the 1.2.0 archives.
+are required.
 
 ## Several outputs and saved plans
 
