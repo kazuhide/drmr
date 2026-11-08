@@ -167,11 +167,11 @@ qualified H.264/AAC profiles.
 
 The generic `convert` command accepts qualified local MP4, fragmented MP4 DASH/HLS, and MPEG transport stream HLS profiles, including encrypted input. Transport stream input can be clear, AES-128, or SAMPLE-AES with supplied keys and initialization vectors. See [conversion support](docs/conversion-support.md) for restrictions and tested routes.
 
-Development toward 1.3 also accepts one qualified video and one AAC audio track
+Version 1.3.0 also accepts one qualified video and one AAC audio track
 from the same DASH or fMP4 HLS presentation as one fragmented MP4. This requires
 the [supported rendition metadata](docs/conversion-support.md#fragmented-presentations-to-one-mp4);
-arbitrary track selection or discarded labels are not implied. This addition is
-listed under [Unreleased](CHANGELOG.md#unreleased) and is absent from the 1.2.0 archives.
+arbitrary track selection or discarded labels are not implied. See the
+[release changes](CHANGELOG.md).
 
 Qualified TS HLS can also become one fragmented MP4 file with clear, `cenc`
 or `cbcs` protection. Select at most one video and one audio rendition before

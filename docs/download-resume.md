@@ -1,6 +1,6 @@
 # Resuming URL acquisition
 
-This option is in development for 1.3 and is not included in the 1.2.0 archives.
+Available from version 1.3.0.
 
 Use `--resume-download` with `analyze`, a saved `plan`, or direct `convert` when
 you want to keep completed original resources after an interrupted download.

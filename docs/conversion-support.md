@@ -1,8 +1,7 @@
 # Conversion support
 
-The MP4 output extension marked **development for 1.3** below is available in the
-development source, not the released 1.2.0 archives. See
-[Unreleased changes](../CHANGELOG.md#unreleased). Other release-specific results
+Version 1.3.0 adds the qualified DASH/fMP4 HLS video-and-audio-to-MP4 extension
+below. See [release changes](../CHANGELOG.md). Historical qualification results
 retain their stated scope.
 
 MP4 and fragmented MP4 accept the qualified AVC (H.264), HEVC Main/Main10,
@@ -65,8 +64,8 @@ protection scheme:
 
 These are container/protection capabilities, not qualification of every codec,
 track layout or playback window. MP4 input must be fragmented for TS output.
-In released 1.2.0, MP4 output from DASH/fMP4 HLS requires one source track.
-Development for 1.3 adds one qualified video plus one AAC track; see
+MP4 output from DASH/fMP4 HLS accepts one source track. Version 1.3.0 also
+accepts one qualified video plus one AAC track; see
 [fragmented presentations to one MP4](#fragmented-presentations-to-one-mp4).
 The TS-to-MP4 profile can retain one video and one associated audio.
 
@@ -99,7 +98,7 @@ language and HLS selection declarations. DASH maps that sole audio rendition to
 standard language, label and author-priority fields; identical automatic player
 selection is not claimed. See [rendition metadata and its mapping](media-processing.md#multiple-qualities-and-audio-declarations).
 Metadata outside that mapping is rejected rather than discarded. A single-track
-fMP4 HLS source can also produce clear, `cenc`, or `cbcs` MP4. Development for 1.3
+fMP4 HLS source can also produce clear, `cenc`, or `cbcs` MP4. Version 1.3.0
 also admits a qualified video/audio pair under the
 [fragmented-presentation conditions](#fragmented-presentations-to-one-mp4).
 TS HLS can retain one video and one audio track in the
@@ -216,7 +215,7 @@ Set `DRMR_CONVERSION_REPORT` to a path outside the repository to save the JSON r
 
 | Output format | Available protection | Initial profile |
 | --- | --- | --- |
-| MP4 file | Clear, `cenc`, `cbcs` | One track, qualified joint MP4, or one video and one audio from supported TS HLS; development for 1.3 also admits a qualified DASH/fMP4 HLS pair |
+| MP4 file | Clear, `cenc`, `cbcs` | One track, qualified joint MP4, or one video and one audio from supported TS HLS; version 1.3.0 also admits a qualified DASH/fMP4 HLS pair |
 | DASH directory | Clear, `cenc`, `cbcs` | Separate fragmented MP4 tracks in one static presentation |
 | HLS directory (`hls-fmp4`) | Clear, `cenc`, `cbcs`, AES-128 | fMP4 resources and completed playlists |
 | HLS directory (`hls-ts`) | Clear, AES-128, SAMPLE-AES | Qualified local TS or fMP4 input; separate TS audio/video playlists when both are present |
@@ -258,7 +257,7 @@ MP4 can use an edit list to specify which part of decoded audio should play. Thi
 
 The source must contain one AAC-LC (AAC Low Complexity) audio track stored as `mp4a`, with optional H.264 (`avc1`), qualified HEVC Main/Main10 (`hvc1`/`hev1`) or VP9 (`vp09`) video, from the same complete progressive file. A single normal-rate audio edit must have a nonnegative start and a finite duration that converts exactly into audio clock units. Encrypted input requires every track key by identifier. The supported encryption layouts and presentation checks are described in [processing and verification](media-processing.md#finite-audio-presentation-windows). Multiple edits, initial empty edits, rate changes, extra tracks, combining different source files, key rotation, and input DRM initialization headers remain outside this profile.
 
-Clear MP4 output retains progressive sample tables. Encrypted MP4 output contains fragments and can retain both tracks from this qualified source in one file. DASH and fMP4 HLS use separate audio and video tracks with a two-second segment target. Each track keeps its original finite playback range; packet payloads, absolute clocks and playback settings must match before publication. Complete decoded media must also match when `--decode` is required. The separate [development profile](#fragmented-presentations-to-one-mp4) admits qualified DASH/HLS video and audio as one MP4.
+Clear MP4 output retains progressive sample tables. Encrypted MP4 output contains fragments and can retain both tracks from this qualified source in one file. DASH and fMP4 HLS use separate audio and video tracks with a two-second segment target. Each track keeps its original finite playback range; packet payloads, absolute clocks and playback settings must match before publication. Complete decoded media must also match when `--decode` is required. The separate [fragmented-presentation profile](#fragmented-presentations-to-one-mp4) admits qualified DASH/HLS video and audio as one MP4.
 
 The resulting joint fragmented MP4 can also be converted again to clear, `cenc` or `cbcs` MP4. This reinput path requires exactly one supported video and one AAC-LC audio track, matching protection, and one positive normal-rate finite edit per track in the same complete file. It packages the tracks separately, restores each original window, combines them, and independently checks every sample, clock and playback setting before publication. Unlike progressive-to-clear copying, clear output from this path remains fragmented. Other multi-track fragmented layouts are not admitted by this condition.
 
@@ -309,7 +308,7 @@ Clear output needs no output-key section. Keep the original media and keys until
 
 ## Fragmented presentations to one MP4
 
-**Development for 1.3; not included in the 1.2.0 archives.** A complete DASH or
+From version 1.3.0, a complete DASH or
 fMP4 HLS presentation can produce one fragmented MP4 when it has exactly one
 qualified video track and one AAC-LC audio track. The ordinary single-track
 profile remains available. Each track must pass the existing codec, encryption,

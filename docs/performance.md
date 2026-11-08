@@ -718,8 +718,8 @@ DRM device and license-server playback were not exercised.
 
 ## Native preparation reuse (2026-11-03)
 
-**Unreleased development for 1.3.** The measured source builds retain the 1.2.0
-CLI version during development. The report identifies the exact commits and
+**Measured during development for 1.3.** The measured source builds retain the
+1.2.0 CLI version. The report identifies the exact commits and
 executables; the published 1.2.0 archives do not include this change.
 
 The same retained Big Buck Bunny presentation contains six H.264 video
@@ -774,7 +774,7 @@ results.
 
 ## URL acquisition and conversion (2026-11-03)
 
-**Unreleased development for 1.3.** The measured builds retain CLI version 1.2.0.
+**Measured during development for 1.3.** The measured builds retain CLI version 1.2.0.
 The initial baseline already includes the native preparation reuse above.
 
 These measurements include URL acquisition through the final saved result.

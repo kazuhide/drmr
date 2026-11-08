@@ -1,5 +1,11 @@
 # Releases and compatibility
 
+Version 1.3.0 adds resumable URL acquisition, editor schemas and templates, and
+qualified DASH/fMP4 HLS video-and-audio output to one MP4. It retains the 1.2 CLI
+names, output-configuration schema 4 and named key-file schema 2. Native source
+checks can be reused within qualified clear-TS multiple-output conversions;
+final outputs and a later independent `verify` retain their complete checks.
+
 Version 1.2.0 revises the CLI and output configuration format. Follow the
 [migration steps below](#version-12-migration) when moving from 1.0 or 1.1;
 replaced option names are refused. Existing published tags and assets remain
@@ -44,10 +50,10 @@ system and processor in the release notes:
 | macOS | Apple Silicon | `aarch64-apple-darwin` |
 | Windows | x86-64 | `x86_64-pc-windows-msvc` |
 
-CLI archive names include the version and target. For 1.2.0, they are
-`drmr-1.2.0-x86_64-unknown-linux-gnu.tar.gz`,
-`drmr-1.2.0-aarch64-apple-darwin.tar.gz` and
-`drmr-1.2.0-x86_64-pc-windows-msvc.zip`, respectively. Choose an archive actually
+CLI archive names include the version and target. For 1.3.0, they are
+`drmr-1.3.0-x86_64-unknown-linux-gnu.tar.gz`,
+`drmr-1.3.0-aarch64-apple-darwin.tar.gz` and
+`drmr-1.3.0-x86_64-pc-windows-msvc.zip`, respectively. Choose an archive actually
 listed on GitHub Releases, and download its documentation and verification
 reports from that same release. Current repository documentation can describe
 changes absent from an older archive.
@@ -277,7 +283,7 @@ tag or release, use a clean checkout of its exact source revision:
 ```sh
 python3 tools/codec_qualification.py \
   --archive /path/to/ci-archive.tar.gz \
-  --target aarch64-apple-darwin --expected-version 1.2.0 \
+  --target aarch64-apple-darwin --expected-version 1.3.0 \
   --source /path/to/exact-source --scope full --jobs 4 \
   --report /path/outside/source/codec-qualification.json
 ```
@@ -347,12 +353,12 @@ The released 1.2.0 report retains 845 H.264/AAC records across 13 input and outp
 | 42 joint MP4 → DASH/HLS cases | Convert and independently verify the forward direction; the reverse joint DASH/HLS → MP4 layout is not qualified |
 | 42 joint DASH/HLS → MP4 conditions | Explicitly record the single-track MP4 output restriction rather than report a successful conversion |
 
-Development for 1.3 extends the joint DASH/fMP4 HLS-to-MP4 profile. Its release
+Version 1.3.0 extends the joint DASH/fMP4 HLS-to-MP4 profile. Its release
 contract requires all 845 H.264/AAC records to complete the full reversible check,
 including the 84 records previously limited to forward or restriction evidence.
 The table above remains the scope of the unchanged 1.2.0 reports, not a claim
 that those old archives implement the new MP4 route. See
-[Unreleased changes](../CHANGELOG.md#unreleased) and the
+[release changes](../CHANGELOG.md) and the
 [qualified metadata mapping](conversion-support.md#fragmented-presentations-to-one-mp4).
 
 An additional codec report requires 534 reversible cases: all 100 valid
